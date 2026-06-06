@@ -3,8 +3,11 @@
 //  BrownBear
 //
 //  The bottom toolbar — back, forward, new tab, the Chrome-style square tab-count button that
-//  opens the grid, and the menu. State (enabled nav buttons, tab count) is pushed in; actions
-//  go out through the delegate.
+//  opens the grid, and the menu. Every glyph is a `ToolbarButton`, so the chrome shares one
+//  state→token tinting model: resting glyphs are NEUTRAL (iconPrimary), accent is reserved for
+//  the pressed/selected state, and disabled dims. Symbols are Dynamic-Type-scaled; the tab count
+//  crossfades when it changes. State (enabled nav buttons, tab count) is pushed in; actions go
+//  out through the delegate.
 //
 
 import UIKit
@@ -23,15 +26,22 @@ final class BrowserToolbar: UIView {
 
     weak var delegate: BrowserToolbarDelegate?
 
-    private let backButton = UIButton(type: .system)
-    private let forwardButton = UIButton(type: .system)
-    private let newTabButton = UIButton(type: .system)
-    private let menuButton = UIButton(type: .system)
+    private let backButton = ToolbarButton()
+    private let forwardButton = ToolbarButton()
+    private let newTabButton = ToolbarButton()
+    private let menuButton = ToolbarButton()
 
-    /// The tab-count control: a rounded square with the open-tab count, like Chrome iOS.
-    private let tabsButton = UIButton(type: .system)
+    /// The tab-count control: a rounded square with the open-tab count, like Chrome iOS. It is a
+    /// `ToolbarButton` for layout/haptic parity, hosting a bordered square + count label as subviews.
+    private let tabsButton = ToolbarButton()
     private let tabsCountLabel = UILabel()
     private let tabsSquare = UIView()
+
+    /// Glyph point size before Dynamic-Type scaling (matches the prior fixed 20pt look).
+    private static let glyphPointSize: CGFloat = 20
+
+    /// The count currently shown, so we only animate on a real change.
+    private var displayedTabCount = -1
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -46,23 +56,37 @@ final class BrowserToolbar: UIView {
     func update(canGoBack: Bool, canGoForward: Bool, tabCount: Int) {
         backButton.isEnabled = canGoBack
         forwardButton.isEnabled = canGoForward
-        tabsCountLabel.text = tabCount > 99 ? ":D" : "\(tabCount)"
+        setTabCount(tabCount)
+    }
+
+    /// Update the tab-count badge, crossfading the number when it changes (no animation off-screen).
+    private func setTabCount(_ count: Int) {
+        guard count != displayedTabCount else { return }
+        displayedTabCount = count
+        let text = count > 99 ? ":D" : "\(count)"
+        tabsButton.accessibilityValue = "\(count) open"
+        guard window != nil else { tabsCountLabel.text = text; return }
+        UIView.transition(with: tabsCountLabel,
+                          duration: BrownBearTheme.Motion.crossfade,
+                          options: [.transitionCrossDissolve, .beginFromCurrentState]) {
+            self.tabsCountLabel.text = text
+        }
     }
 
     // MARK: - Build
 
     private func build() {
-        backgroundColor = BrownBearTheme.Palette.chrome
+        backgroundColor = BrownBearTheme.Palette.surfaceRaised
 
         let topHairline = UIView()
-        topHairline.backgroundColor = BrownBearTheme.Palette.separator
+        topHairline.backgroundColor = BrownBearTheme.Palette.borderSubtle
         topHairline.translatesAutoresizingMaskIntoConstraints = false
         addSubview(topHairline)
 
-        configureSymbol(backButton, "chevron.backward", #selector(tapBack))
-        configureSymbol(forwardButton, "chevron.forward", #selector(tapForward))
-        configureSymbol(newTabButton, "plus", #selector(tapNewTab))
-        configureSymbol(menuButton, "ellipsis", #selector(tapMenu))
+        configure(backButton, symbol: "chevron.backward", label: "Back", action: #selector(tapBack))
+        configure(forwardButton, symbol: "chevron.forward", label: "Forward", action: #selector(tapForward))
+        configure(newTabButton, symbol: "plus", label: "New Tab", action: #selector(tapNewTab))
+        configure(menuButton, symbol: "ellipsis", label: "More", action: #selector(tapMenu))
 
         buildTabsButton()
 
@@ -79,21 +103,22 @@ final class BrowserToolbar: UIView {
             topHairline.topAnchor.constraint(equalTo: topAnchor),
             topHairline.heightAnchor.constraint(equalToConstant: BrownBearTheme.Metrics.hairline),
 
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: BrownBearTheme.Space.xs),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -BrownBearTheme.Space.xs),
             stack.topAnchor.constraint(equalTo: topAnchor),
             stack.heightAnchor.constraint(equalToConstant: BrownBearTheme.Metrics.toolbarHeight)
         ])
     }
 
-    private func configureSymbol(_ button: UIButton, _ symbol: String, _ action: Selector) {
-        let config = UIImage.SymbolConfiguration(font: BrownBearTheme.Typography.toolbarSymbol())
-        button.setImage(UIImage(systemName: symbol, withConfiguration: config), for: .normal)
-        button.tintColor = BrownBearTheme.Palette.accent
+    private func configure(_ button: ToolbarButton, symbol: String, label: String, action: Selector) {
+        button.setSymbol(symbol, pointSize: Self.glyphPointSize)
+        button.accessibilityLabel = label
         button.addTarget(self, action: action, for: .touchUpInside)
     }
 
     private func buildTabsButton() {
+        // The tab-count square stays amber — it is the chrome's one brand signature (Chrome iOS),
+        // the deliberate exception to the otherwise-neutral resting glyphs.
         tabsSquare.layer.borderWidth = 2
         tabsSquare.layer.borderColor = BrownBearTheme.Palette.accent.cgColor
         tabsSquare.layer.cornerRadius = 5
@@ -101,6 +126,8 @@ final class BrowserToolbar: UIView {
         tabsSquare.isUserInteractionEnabled = false
         tabsSquare.translatesAutoresizingMaskIntoConstraints = false
 
+        // Fixed size: the badge lives inside a fixed 24pt square, so the count stays fixed-size to
+        // avoid overflow at large accessibility text settings.
         tabsCountLabel.font = BrownBearTheme.Typography.tabCount()
         tabsCountLabel.textColor = BrownBearTheme.Palette.accent
         tabsCountLabel.textAlignment = .center
@@ -109,6 +136,7 @@ final class BrowserToolbar: UIView {
 
         tabsSquare.addSubview(tabsCountLabel)
         tabsButton.addSubview(tabsSquare)
+        tabsButton.accessibilityLabel = "Show Tabs"
         tabsButton.addTarget(self, action: #selector(tapTabs), for: .touchUpInside)
 
         NSLayoutConstraint.activate([
