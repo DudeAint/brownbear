@@ -29,17 +29,38 @@ final class DashboardViewModel: ObservableObject {
     @Published private(set) var scripts: [UserScript] = []
     @Published private(set) var recentLogs: [LogEntry] = []
     @Published var logFilter: LogFilter = .all
+    @Published var scriptSearch = ""
+    @Published var logSearch = ""
     @Published private(set) var scheduleStates: [String: ScheduleState] = [:]
     @Published private(set) var isLoading = false
     @Published var errorMessage: String?
 
-    /// `recentLogs` narrowed by the active `logFilter`.
+    /// Installed scripts narrowed by the search field (name + match/include/crontab rules), so a
+    /// power user with dozens of scripts can find one without scrolling the whole store-ordered list.
+    var filteredScripts: [UserScript] {
+        let query = scriptSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return scripts }
+        return scripts.filter { script in
+            if script.displayName.lowercased().contains(query) { return true }
+            let rules = script.metadata.matches + script.metadata.includes + script.metadata.crontabs
+            return rules.contains { $0.lowercased().contains(query) }
+        }
+    }
+
+    /// `recentLogs` narrowed by the active `logFilter` and the search text (message + script name).
     var filteredLogs: [LogEntry] {
+        var entries: [LogEntry]
         switch logFilter {
-        case .all: return recentLogs
-        case .errors: return recentLogs.filter { $0.level == .error || $0.level == .warn }
-        case .userscripts: return recentLogs.filter { $0.source == .userscript }
-        case .page: return recentLogs.filter { $0.source == .page || $0.source == .iframe }
+        case .all: entries = recentLogs
+        case .errors: entries = recentLogs.filter { $0.level == .error || $0.level == .warn }
+        case .userscripts: entries = recentLogs.filter { $0.source == .userscript }
+        case .page: entries = recentLogs.filter { $0.source == .page || $0.source == .iframe }
+        }
+        let query = logSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return entries }
+        return entries.filter { entry in
+            entry.message.lowercased().contains(query)
+                || (entry.scriptName?.lowercased().contains(query) ?? false)
         }
     }
 
