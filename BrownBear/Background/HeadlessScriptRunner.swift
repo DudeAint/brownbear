@@ -81,11 +81,11 @@ final class HeadlessScriptRunner: @unchecked Sendable {
             return (HeadlessRunOutcome(scriptID: script.id, error: "no JS context"), scratch)
         }
 
-        // Bound CPU time so an infinite loop can't burn the whole task budget.
-        let budget = max(1.0, deadline.timeIntervalSinceNow)
-        if let group = JSContextGetGroup(context.jsGlobalContextRef) {
-            JSContextGroupSetExecutionTimeLimit(group, budget, { _, _ in true }, nil)
-        }
+        // Note: JavaScriptCore's execution-time watchdog (JSContextGroupSetExecutionTimeLimit) is
+        // macOS-only — iOS does not expose it. A runaway/infinite-loop script is instead bounded by
+        // the OS background-task budget: BrownBearBackgroundScheduler's expirationHandler completes
+        // the task and the OS suspends the process. GM_xmlhttpRequest waits are bounded by the
+        // remaining budget below.
 
         var runError: String?
         context.exceptionHandler = { _, value in
