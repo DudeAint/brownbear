@@ -126,7 +126,7 @@ enum BrownBearTheme {
 
     enum Metrics {
         static let omniboxHeight: CGFloat = 44
-        static let omniboxCornerRadius: CGFloat = 22
+        static let omniboxCornerRadius: CGFloat = 14
         static let chromeHorizontalInset: CGFloat = 12
         static let toolbarHeight: CGFloat = 48
         static let progressBarHeight: CGFloat = 3.0
