@@ -13,28 +13,17 @@ struct LogsView: View {
     @ObservedObject var model: DashboardViewModel
 
     var body: some View {
-        Group {
-            if model.recentLogs.isEmpty {
-                emptyState
-            } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(model.recentLogs) { entry in
-                            VStack(alignment: .leading, spacing: 2) {
-                                if let name = entry.scriptName {
-                                    Text(name).font(.caption2.weight(.semibold))
-                                        .foregroundStyle(BBTheme.Color.accent)
-                                }
-                                LogLineView(entry: entry)
-                            }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 6)
-                            Divider().overlay(BBTheme.Color.separator.opacity(0.5))
-                        }
-                    }
-                    .padding(.vertical, 8)
+        VStack(spacing: 0) {
+            if !model.recentLogs.isEmpty {
+                Picker("Filter", selection: $model.logFilter) {
+                    ForEach(LogFilter.allCases) { Text($0.title).tag($0) }
                 }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 4)
             }
+            content
         }
         .background(BBTheme.backgroundGradient)
         .navigationTitle("Logs")
@@ -45,6 +34,37 @@ struct LogsView: View {
                     Task { await model.clearAllLogs() }
                 }
                 .disabled(model.recentLogs.isEmpty)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if model.recentLogs.isEmpty {
+            emptyState
+        } else if model.filteredLogs.isEmpty {
+            DashboardEmptyState(
+                systemImage: "line.3.horizontal.decrease.circle",
+                title: "No matching logs",
+                message: "No entries match the “\(model.logFilter.title)” filter."
+            )
+        } else {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(model.filteredLogs) { entry in
+                        VStack(alignment: .leading, spacing: 2) {
+                            if let name = entry.scriptName {
+                                Text(name).font(.caption2.weight(.semibold))
+                                    .foregroundStyle(BBTheme.Color.accent)
+                            }
+                            LogLineView(entry: entry)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 6)
+                        Divider().overlay(BBTheme.Color.separator.opacity(0.5))
+                    }
+                }
+                .padding(.vertical, 8)
             }
         }
     }

@@ -392,6 +392,6 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
 
     private func makeLog(_ level: LogEntry.Level, _ message: String) -> LogEntry {
         LogEntry(scriptID: nil, scriptName: extensionName, level: level,
-                 message: message, context: .background)
+                 message: message, context: .background, source: .engine)
     }
 }
