@@ -16,6 +16,10 @@ enum BrownBearError: LocalizedError, Equatable {
     case unknownTab(UUID)
     /// Navigation failed with an underlying message from WebKit.
     case navigationFailed(String)
+    /// A userscript's metadata block was missing or invalid.
+    case metadataParseFailed(String)
+    /// A GM bridge request was malformed or violated a script's grants/connect allowlist.
+    case bridgeRejected(String)
 
     var errorDescription: String? {
         switch self {
@@ -25,6 +29,10 @@ enum BrownBearError: LocalizedError, Equatable {
             return "That tab is no longer open (\(id.uuidString.prefix(8)))."
         case .navigationFailed(let message):
             return "Couldn’t load the page: \(message)"
+        case .metadataParseFailed(let reason):
+            return "Couldn’t read the userscript: \(reason)"
+        case .bridgeRejected(let reason):
+            return "Script request rejected: \(reason)"
         }
     }
 }
