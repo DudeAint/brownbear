@@ -442,6 +442,12 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
         }), animated: true)
     }
 
+    private func presentHistory() {
+        present(HistoryView.makeHostingController(onOpen: { [weak self] url in
+            self?.openBookmark(url)
+        }), animated: true)
+    }
+
     private func openBookmark(_ url: URL) {
         let tab = tabManager.createTab(loading: url)
         tab.delegate = self
@@ -496,6 +502,19 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         progressBar.complete()
         if webView == installedWebView { refreshChrome() }
+        recordHistory(for: webView)
+    }
+
+    /// Record a finished main-frame navigation in browsing history. Only real web pages are kept —
+    /// about:blank (the New Tab page), data:, and file: URLs are skipped, as are app schemes (which
+    /// never reach didFinish here). Private tabs must never be recorded; that guard lands with the
+    /// private-tab feature, which gives Tab an `isPrivate` flag.
+    private func recordHistory(for webView: WKWebView) {
+        guard let url = webView.url,
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else { return }
+        let title = webView.title
+        Task { await BrownBearServices.shared.historyStore.record(url: url, title: title) }
     }
 
     func webView(_ webView: WKWebView,
@@ -626,6 +645,8 @@ extension BrownBearBrowserViewController: BrowserMenuDelegate {
             toggleBookmarkForActiveTab()
         case .bookmarks:
             presentBookmarks()
+        case .history:
+            presentHistory()
         }
     }
 
