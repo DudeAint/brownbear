@@ -1,0 +1,108 @@
+name: Nightly
+
+# Rolling NIGHTLY build from the tip of `main`. Runs every night and on every push to main.
+# It (re)points a single pre-release `nightly` tag at the latest commit and publishes a
+# pre-release with auto-generated notes (every change since the last STABLE release).
+#
+# Stability contract:
+#   - `nightly`  -> bleeding edge, may break. Marked as a GitHub *pre-release*.
+#   - `vX.Y.Z`   -> stable, hand-cut releases (see release.yml).
+#
+# When the Xcode project lands, the `build` job below starts producing an unsigned .ipa/.app
+# artifact and attaching it to the nightly release. Until then it self-skips and stays green.
+
+on:
+  schedule:
+    - cron: "0 7 * * *"   # 07:00 UTC daily
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: nightly
+  cancel-in-progress: true
+
+permissions:
+  contents: write   # needed to move the tag and publish the pre-release
+
+jobs:
+  build:
+    name: Build nightly artifact
+    runs-on: macos-14
+    outputs:
+      built: ${{ steps.detect.outputs.built }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Detect Xcode project
+        id: detect
+        run: |
+          if ls **/*.xcodeproj/project.pbxproj **/*.xcworkspace/contents.xcworkspacedata >/dev/null 2>&1; then
+            echo "built=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "built=false" >> "$GITHUB_OUTPUT"
+            echo "No Xcode project yet — nightly will publish notes only."
+          fi
+      - name: Build unsigned app (when project exists)
+        if: steps.detect.outputs.built == 'true'
+        run: |
+          set -o pipefail
+          sudo xcode-select -s /Applications/Xcode_15.4.app
+          DEST='generic/platform=iOS Simulator'
+          PROJ=$(ls -d *.xcworkspace 2>/dev/null | head -1)
+          FLAG="-workspace"; [ -z "$PROJ" ] && PROJ=$(ls -d *.xcodeproj | head -1) && FLAG="-project"
+          xcodebuild build $FLAG "$PROJ" -scheme BrownBear -destination "$DEST" \
+            -derivedDataPath build CODE_SIGNING_ALLOWED=NO | xcpretty
+          APP=$(find build -name "*.app" -maxdepth 6 | head -1)
+          mkdir -p Payload && cp -R "$APP" Payload/ && zip -r BrownBear-nightly.ipa Payload >/dev/null
+      - name: Upload artifact
+        if: steps.detect.outputs.built == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: BrownBear-nightly-ipa
+          path: BrownBear-nightly.ipa
+          if-no-files-found: ignore
+
+  publish:
+    name: Publish nightly pre-release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Download build artifact (if any)
+        uses: actions/download-artifact@v4
+        with:
+          name: BrownBear-nightly-ipa
+          path: dist
+        continue-on-error: true
+      - name: Move the `nightly` tag to HEAD
+        run: |
+          git tag -f nightly
+          git push -f origin refs/tags/nightly
+      - name: Publish / update the nightly pre-release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Notes = everything since the most recent stable vX.Y.Z tag (or all history if none).
+          LAST_STABLE=$(git tag -l 'v*' --sort=-version:refname | head -1)
+          RANGE_DESC="all changes so far"
+          if [ -n "$LAST_STABLE" ]; then RANGE_DESC="changes since ${LAST_STABLE}"; fi
+          {
+            echo "Automated nightly build from \`main\` @ \`$(git rev-parse --short HEAD)\`."
+            echo
+            echo "⚠️ **Pre-release / bleeding edge** — for stable builds use a \`vX.Y.Z\` release."
+            echo
+            echo "### Recent ${RANGE_DESC}"
+            if [ -n "$LAST_STABLE" ]; then LOGRANGE="${LAST_STABLE}..HEAD"; else LOGRANGE="HEAD"; fi
+            git log "$LOGRANGE" --pretty='- %s (%h)' --no-merges | head -50
+          } > NIGHTLY_NOTES.md
+          ASSETS=""
+          [ -f dist/BrownBear-nightly.ipa ] && ASSETS="dist/BrownBear-nightly.ipa"
+          # Recreate the rolling release so the body + asset are always current.
+          gh release delete nightly --yes --cleanup-tag=false 2>/dev/null || true
+          gh release create nightly $ASSETS \
+            --title "Nightly ($(date -u +%Y-%m-%d))" \
+            --notes-file NIGHTLY_NOTES.md \
+            --prerelease \
+            --target "$GITHUB_SHA"

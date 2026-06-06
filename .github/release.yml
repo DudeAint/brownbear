@@ -1,0 +1,34 @@
+# Configures GitHub's native "Generate release notes" button (complements release.yml's
+# Conventional-Commit categorization). Labels map PRs into these sections.
+changelog:
+  exclude:
+    labels:
+      - ignore-for-release
+      - duplicate
+    authors:
+      - dependabot
+  categories:
+    - title: ⚠️ Breaking Changes
+      labels:
+        - breaking
+    - title: ✨ New Features
+      labels:
+        - feature
+        - enhancement
+    - title: 🐛 Bug Fixes
+      labels:
+        - bug
+        - fix
+    - title: ⚡ Performance
+      labels:
+        - performance
+    - title: 🔒 Security
+      labels:
+        - security
+    - title: 📜 Engine & Sandbox
+      labels:
+        - engine
+        - sandbox
+    - title: 🔧 Other Changes
+      labels:
+        - "*"
