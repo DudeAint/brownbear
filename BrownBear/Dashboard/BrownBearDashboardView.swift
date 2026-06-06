@@ -12,7 +12,7 @@ import UIKit
 struct BrownBearDashboardView: View {
 
     /// The selectable dashboard sections, so callers can deep-link to a specific tab.
-    enum DashboardTab: Hashable { case scripts, logs, background, extensions }
+    enum DashboardTab: Hashable { case scripts, logs, background, extensions, settings }
 
     private let onClose: () -> Void
 
@@ -41,6 +41,9 @@ struct BrownBearDashboardView: View {
             NavigationStack { ExtensionsView().toolbar { dashboardDone() } }
                 .tabItem { Label("Extensions", systemImage: "puzzlepiece.extension.fill") }
                 .tag(DashboardTab.extensions)
+            NavigationStack { SettingsView().toolbar { dashboardDone() } }
+                .tabItem { Label("Settings", systemImage: "gearshape.fill") }
+                .tag(DashboardTab.settings)
         }
         .tint(BBTheme.Color.accent)
         .task { await model.load() }

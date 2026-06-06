@@ -19,7 +19,8 @@ final class BrownBearBrowserViewController: UIViewController {
     let injection = InjectionOrchestrator()
     private lazy var configurationFactory = WebViewConfigurationFactory(injection: injection)
     private lazy var tabManager = TabManager(configurationFactory: configurationFactory)
-    private let omniboxClassifier = OmniboxInputClassifier()
+    // Built per submit from the user's chosen search engine (AppSettings), so changing it in
+    // Settings takes effect immediately.
 
     // MARK: - Chrome
 
@@ -210,6 +211,7 @@ final class BrownBearBrowserViewController: UIViewController {
         let entries: [(title: String, url: String, host: String)] = web.isEmpty
             ? suggestedSites
             : web.prefix(12).map { (title: $0.displayTitle, url: $0.url.absoluteString, host: $0.url.host ?? "") }
+        let engine = AppSettings.searchEngine
 
         let tiles = entries.map { entry -> String in
             let title = htmlEscape(entry.title)
@@ -259,9 +261,9 @@ final class BrownBearBrowserViewController: UIViewController {
         </style></head><body>
           <div class="wrap">
             <div class="brand"><span class="bear">🐻</span><h1>Brown<b>Bear</b></h1></div>
-            <form class="search" action="https://www.google.com/search" method="GET" autocomplete="off">
+            <form class="search" action="\(engine.formAction)" method="GET" autocomplete="off">
               <svg viewBox="0 0 24 24"><path d="M21 20l-5.6-5.6a7 7 0 10-1.4 1.4L20 21zM5 10a5 5 0 1110 0 5 5 0 01-10 0z"/></svg>
-              <input name="q" placeholder="Search the web" autocapitalize="off" autocorrect="off" spellcheck="false">
+              <input name="\(engine.formQueryParam)" placeholder="Search \(engine.title)" autocapitalize="off" autocorrect="off" spellcheck="false">
             </form>
             <div class="grid">
         \(tiles)
@@ -310,7 +312,8 @@ extension BrownBearBrowserViewController: TabDelegate {
 extension BrownBearBrowserViewController: OmniboxViewDelegate {
     func omnibox(_ omnibox: OmniboxView, didSubmit text: String) {
         do {
-            let destination = try omniboxClassifier.destination(for: text)
+            let classifier = OmniboxInputClassifier(searchTemplate: AppSettings.searchEngine.template)
+            let destination = try classifier.destination(for: text)
             let tab = tabManager.activeTab ?? tabManager.createTab()
             tab.delegate = self
             tab.load(destination.resolvedURL)
