@@ -56,7 +56,8 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
     /// Boot the context: install the native bridge, evaluate the chrome.* runtime, then the
     /// extension's own background source, then fire onInstalled/onStartup.
     func boot(runtimeJS: String, backgroundSource: String,
-              manifestJSON: String, baseURL: String, messages: [String: String]) {
+              manifestJSON: String, baseURL: String, messages: [String: String],
+              firstInstall: Bool = true) {
         queue.async { [self] in
             guard let context = JSContext() else {
                 logSink(makeLog(.error, "could not create a background JS context"))
@@ -81,8 +82,10 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
             context.evaluateScript(runtimeJS, withSourceURL: URL(string: "brownbear://webext/\(extensionID)/runtime.js"))
             context.evaluateScript(backgroundSource, withSourceURL: URL(string: "brownbear://webext/\(extensionID)/background.js"))
 
-            // A fresh install/load fires both, mirroring a worker starting up.
-            fire(method: "fireInstalled", arguments: ["install"])
+            // onInstalled fires ONLY on the first-ever boot of this extension (Chrome contract);
+            // onStartup fires on every boot. Firing 'install' on each launch/reload would re-run
+            // first-run setup (opening tabs, seeding storage) every time.
+            if firstInstall { fire(method: "fireInstalled", arguments: ["install"]) }
             fire(method: "fireStartup", arguments: [])
         }
     }
@@ -305,7 +308,8 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
 
         let timer = DispatchSource.makeTimerSource(queue: queue)
         if periodMinutes > 0 {
-            timer.schedule(deadline: .now() + firstDelaySeconds, repeating: periodMinutes * 60)
+            // Floor a periodic alarm at 1s so a sub-second periodInMinutes can't spin the queue.
+            timer.schedule(deadline: .now() + firstDelaySeconds, repeating: max(1.0, periodMinutes * 60))
         } else {
             timer.schedule(deadline: .now() + firstDelaySeconds)
         }
@@ -328,7 +332,9 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
         let seconds = max(0, ms / 1000)
         let timer = DispatchSource.makeTimerSource(queue: queue)
         if repeats {
-            timer.schedule(deadline: .now() + seconds, repeating: max(0.001, seconds))
+            // Floor at 4ms (the HTML spec's nested-timer clamp) so setInterval(fn, 0) can't spin the
+            // serial queue at ~1000 Hz and starve everything else on it.
+            timer.schedule(deadline: .now() + seconds, repeating: max(0.004, seconds))
         } else {
             timer.schedule(deadline: .now() + seconds)
         }

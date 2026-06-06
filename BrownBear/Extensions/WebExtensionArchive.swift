@@ -124,9 +124,15 @@ enum WebExtensionArchive {
         }
     }
 
+    /// Cap a single entry's uncompressed size: `uncompressedSize` is read verbatim from the
+    /// untrusted central directory (up to ~4 GB), so without a ceiling a tiny DEFLATE stream could
+    /// drive a multi-GB `Data(count:)` allocation — a zip-bomb DoS / OOM crash on install.
+    private static let maxUncompressedEntryBytes = 64 * 1024 * 1024
+
     /// Inflate a raw DEFLATE stream (ZIP method 8) into `uncompressedSize` bytes.
     private static func inflate(_ input: Data, uncompressedSize: Int) -> Data? {
         if uncompressedSize == 0 { return Data() }
+        guard uncompressedSize > 0, uncompressedSize <= maxUncompressedEntryBytes else { return nil }
         var output = Data(count: uncompressedSize)
         let written = output.withUnsafeMutableBytes { destination -> Int in
             guard let dst = destination.bindMemory(to: UInt8.self).baseAddress else { return 0 }

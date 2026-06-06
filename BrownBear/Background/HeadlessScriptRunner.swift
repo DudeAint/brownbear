@@ -212,8 +212,12 @@ final class HeadlessScriptRunner: @unchecked Sendable {
 
             var request = URLRequest(url: url)
             request.httpMethod = (details.forProperty("method")?.toString() ?? "GET").uppercased()
-            if let headers = details.forProperty("headers")?.toDictionary() as? [String: String] {
-                for (field, value) in headers { request.setValue(value, forHTTPHeaderField: field) }
+            if let headers = details.forProperty("headers")?.toDictionary() {
+                // Coerce each value to a string so one non-string header (e.g. {"X-Count": 5})
+                // doesn't make the whole-map `as? [String: String]` cast fail and drop ALL headers.
+                for (field, value) in headers {
+                    request.setValue(String(describing: value), forHTTPHeaderField: "\(field)")
+                }
             }
             if let body = details.forProperty("data")?.toString(), body != "undefined", !body.isEmpty {
                 request.httpBody = body.data(using: .utf8)
@@ -229,9 +233,14 @@ final class HeadlessScriptRunner: @unchecked Sendable {
                 capturedError = error
                 semaphore.signal()
             }
+            // Re-validate redirects against @connect (no page host in the background) so a 3xx to an
+            // undeclared host is refused, matching the foreground GMNetworkService guard.
+            task.delegate = GMRedirectGuard(connects: connects, pageHost: nil)
             task.resume()
 
-            let waitBudget = max(1.0, deadline.timeIntervalSinceNow)
+            // Reserve headroom before the deadline so the post-run GM value flush + setTaskCompleted
+            // still happen even if this request runs long (don't burn the entire remaining budget).
+            let waitBudget = max(0.5, deadline.timeIntervalSinceNow - 2.0)
             if semaphore.wait(timeout: .now() + waitBudget) == .timedOut {
                 task.cancel()
                 invoke(details, "ontimeout", ["error": "timeout"])

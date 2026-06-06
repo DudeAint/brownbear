@@ -90,7 +90,10 @@ actor WebExtensionStorage {
         let key = cacheKey(extensionID, area)
         if let cached = caches[key] { return cached }
         let loaded: [String: String]
-        if let data = defaults.data(forKey: storageKey(extensionID, area)),
+        // chrome.storage.session is in-memory only (Chrome contract): never load it from disk, so it
+        // starts empty on every launch — extensions keep short-lived/sensitive state there.
+        if area != .session,
+           let data = defaults.data(forKey: storageKey(extensionID, area)),
            let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
             loaded = decoded
         } else {
@@ -102,6 +105,7 @@ actor WebExtensionStorage {
 
     private func commit(_ map: [String: String], extensionID: String, area: Area) {
         caches[cacheKey(extensionID, area)] = map
+        guard area != .session else { return }   // ephemeral — never persisted
         if let data = try? JSONEncoder().encode(map) {
             defaults.set(data, forKey: storageKey(extensionID, area))
         }
