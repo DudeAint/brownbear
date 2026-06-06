@@ -13,6 +13,7 @@ import UIKit
 /// The actions the menu can emit. The browser controller performs them.
 enum BrowserMenuAction {
     case newTab
+    case newPrivateTab
     case reloadOrStop
     case share
     case copyLink
@@ -145,7 +146,8 @@ final class BrowserMenuViewController: UIViewController {
 
     private func makeTileRow() -> UIView {
         var tiles: [UIView] = [
-            makeTile(icon: "plus.square.on.square", title: "New Tab", action: .newTab)
+            makeTile(icon: "plus.square.on.square", title: "New Tab", action: .newTab),
+            makeTile(icon: "eyeglasses", title: "Private", action: .newPrivateTab)
         ]
         if state.canInteractWithPage {
             tiles.append(makeTile(icon: "square.and.arrow.up", title: "Share", action: .share))
