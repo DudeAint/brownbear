@@ -1,0 +1,104 @@
+name: CI
+
+# Runs on every push and PR. Right now it lints, checks commit hygiene, and validates the
+# JS runtime. The iOS BUILD + TEST job is written and ready — it is gated behind the
+# existence of an .xcodeproj/.xcworkspace so it stays green until Module 1 lands the project.
+# AI/maintainers: when you add the Xcode project, delete the `if:` guard on the `build` job.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: SwiftLint + EditorConfig
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install SwiftLint
+        run: brew install swiftlint
+      - name: Run SwiftLint (strict)
+        run: |
+          if ls BrownBear/**/*.swift >/dev/null 2>&1; then
+            swiftlint lint --strict --config .swiftlint.yml
+          else
+            echo "No Swift sources yet — skipping lint (config validated on first sources)."
+          fi
+
+  commitlint:
+    name: Conventional Commits
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate PR commit messages
+        if: github.event_name == 'pull_request'
+        run: |
+          # Enforce Conventional Commits on every commit in the PR range.
+          range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+          pattern='^(feat|fix|refactor|perf|docs|test|build|ci|chore|revert)(\([a-z0-9-]+\))?!?: .{1,72}'
+          fail=0
+          while IFS= read -r subject; do
+            [ -z "$subject" ] && continue
+            if ! printf '%s' "$subject" | grep -Eq "$pattern"; then
+              echo "::error::Non-conventional commit subject: '$subject'"
+              fail=1
+            fi
+          done < <(git log --format=%s "$range")
+          exit $fail
+
+  js-runtime:
+    name: Validate injected JS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Syntax-check JS runtime files
+        run: |
+          shopt -s nullglob
+          files=(BrownBear/Resources/JS/*.js)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No JS runtime files yet — skipping."
+            exit 0
+          fi
+          for f in "${files[@]}"; do
+            echo "Checking $f"
+            node --check "$f"
+          done
+
+  build:
+    name: Build & Test (iOS)
+    runs-on: macos-14
+    # Gate: only run once an Xcode project/workspace exists. Remove this `if:` when Module 1
+    # lands the project. (GitHub evaluates this with hashFiles at runtime.)
+    if: ${{ hashFiles('**/*.xcodeproj/project.pbxproj', '**/*.xcworkspace/contents.xcworkspacedata') != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+      - name: Resolve packages
+        run: |
+          if [ -f Package.swift ]; then swift package resolve; fi
+      - name: Build & test
+        run: |
+          set -o pipefail
+          WS=$(ls -d *.xcworkspace 2>/dev/null | head -1)
+          PROJ=$(ls -d *.xcodeproj 2>/dev/null | head -1)
+          DEST='platform=iOS Simulator,name=iPhone 15,OS=latest'
+          if [ -n "$WS" ]; then
+            xcodebuild test -workspace "$WS" -scheme BrownBear -destination "$DEST" | xcpretty
+          else
+            xcodebuild test -project "$PROJ" -scheme BrownBear -destination "$DEST" | xcpretty
+          fi

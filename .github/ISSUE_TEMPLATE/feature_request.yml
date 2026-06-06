@@ -1,0 +1,46 @@
+name: "✨ Feature Request"
+description: Propose a new capability for BrownBear
+title: "feat: <short description>"
+labels: ["enhancement", "triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What user need or gap does this address?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the feature. If it touches the JS↔native bridge or background
+        execution, note the security implications.
+    validations:
+      required: true
+  - type: dropdown
+    id: module
+    attributes:
+      label: Target module
+      options:
+        - browser
+        - engine (parser/matcher)
+        - sandbox (GM bridge)
+        - background (@crontab)
+        - storage
+        - dashboard
+        - editor
+        - new module
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Constraints
+      options:
+        - label: This fits within iOS/WebKit constraints (no V8, background is budgeted)
+        - label: This keeps all script activity user-visible and stoppable

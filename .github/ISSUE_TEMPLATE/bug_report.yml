@@ -1,0 +1,66 @@
+name: "🐛 Bug Report"
+description: Report a defect in BrownBear
+title: "fix: <short description>"
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! For **security vulnerabilities**, do NOT use this form —
+        follow [SECURITY.md](../SECURITY.md) instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug and what you expected instead.
+      placeholder: When I navigate to X and a userscript with @run-at document-start runs, ...
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: dropdown
+    id: module
+    attributes:
+      label: Affected module
+      options:
+        - browser
+        - engine (parser/matcher)
+        - sandbox (GM bridge)
+        - background (@crontab)
+        - storage
+        - dashboard
+        - editor
+        - unsure
+    validations:
+      required: true
+  - type: input
+    id: ios-version
+    attributes:
+      label: iOS / iPadOS version
+      placeholder: "iOS 17.5"
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device
+      placeholder: "iPhone 15 Pro"
+  - type: textarea
+    id: script
+    attributes:
+      label: Userscript header (if relevant)
+      description: Paste the `// ==UserScript== … // ==/UserScript==` block. Redact secrets.
+      render: javascript
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / console output
+      render: shell

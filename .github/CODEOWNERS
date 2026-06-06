@@ -1,0 +1,21 @@
+# Code ownership — every PR is auto-assigned to the owners below.
+# Replace <owner> with your GitHub handle/team once the repo is live.
+
+# Default owner for everything
+*                       @<owner>
+
+# Module owners (split out as the team grows)
+/BrownBear/Browser/     @<owner>
+/BrownBear/ScriptEngine/ @<owner>
+/BrownBear/Sandbox/     @<owner>
+/BrownBear/Background/  @<owner>
+/BrownBear/Storage/     @<owner>
+/BrownBear/Dashboard/   @<owner>
+/BrownBear/Editor/      @<owner>
+
+# These define how the whole project is built — guard them.
+/CLAUDE.md              @<owner>
+/AGENTS.md              @<owner>
+/ARCHITECTURE.md        @<owner>
+/.github/               @<owner>
+/SECURITY.md            @<owner>
