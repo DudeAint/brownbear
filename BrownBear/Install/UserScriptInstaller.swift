@@ -31,8 +31,9 @@ final class UserScriptInstaller {
     }
 
     /// The conventional userscript URL suffix Greasemonkey/Tampermonkey/Violentmonkey all use, and
-    /// the trigger for the browser's auto-install prompt.
-    static func isUserScriptURL(_ url: URL) -> Bool {
+    /// the trigger for the browser's auto-install prompt. `nonisolated` (pure, no actor state) so the
+    /// browser's nav delegate and tests can call it without hopping to the main actor.
+    nonisolated static func isUserScriptURL(_ url: URL) -> Bool {
         url.lastPathComponent.lowercased().hasSuffix(".user.js")
     }
 

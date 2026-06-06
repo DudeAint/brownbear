@@ -275,10 +275,12 @@ final class WebExtensionStoreTests: XCTestCase {
         let viaEscape = await store.file(extensionID: "../../secret", path: "x")
         XCTAssertNil(viaEscape)
         // A non-32-char / non-a–p id is rejected outright.
-        XCTAssertNil(await store.file(extensionID: "short", path: "index.json"))
+        let viaShort = await store.file(extensionID: "short", path: "index.json")
+        XCTAssertNil(viaShort)
         // A well-formed id with a traversal path is also contained.
         let validID = String(repeating: "a", count: 32)
-        XCTAssertNil(await store.file(extensionID: validID, path: "../index.json"))
+        let viaPath = await store.file(extensionID: validID, path: "../index.json")
+        XCTAssertNil(viaPath)
     }
 
     func testRejectsArchiveWithoutManifest() async {
