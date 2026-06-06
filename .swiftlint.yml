@@ -1,0 +1,79 @@
+# SwiftLint configuration for BrownBear
+# https://github.com/realm/SwiftLint
+
+included:
+  - BrownBear
+
+excluded:
+  - BrownBear/Resources
+  - .build
+  - DerivedData
+
+# Treat these as errors — they encode CLAUDE.md non-negotiables.
+opt_in_rules:
+  - empty_count
+  - force_unwrapping
+  - implicitly_unwrapped_optional
+  - closure_spacing
+  - contains_over_filter_count
+  - first_where
+  - last_where
+  - redundant_nil_coalescing
+  - unused_import
+  - unused_declaration
+  - explicit_init
+  - fatal_error_message
+  - overridden_super_call
+  - prohibited_super_call
+  - toggle_bool
+  - yoda_condition
+
+disabled_rules:
+  - todo            # we forbid TODOs in code via review, not lint noise
+  - trailing_comma
+
+# Force-unwraps and IUOs are errors here, not warnings (CLAUDE.md §4).
+force_unwrapping:
+  severity: error
+implicitly_unwrapped_optional:
+  severity: error
+fatal_error_message:
+  severity: error
+
+line_length:
+  warning: 120
+  error: 160
+  ignores_comments: true
+  ignores_urls: true
+
+file_length:
+  warning: 500
+  error: 1000
+
+type_body_length:
+  warning: 300
+  error: 500
+
+function_body_length:
+  warning: 60
+  error: 120
+
+cyclomatic_complexity:
+  warning: 12
+  error: 20
+
+identifier_name:
+  min_length:
+    warning: 2
+  excluded:
+    - id
+    - js
+    - up
+    - to
+    - x
+    - y
+
+nesting:
+  type_level: 2
+
+reporter: "xcode"
