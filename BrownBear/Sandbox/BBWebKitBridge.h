@@ -18,4 +18,10 @@ NS_ASSUME_NONNULL_BEGIN
 /// Evaluate `script` in the given content world of `webView`'s main frame. Fire-and-forget.
 void BBEvaluateJavaScript(WKWebView *webView, NSString *script, WKContentWorld *world);
 
+/// Evaluate `script` in the given content world of a SPECIFIC frame (pass nil for the main frame).
+/// Used to push state — e.g. a GM value change — into the exact iframe a script runs in, so the
+/// same script's instances across frames and tabs stay in sync. Fire-and-forget.
+void BBEvaluateJavaScriptInFrame(WKWebView *webView, NSString *script,
+                                 WKFrameInfo *_Nullable frame, WKContentWorld *world);
+
 NS_ASSUME_NONNULL_END
