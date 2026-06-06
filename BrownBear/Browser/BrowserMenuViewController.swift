@@ -119,10 +119,6 @@ final class BrowserMenuViewController: UIViewController {
         ]
         if state.canInteractWithPage {
             tiles.append(makeTile(icon: "square.and.arrow.up", title: "Share", action: .share))
-            tiles.append(makeTile(icon: state.isBookmarked ? "star.fill" : "star",
-                                  title: state.isBookmarked ? "Saved" : "Bookmark",
-                                  action: .toggleBookmark,
-                                  highlighted: state.isBookmarked))
             tiles.append(makeTile(icon: "magnifyingglass", title: "Find", action: .findOnPage))
             tiles.append(makeTile(icon: state.isDesktopSite ? "iphone" : "desktopcomputer",
                                   title: state.isDesktopSite ? "Mobile" : "Desktop",
@@ -146,6 +142,9 @@ final class BrowserMenuViewController: UIViewController {
         if state.canInteractWithPage {
             rows.append(makeRow(icon: state.isLoading ? "xmark" : "arrow.clockwise",
                                 title: state.isLoading ? "Stop" : "Reload", action: .reloadOrStop))
+            rows.append(makeRow(icon: state.isBookmarked ? "star.fill" : "star",
+                                title: state.isBookmarked ? "Remove Bookmark" : "Add Bookmark",
+                                action: .toggleBookmark))
             rows.append(makeRow(icon: "link", title: "Copy Link", action: .copyLink))
         }
         if state.canInstallUserscript {
