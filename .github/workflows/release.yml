@@ -1,12 +1,12 @@
 name: Release
 
 # STABLE releases. Triggered by pushing a SemVer tag `vX.Y.Z` (or `vX.Y.Z-rc.N`).
-# It categorizes commits since the previous stable tag into Features / Fixes / Performance /
-# Other using Conventional Commit prefixes, writes patch notes, updates CHANGELOG context,
-# builds a signed-off artifact (when the Xcode project exists), and publishes a GitHub Release.
+# Builds an unsigned .ipa, categorizes commits since the previous stable tag into Features /
+# Fixes / Performance / Breaking / Other patch notes, and publishes a GitHub Release.
+# Uses the shared cached setup action for speed.
 #
-#   git tag v0.1.0 && git push origin v0.1.0     # cut a stable release
-#   git tag v0.1.0-rc.1 && git push origin ...    # release candidate (marked pre-release)
+#   git tag v0.1.0 && git push origin v0.1.0      # cut a stable release
+#   git tag v0.1.0-rc.1 && git push origin ...     # release candidate (marked pre-release)
 
 on:
   push:
@@ -23,39 +23,35 @@ concurrency:
 
 jobs:
   build:
-    name: Build release artifact
+    name: Build release IPA
     runs-on: macos-14
-    outputs:
-      built: ${{ steps.detect.outputs.built }}
     steps:
       - uses: actions/checkout@v4
-      - name: Detect Xcode project
-        id: detect
-        run: |
-          if ls **/*.xcodeproj/project.pbxproj **/*.xcworkspace/contents.xcworkspacedata >/dev/null 2>&1; then
-            echo "built=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "built=false" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Build release app (when project exists)
-        if: steps.detect.outputs.built == 'true'
+      - name: Setup iOS build (Xcode + XcodeGen + SPM cache)
+        uses: ./.github/actions/setup-ios-build
+      - name: Cache DerivedData
+        uses: actions/cache@v4
+        with:
+          path: .derived-data
+          key: dd-release-${{ runner.os }}-${{ github.sha }}
+          restore-keys: dd-release-${{ runner.os }}-
+      - name: Build unsigned IPA
         run: |
           set -o pipefail
-          sudo xcode-select -s /Applications/Xcode_15.4.app
-          PROJ=$(ls -d *.xcworkspace 2>/dev/null | head -1)
-          FLAG="-workspace"; [ -z "$PROJ" ] && PROJ=$(ls -d *.xcodeproj | head -1) && FLAG="-project"
-          xcodebuild build $FLAG "$PROJ" -scheme BrownBear -configuration Release \
-            -destination 'generic/platform=iOS Simulator' -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO | xcpretty
-          APP=$(find build -name "*.app" -maxdepth 6 | head -1)
+          xcodebuild build \
+            -project BrownBear.xcodeproj -scheme BrownBear -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -clonedSourcePackagesDirPath .spm-cache -derivedDataPath .derived-data \
+            -quiet COMPILER_INDEX_STORE_ENABLE=NO CODE_SIGNING_ALLOWED=NO
+          APP=$(find .derived-data -name "*.app" -maxdepth 7 -type d | head -1)
+          if [ -z "$APP" ]; then echo "::error::No .app produced"; exit 1; fi
           mkdir -p Payload && cp -R "$APP" Payload/
-          zip -r "BrownBear-${GITHUB_REF_NAME}.ipa" Payload >/dev/null
+          zip -qr "BrownBear-${GITHUB_REF_NAME}.ipa" Payload
       - uses: actions/upload-artifact@v4
-        if: steps.detect.outputs.built == 'true'
         with:
           name: release-ipa
           path: "BrownBear-*.ipa"
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   publish:
     name: Publish stable release
@@ -97,7 +93,6 @@ jobs:
           } > RELEASE_NOTES.md
           cat RELEASE_NOTES.md
 
-          # Mark RCs / pre-1.0 RC tags as pre-release.
           if echo "$TAG" | grep -q '-'; then echo "prerelease=true" >> "$GITHUB_OUTPUT"; else echo "prerelease=false" >> "$GITHUB_OUTPUT"; fi
       - name: Publish GitHub Release
         env:

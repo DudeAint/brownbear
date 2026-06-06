@@ -24,22 +24,21 @@ jobs:
         language: [swift, javascript-typescript]
     steps:
       - uses: actions/checkout@v4
-      - name: Select Xcode 15.4
+      - name: Setup iOS build (Xcode + XcodeGen + SPM cache)
         if: matrix.language == 'swift'
-        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+        uses: ./.github/actions/setup-ios-build
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
-      - name: Build Swift (XcodeGen)
+      - name: Build Swift
         if: matrix.language == 'swift'
         run: |
-          brew install xcodegen
-          xcodegen generate
           xcodebuild build \
             -project BrownBear.xcodeproj -scheme BrownBear \
             -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
-            CODE_SIGNING_ALLOWED=NO
+            -clonedSourcePackagesDirPath .spm-cache \
+            -quiet COMPILER_INDEX_STORE_ENABLE=NO CODE_SIGNING_ALLOWED=NO
       - name: Autobuild (JS)
         if: matrix.language != 'swift'
         uses: github/codeql-action/autobuild@v3
