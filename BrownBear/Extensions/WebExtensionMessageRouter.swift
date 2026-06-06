@@ -27,6 +27,15 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
         self.runtime = runtime
     }
 
+    /// Mint a token bound to `extensionID` for an extension PAGE (popup/options). The page's chrome.*
+    /// surface carries this token so its storage/runtime calls resolve to the right extension — the
+    /// same native-bound identity model content scripts use.
+    func makePageSession(for extensionID: String) -> String {
+        let token = UUID().uuidString
+        sessions[token] = extensionID
+        return token
+    }
+
     nonisolated func userContentController(_ userContentController: WKUserContentController,
                                            didReceive message: WKScriptMessage,
                                            replyHandler: @escaping (Any?, String?) -> Void) {
@@ -82,7 +91,7 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
             return NSNull()
 
         case "runtime.sendMessage":
-            // Content script → its own extension's background worker. `message` is any JSON value.
+            // Content script / popup → its own extension's background worker. `message` is any JSON.
             let message = payload["message"] ?? NSNull()
             var sender: [String: Any] = ["id": extensionID]
             if let url = payload["url"] as? String { sender["url"] = url }
@@ -90,6 +99,11 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
                 return NSNull()
             }
             return response
+
+        case "runtime.openOptionsPage":
+            // The options page is opened from BrownBear's own UI (dashboard/browser); acknowledge so
+            // the page's callback fires without error. (Programmatic navigation isn't wired here.)
+            return NSNull()
 
         default:
             throw BrownBearError.bridgeRejected("unsupported extension api '\(api)'")

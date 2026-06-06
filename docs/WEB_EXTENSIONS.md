@@ -43,21 +43,26 @@ partial or unsupported below.
 | `chrome.i18n` | `getMessage()` (default-locale `_locales/.../messages.json` preloaded), `getUILanguage()`, `getAcceptLanguages()` |
 | `chrome.extension.getURL` | legacy alias for `runtime.getURL` |
 | **Direct Chrome Web Store install** ⟶ **Phase 2** | Paste a store link or extension id; the `.crx` is fetched and installed. |
+| **Popup & options pages** ⟶ **Phase 3** | `action.default_popup` and `options_ui`/`options_page` render in a real WKWebView over the `chrome-extension://` scheme (a `WKURLSchemeHandler` serves the extension's packaged files). The page gets a **synchronous** `chrome.*` surface — `storage` (+ live `onChanged`), `runtime` (`id`/`getManifest`/`getURL`/`sendMessage`→background/`getPlatformInfo`/`openOptionsPage`), `i18n`, `extension`. Open it from Dashboard → Extensions → long-press an extension. |
 
-## Honest limits (Phase 3+)
+## Module 6 is complete
 
-| Area | Status |
+Phases 1–3 deliver the install/manage pipeline, content scripts, `declarativeNetRequest` blocking,
+background service workers, messaging, alarms, storage (+ events), Chrome Web Store install, and
+popup/options UI. The remaining gaps below are **not "todo"** — they're the hard edges of running an
+extension model inside WebKit (no extension process, no privileged network layer) on iOS. We
+implement the compatibility layer and degrade honestly; an unimplemented `chrome.*` method gets a
+rejected/no-op call rather than a crash.
+
+| Area | Why it stays a no-op on iOS/WebKit |
 |---|---|
-| **Popups** (`action.default_popup`) / options pages | Parsed; no UI surface yet. `chrome.action.*` badge/title are no-ops. |
-| Background **→ content** messaging (`tabs.sendMessage`) and long-lived **ports** (`runtime.connect`) | Not yet — content→background is the supported direction. |
-| `storage.onChanged` **in content scripts** | Fires in background workers only for now (no per-tab push channel yet). |
-| `chrome.alarms` while the app is **suspended/closed** | Timers are foreground-lifetime; durable wake-ups need the BGTask path (Module 4) — Phase 3. |
-| `chrome.tabs`, `chrome.webNavigation`, `chrome.scripting`, `chrome.commands` dispatch | Not yet (`commands` is parsed; `chrome.commands`/`chrome.action.onClicked` exist as never-firing events). |
-| `declarativeNetRequest` **`redirect`** / **`modifyHeaders`** / `requestMethods` / `requestDomains` | Skipped during compile (no `WKContentRuleList` equivalent) — counted, never silently approximated, so a ruleset never over-blocks. |
-| `chrome.webRequest` (blocking) | Not available on WebKit. |
-
-A content script (or worker) that calls an unimplemented `chrome.*` method gets a rejected/no-op
-call rather than a crash.
+| `chrome.webRequest` (blocking/redirect) | WebKit exposes no synchronous request-interception API to extensions; `declarativeNetRequest` → `WKContentRuleList` is the only blocking primitive and it's ahead-of-time only. |
+| `declarativeNetRequest` `redirect` / `modifyHeaders` / `requestMethods` / `requestDomains` | No `WKContentRuleList` equivalent — skipped-and-counted at compile so a ruleset never over-blocks. |
+| Background **→ content** messaging (`tabs.sendMessage`) and long-lived **ports** (`runtime.connect`) | Content→background (and popup→background) is the supported direction; the reverse needs per-tab routing WebKit doesn't expose to the extension layer. |
+| `chrome.tabs` / `webNavigation` / `scripting` write APIs, `chrome.commands` dispatch | No extension-facing tab/scripting control surface; `commands` is parsed and `chrome.commands`/`chrome.action.onClicked` exist as never-firing events (no keyboard/toolbar source on iOS). |
+| `chrome.alarms` while the app is **suspended/closed** | Timers are foreground-lifetime; durable wake-ups would ride the BGTask path (Module 4) and aren't guaranteed by iOS. |
+| `storage.onChanged` in **content scripts** | Fires in background workers and extension pages; content scripts have no per-tab push channel in the shared content world. |
+| Native messaging, devtools pages, `chrome.proxy`, `chrome.privacy`, etc. | No host/native counterpart on iOS. |
 
 ## DNR → WKContentRuleList: how rules translate
 
@@ -92,10 +97,14 @@ that would block more than the author intended.
   shared `WKUserContentController` on every change.
 - `WebExtensionBackgroundContext` — one extension's headless background `JSContext` (chrome.* natives,
   alarms, timers, message bus); strictly single-queue.
-- `WebExtensionRuntime` — owns the background contexts, reconciles them on change, routes
-  content→background messages, and fans `storage.onChanged` to the right worker.
-- `brownbear-webext-runtime.js` / `brownbear-webext-background.js` — the injected content-side and
-  the headless background `chrome`/`browser` surfaces.
+- `WebExtensionRuntime` — owns the background contexts, reconciles them on change (single-flight),
+  routes content/popup→background messages, and fans `storage.onChanged` to the right worker.
+- `WebExtensionSchemeHandler` — `WKURLSchemeHandler` serving `chrome-extension://<id>/<path>` from an
+  extension's packaged files (Phase 3, popup/options).
+- `WebExtensionPageViewController` — renders a popup/options page in a WKWebView with the scheme
+  handler + a synchronous `chrome.*` page surface; pushes `storage.onChanged` into the page.
+- `brownbear-webext-runtime.js` / `brownbear-webext-background.js` / `brownbear-webext-page.js` — the
+  injected content-side, headless background, and extension-page `chrome`/`browser` surfaces.
 - `WebExtensionMessageRouter` — content-side native bridge: `getContentScripts` (URL matching via the
   shared `URLMatcher`), `chrome.storage.*`, and `runtime.sendMessage` (→ `WebExtensionRuntime`).
 

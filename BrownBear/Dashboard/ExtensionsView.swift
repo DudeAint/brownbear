@@ -167,6 +167,23 @@ struct ExtensionsView: View {
                 Label("Remove", systemImage: "trash")
             }
         }
+        .contextMenu { pageActions(for: ext) }
+    }
+
+    /// Open-popup / open-options actions, shown when the extension declares those pages.
+    @ViewBuilder
+    private func pageActions(for ext: WebExtension) -> some View {
+        if ext.manifest?.action?.defaultPopup != nil {
+            Button { openPage(ext, .popup) } label: { Label("Open popup", systemImage: "macwindow") }
+        }
+        if ext.manifest?.optionsPage != nil {
+            Button { openPage(ext, .options) } label: { Label("Options", systemImage: "gearshape") }
+        }
+    }
+
+    private func openPage(_ ext: WebExtension, _ kind: WebExtensionPageViewController.Kind) {
+        let controller = WebExtensionPageViewController(ext: ext, kind: kind)
+        TopViewControllerPresenter.present(controller.wrappedForPresentation())
     }
 
     private func subtitle(for ext: WebExtension) -> String {

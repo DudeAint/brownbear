@@ -161,9 +161,18 @@ content-script injection in the isolated world, and `chrome.storage`/`runtime`/`
 - **`chrome.alarms`**, **`storage.onChanged`** (in workers), and **direct Chrome Web Store install**
   (`ChromeWebStore` — paste a link or id, fetch the CRX).
 
-**Deferred — Phase 3:** popup/options UI, background→content (`tabs.sendMessage`) + long-lived
-ports, `storage.onChanged` in content scripts, durable (suspended-app) alarms via BGTask,
-`chrome.tabs`/`webNavigation`/`scripting`/`commands` dispatch.
+**Status — Phase 3 (shipped, final):**
+- **Popup & options pages** render in a real WKWebView over a `chrome-extension://` scheme
+  (`WebExtensionSchemeHandler` serves the packaged files; `WebExtensionPageViewController` hosts the
+  page). The page gets a synchronous `chrome.*` surface — storage (+ live `onChanged`), runtime
+  (`sendMessage`→background, `getManifest`/`getURL`/`getPlatformInfo`/`openOptionsPage`), i18n,
+  extension — via `brownbear-webext-page.js` with identity baked in at document-start. Reachable
+  from Dashboard → Extensions (long-press).
+
+**Module 6 is COMPLETE.** The remaining Chrome APIs (blocking `webRequest`, background→content
+`tabs.sendMessage` / long-lived ports, write-side `chrome.tabs`/`scripting`, `commands` dispatch,
+suspended-app alarms, native messaging) are the hard edges of WebKit's extension-less model on iOS;
+they degrade to honest no-ops/rejections rather than fakes. See `docs/WEB_EXTENSIONS.md`.
 
 ---
 

@@ -260,6 +260,27 @@ final class WebExtensionStoreTests: XCTestCase {
         XCTAssertEqual(all.first?.displayName, "Installer")
     }
 
+    func testFileRejectsMaliciousExtensionIDAndPath() async throws {
+        let baseDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bb-ext-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: baseDir) }
+        try FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true)
+        // A file sitting in the base dir (the global index lives here) must not be reachable.
+        try Data("SECRET".utf8).write(to: baseDir.appendingPathComponent("index.json"))
+
+        let store = WebExtensionStore(baseDirectory: baseDir)
+        // A `..` host would relocate the per-id root up and out — must be rejected.
+        let viaDotDot = await store.file(extensionID: "..", path: "index.json")
+        XCTAssertNil(viaDotDot)
+        let viaEscape = await store.file(extensionID: "../../secret", path: "x")
+        XCTAssertNil(viaEscape)
+        // A non-32-char / non-a–p id is rejected outright.
+        XCTAssertNil(await store.file(extensionID: "short", path: "index.json"))
+        // A well-formed id with a traversal path is also contained.
+        let validID = String(repeating: "a", count: 32)
+        XCTAssertNil(await store.file(extensionID: validID, path: "../index.json"))
+    }
+
     func testRejectsArchiveWithoutManifest() async {
         let baseDir = FileManager.default.temporaryDirectory.appendingPathComponent("bb-ext-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: baseDir) }
