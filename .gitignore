@@ -73,8 +73,13 @@ secrets.xcconfig
 node_modules/
 npm-debug.log*
 
-# Study references cloned by scripts/fetch_references.sh (never vendored)
+# Study references (firefox-ios, brave-ios, …) — studied, never vendored
 .references/
+reference/
+
+# Autonomous build loop logs + stray backups
+loop-logs/
+oldREADME.MD
 
 # XcodeGen-generated artifacts (project is defined in project.yml)
 *.xcodeproj/
