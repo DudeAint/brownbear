@@ -32,13 +32,13 @@ struct BrownBearDashboardView: View {
             scriptsTab
                 .tabItem { Label("Scripts", systemImage: "doc.text.fill") }
                 .tag(DashboardTab.scripts)
-            NavigationStack { LogsView(model: model) }
+            NavigationStack { LogsView(model: model).toolbar { dashboardDone() } }
                 .tabItem { Label("Logs", systemImage: "list.bullet.rectangle.fill") }
                 .tag(DashboardTab.logs)
-            NavigationStack { BackgroundMonitorView(model: model) }
+            NavigationStack { BackgroundMonitorView(model: model).toolbar { dashboardDone() } }
                 .tabItem { Label("Background", systemImage: "clock.arrow.circlepath") }
                 .tag(DashboardTab.background)
-            NavigationStack { ExtensionsView() }
+            NavigationStack { ExtensionsView().toolbar { dashboardDone() } }
                 .tabItem { Label("Extensions", systemImage: "puzzlepiece.extension.fill") }
                 .tag(DashboardTab.extensions)
         }
@@ -46,6 +46,15 @@ struct BrownBearDashboardView: View {
         .task { await model.load() }
         .sheet(isPresented: $addingScript) {
             ScriptEditorScreen(model: model, existing: nil)
+        }
+    }
+
+    /// A Done button placed on every dashboard tab so the user can dismiss from any of them
+    /// (previously only the Scripts tab had it, so Logs/Background/Extensions felt like dead ends).
+    @ToolbarContentBuilder
+    private func dashboardDone() -> some ToolbarContent {
+        ToolbarItem(placement: .navigationBarLeading) {
+            Button("Done", action: onClose).fontWeight(.semibold)
         }
     }
 
