@@ -68,6 +68,7 @@ final class Tab {
         self.id = id
         self.webView = WKWebView(frame: .zero, configuration: configuration)
         self.webView.allowsBackForwardNavigationGestures = true
+        self.webView.isFindInteractionEnabled = true   // native Find-on-Page (iOS 16+)
         self.webView.scrollView.contentInsetAdjustmentBehavior = .never
         self.webView.isOpaque = false
         self.webView.backgroundColor = BrownBearTheme.Palette.background
