@@ -324,6 +324,17 @@ extension ScriptInstallViewController {
         icon.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([icon.widthAnchor.constraint(equalToConstant: 56), icon.heightAnchor.constraint(equalToConstant: 56)])
 
+        // Swap in the script's own @icon once it loads; keep the brand glyph as the fallback.
+        if let iconURL = preview.metadata.iconURL {
+            Task { @MainActor in
+                if let image = await ScriptIconLoader.shared.icon(forURLString: iconURL) {
+                    icon.image = image
+                    icon.contentMode = .scaleAspectFill
+                    icon.backgroundColor = .clear
+                }
+            }
+        }
+
         let name = UILabel()
         name.text = preview.metadata.displayName
         name.font = .systemFont(ofSize: 20, weight: .bold)
