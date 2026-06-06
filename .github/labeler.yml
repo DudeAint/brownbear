@@ -1,0 +1,50 @@
+# Path-based auto-labeling for PRs (used by .github/workflows/labeler.yml).
+# Labels are applied based on which files a PR touches, mapping to our modules.
+
+browser:
+  - changed-files:
+      - any-glob-to-any-file: "BrownBear/Browser/**"
+
+engine:
+  - changed-files:
+      - any-glob-to-any-file: "BrownBear/ScriptEngine/**"
+
+sandbox:
+  - changed-files:
+      - any-glob-to-any-file: "BrownBear/Sandbox/**"
+
+background:
+  - changed-files:
+      - any-glob-to-any-file: "BrownBear/Background/**"
+
+storage:
+  - changed-files:
+      - any-glob-to-any-file: "BrownBear/Storage/**"
+
+dashboard:
+  - changed-files:
+      - any-glob-to-any-file: "BrownBear/Dashboard/**"
+
+editor:
+  - changed-files:
+      - any-glob-to-any-file: "BrownBear/Editor/**"
+
+tab-grid:
+  - changed-files:
+      - any-glob-to-any-file: "BrownBear/TabGrid/**"
+
+javascript:
+  - changed-files:
+      - any-glob-to-any-file: "BrownBear/Resources/JS/**"
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file: ["**/*.md", "docs/**"]
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file: [".github/**", "*.yml", "project.yml"]
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file: "BrownBearTests/**"

@@ -1,0 +1,30 @@
+# Dependabot — keeps our dependencies and Actions current automatically.
+# It opens PRs (which our CI then builds) when updates are available.
+version: 2
+updates:
+  # Swift Package Manager dependencies (Runestone, and future packages).
+  - package-ecosystem: "swift"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "build"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "swift"
+
+  # GitHub Actions used by our workflows.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "github-actions"

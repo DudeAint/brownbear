@@ -1,15 +1,15 @@
 name: CI
 
-# Runs on every push and PR. Right now it lints, checks commit hygiene, and validates the
-# JS runtime. The iOS BUILD + TEST job is written and ready — it is gated behind the
-# existence of an .xcodeproj/.xcworkspace so it stays green until Module 1 lands the project.
-# AI/maintainers: when you add the Xcode project, delete the `if:` guard on the `build` job.
+# GitHub Actions is BrownBear's recommended/primary build environment (free macOS runners).
+# This pipeline lints, validates commit hygiene + the injected JS, and BUILDS & TESTS the app
+# by generating the Xcode project from project.yml with XcodeGen. See docs/BUILDING.md.
 
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -20,19 +20,14 @@ permissions:
 
 jobs:
   lint:
-    name: SwiftLint + EditorConfig
+    name: SwiftLint
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
       - name: Install SwiftLint
         run: brew install swiftlint
-      - name: Run SwiftLint (strict)
-        run: |
-          if ls BrownBear/**/*.swift >/dev/null 2>&1; then
-            swiftlint lint --strict --config .swiftlint.yml
-          else
-            echo "No Swift sources yet — skipping lint (config validated on first sources)."
-          fi
+      - name: Run SwiftLint
+        run: swiftlint lint --config .swiftlint.yml --reporter github-actions-logging
 
   commitlint:
     name: Conventional Commits
@@ -44,7 +39,6 @@ jobs:
       - name: Validate PR commit messages
         if: github.event_name == 'pull_request'
         run: |
-          # Enforce Conventional Commits on every commit in the PR range.
           range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
           pattern='^(feat|fix|refactor|perf|docs|test|build|ci|chore|revert)(\([a-z0-9-]+\))?!?: .{1,72}'
           fail=0
@@ -69,36 +63,35 @@ jobs:
         run: |
           shopt -s nullglob
           files=(BrownBear/Resources/JS/*.js)
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "No JS runtime files yet — skipping."
-            exit 0
-          fi
-          for f in "${files[@]}"; do
-            echo "Checking $f"
-            node --check "$f"
-          done
+          if [ ${#files[@]} -eq 0 ]; then echo "No JS runtime files yet — skipping."; exit 0; fi
+          for f in "${files[@]}"; do echo "Checking $f"; node --check "$f"; done
 
   build:
-    name: Build & Test (iOS)
+    name: Build & Test (iOS Simulator)
     runs-on: macos-14
-    # Gate: only run once an Xcode project/workspace exists. Remove this `if:` when Module 1
-    # lands the project. (GitHub evaluates this with hashFiles at runtime.)
-    if: ${{ hashFiles('**/*.xcodeproj/project.pbxproj', '**/*.xcworkspace/contents.xcworkspacedata') != '' }}
     steps:
       - uses: actions/checkout@v4
-      - name: Select Xcode
+      - name: Select Xcode 15.4
         run: sudo xcode-select -s /Applications/Xcode_15.4.app
-      - name: Resolve packages
-        run: |
-          if [ -f Package.swift ]; then swift package resolve; fi
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate
+      - name: Resolve Swift packages
+        run: xcodebuild -resolvePackageDependencies -project BrownBear.xcodeproj -scheme BrownBear
       - name: Build & test
         run: |
           set -o pipefail
-          WS=$(ls -d *.xcworkspace 2>/dev/null | head -1)
-          PROJ=$(ls -d *.xcodeproj 2>/dev/null | head -1)
-          DEST='platform=iOS Simulator,name=iPhone 15,OS=latest'
-          if [ -n "$WS" ]; then
-            xcodebuild test -workspace "$WS" -scheme BrownBear -destination "$DEST" | xcpretty
-          else
-            xcodebuild test -project "$PROJ" -scheme BrownBear -destination "$DEST" | xcpretty
-          fi
+          xcodebuild test \
+            -project BrownBear.xcodeproj \
+            -scheme BrownBear \
+            -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
+            -resultBundlePath TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TestResults
+          path: TestResults.xcresult
+          if-no-files-found: ignore
