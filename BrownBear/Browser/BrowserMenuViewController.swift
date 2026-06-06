@@ -21,6 +21,8 @@ enum BrowserMenuAction {
     case userscripts
     case extensions
     case installUserscript
+    case toggleBookmark
+    case bookmarks
 }
 
 /// A snapshot of the active tab the menu renders against.
@@ -31,6 +33,7 @@ struct BrowserMenuState {
     var isDesktopSite: Bool
     var canInteractWithPage: Bool   // a real page is loaded (share/copy/find/desktop apply)
     var canInstallUserscript: Bool  // the current URL is a *.user.js
+    var isBookmarked: Bool = false  // the current URL is already bookmarked
 }
 
 @MainActor
@@ -116,6 +119,10 @@ final class BrowserMenuViewController: UIViewController {
         ]
         if state.canInteractWithPage {
             tiles.append(makeTile(icon: "square.and.arrow.up", title: "Share", action: .share))
+            tiles.append(makeTile(icon: state.isBookmarked ? "star.fill" : "star",
+                                  title: state.isBookmarked ? "Saved" : "Bookmark",
+                                  action: .toggleBookmark,
+                                  highlighted: state.isBookmarked))
             tiles.append(makeTile(icon: "magnifyingglass", title: "Find", action: .findOnPage))
             tiles.append(makeTile(icon: state.isDesktopSite ? "iphone" : "desktopcomputer",
                                   title: state.isDesktopSite ? "Mobile" : "Desktop",
@@ -144,6 +151,7 @@ final class BrowserMenuViewController: UIViewController {
         if state.canInstallUserscript {
             rows.append(makeRow(icon: "arrow.down.doc", title: "Install this userscript", action: .installUserscript))
         }
+        rows.append(makeRow(icon: "bookmark", title: "Bookmarks", action: .bookmarks))
         rows.append(makeRow(icon: "scroll", title: "Userscripts", action: .userscripts))
         rows.append(makeRow(icon: "puzzlepiece.extension", title: "Extensions", action: .extensions))
 
