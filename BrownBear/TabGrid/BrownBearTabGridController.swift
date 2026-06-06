@@ -13,7 +13,7 @@ import UIKit
 @MainActor
 protocol BrownBearTabGridControllerDelegate: AnyObject {
     func tabGrid(_ controller: BrownBearTabGridController, didSelect tab: Tab)
-    func tabGridDidRequestNewTab(_ controller: BrownBearTabGridController)
+    func tabGrid(_ controller: BrownBearTabGridController, didRequestNewTabPrivate isPrivate: Bool)
     func tabGridDidRequestDismiss(_ controller: BrownBearTabGridController)
 }
 
@@ -24,15 +24,24 @@ final class BrownBearTabGridController: UIViewController {
     private let tabManager: TabManager
     private let header = UIView()
     private let titleLabel = UILabel()
+    private let modeControl = UISegmentedControl(items: ["Tabs", "Private"])
     private let doneButton = UIButton(type: .system)
     private let closeAllButton = UIButton(type: .system)
     private let newTabButton = UIButton(type: .system)
 
+    /// Which set the grid is showing. Private mode is only reachable once a private tab exists or the
+    /// user explicitly switches to it; it persists while the grid is open.
+    private var showingPrivate: Bool
+
     private var collectionView: UICollectionView!
     private var dataSource: UICollectionViewDiffableDataSource<Int, UUID>!
 
-    init(tabManager: TabManager) {
+    /// The tabs currently displayed, scoped to the active mode.
+    private var displayedTabs: [Tab] { showingPrivate ? tabManager.privateTabs : tabManager.normalTabs }
+
+    init(tabManager: TabManager, showingPrivate: Bool = false) {
         self.tabManager = tabManager
+        self.showingPrivate = showingPrivate && tabManager.hasPrivateTabs
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -67,6 +76,14 @@ final class BrownBearTabGridController: UIViewController {
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         header.addSubview(titleLabel)
 
+        // Normal / Private switcher, shown only once a private tab exists so the chrome stays simple
+        // for users who never open one.
+        modeControl.selectedSegmentIndex = showingPrivate ? 1 : 0
+        modeControl.selectedSegmentTintColor = BrownBearTheme.Palette.accent
+        modeControl.addTarget(self, action: #selector(modeChanged), for: .valueChanged)
+        modeControl.translatesAutoresizingMaskIntoConstraints = false
+        header.addSubview(modeControl)
+
         closeAllButton.setTitle("Close All", for: .normal)
         closeAllButton.setTitleColor(BrownBearTheme.Palette.destructive, for: .normal)
         closeAllButton.titleLabel?.font = .systemFont(ofSize: 16, weight: .medium)
@@ -93,6 +110,10 @@ final class BrownBearTabGridController: UIViewController {
 
             titleLabel.centerXAnchor.constraint(equalTo: header.centerXAnchor),
             titleLabel.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+
+            modeControl.centerXAnchor.constraint(equalTo: header.centerXAnchor),
+            modeControl.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            modeControl.widthAnchor.constraint(equalToConstant: 184),
 
             doneButton.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -16),
             doneButton.centerYAnchor.constraint(equalTo: header.centerYAnchor)
@@ -179,52 +200,82 @@ final class BrownBearTabGridController: UIViewController {
     private func applySnapshot(animatingDifferences: Bool) {
         var snapshot = NSDiffableDataSourceSnapshot<Int, UUID>()
         snapshot.appendSections([0])
-        snapshot.appendItems(tabManager.tabs.map(\.id), toSection: 0)
+        snapshot.appendItems(displayedTabs.map(\.id), toSection: 0)
         dataSource.apply(snapshot, animatingDifferences: animatingDifferences)
     }
 
     private func updateTitle() {
-        let count = tabManager.count
-        titleLabel.text = count == 1 ? "1 Tab" : "\(count) Tabs"
-        closeAllButton.isHidden = tabManager.isEmpty
+        // Show the Normal/Private switcher only once a private tab exists; otherwise a plain count.
+        let hasPrivate = tabManager.hasPrivateTabs
+        modeControl.isHidden = !hasPrivate
+        titleLabel.isHidden = hasPrivate
+        let count = displayedTabs.count
+        let noun = showingPrivate ? "Private" : "Tab"
+        titleLabel.text = count == 1 ? "1 \(noun)" : "\(count) \(noun)s"
+        closeAllButton.isHidden = displayedTabs.isEmpty
+        applyPrivateAppearance()
+    }
+
+    /// Tint the grid a distinct dark shade in private mode so it's unmistakable which mode you're in.
+    private func applyPrivateAppearance() {
+        let background = showingPrivate
+            ? UIColor(red: 0.11, green: 0.09, blue: 0.16, alpha: 1)
+            : BrownBearTheme.Palette.background
+        view.backgroundColor = background
+        header.backgroundColor = background
     }
 
     // MARK: - Mutations
 
     private func closeTab(id: UUID) {
         tabManager.closeTab(id: id)
+        reconcileAfterMutation()
+    }
+
+    /// After any close, re-sync the grid: if all tabs are gone, hand back to a fresh tab; if only the
+    /// current mode emptied (but the other still has tabs), switch to the populated mode.
+    private func reconcileAfterMutation() {
+        if tabManager.isEmpty {
+            gridDelegate?.tabGrid(self, didRequestNewTabPrivate: false)
+            return
+        }
+        if displayedTabs.isEmpty {
+            showingPrivate.toggle()
+            modeControl.selectedSegmentIndex = showingPrivate ? 1 : 0
+        }
         applySnapshot(animatingDifferences: true)
         updateTitle()
-        if tabManager.isEmpty {
-            // Closing the last tab from the grid returns to a fresh tab in the browser.
-            gridDelegate?.tabGridDidRequestNewTab(self)
-        }
     }
 
     // MARK: - Actions
 
+    @objc private func modeChanged() {
+        showingPrivate = (modeControl.selectedSegmentIndex == 1)
+        applySnapshot(animatingDifferences: true)
+        updateTitle()
+    }
+
     @objc private func tapDone() {
         if tabManager.isEmpty {
-            gridDelegate?.tabGridDidRequestNewTab(self)
+            gridDelegate?.tabGrid(self, didRequestNewTabPrivate: false)
         } else {
             gridDelegate?.tabGridDidRequestDismiss(self)
         }
     }
 
     @objc private func tapNewTab() {
-        gridDelegate?.tabGridDidRequestNewTab(self)
+        gridDelegate?.tabGrid(self, didRequestNewTabPrivate: showingPrivate)
     }
 
     @objc private func tapCloseAll() {
-        let alert = UIAlertController(title: "Close all tabs?",
-                                     message: "This closes every open tab.",
+        let scope = showingPrivate ? "private " : ""
+        let alert = UIAlertController(title: "Close all \(scope)tabs?",
+                                     message: "This closes every open \(scope)tab.",
                                      preferredStyle: .actionSheet)
         alert.addAction(UIAlertAction(title: "Close All", style: .destructive) { [weak self] _ in
             guard let self else { return }
-            self.tabManager.closeAll()
-            self.applySnapshot(animatingDifferences: true)
-            self.updateTitle()
-            self.gridDelegate?.tabGridDidRequestNewTab(self)
+            self.tabManager.closeAll(isPrivate: self.showingPrivate)
+            self.reconcileAfterMutation()
         })
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         alert.popoverPresentationController?.sourceView = closeAllButton

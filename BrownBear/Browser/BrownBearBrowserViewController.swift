@@ -158,6 +158,16 @@ final class BrownBearBrowserViewController: UIViewController {
                        canGoForward: state.canGoForward,
                        tabCount: tabManager.count)
         syncProgress(for: state)
+        applyPrivateChrome()
+    }
+
+    /// Tint the top chrome a distinct dark shade when the active tab is private, so the user can tell
+    /// at a glance they're in a private session (the Safari/Firefox private-bar cue).
+    private func applyPrivateChrome() {
+        let isPrivate = tabManager.activeTab?.isPrivate ?? false
+        topChrome.backgroundColor = isPrivate
+            ? UIColor(red: 0.11, green: 0.09, blue: 0.16, alpha: 1)
+            : BrownBearTheme.Palette.chrome
     }
 
     private func syncProgress(for state: NavigationState) {
@@ -356,7 +366,8 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
     }
 
     private func presentTabGrid() {
-        let grid = BrownBearTabGridController(tabManager: tabManager)
+        let grid = BrownBearTabGridController(tabManager: tabManager,
+                                             showingPrivate: tabManager.activeTab?.isPrivate ?? false)
         grid.gridDelegate = self
         grid.modalPresentationStyle = .fullScreen
         present(grid, animated: true)
@@ -468,8 +479,8 @@ extension BrownBearBrowserViewController: BrownBearTabGridControllerDelegate {
         controller.dismiss(animated: true)
     }
 
-    func tabGridDidRequestNewTab(_ controller: BrownBearTabGridController) {
-        let tab = tabManager.createTab()
+    func tabGrid(_ controller: BrownBearTabGridController, didRequestNewTabPrivate isPrivate: Bool) {
+        let tab = tabManager.createTab(isPrivate: isPrivate)
         loadNewTabPage(in: tab)
         controller.dismiss(animated: true) { [weak self] in
             self?.refreshChrome()
@@ -580,8 +591,10 @@ extension BrownBearBrowserViewController: WKUIDelegate {
             return nil
         }
         // A link asked to open in a new window/tab — honor it by creating a real new tab whose
-        // web view is built from the exact configuration WebKit handed us.
-        let tab = tabManager.createTab(adopting: configuration)
+        // web view is built from the exact configuration WebKit handed us. A popup opened from a
+        // private tab must stay private, so inherit the opener's privacy.
+        let openerIsPrivate = tabManager.activeTab?.isPrivate ?? false
+        let tab = tabManager.createTab(adopting: configuration, isPrivate: openerIsPrivate)
         tab.delegate = self
         return tab.webView
     }
@@ -605,6 +618,11 @@ extension BrownBearBrowserViewController: BrowserMenuDelegate {
         switch action {
         case .newTab:
             let tab = tabManager.createTab()
+            loadNewTabPage(in: tab)
+            refreshChrome()
+            omnibox.beginEditing()
+        case .newPrivateTab:
+            let tab = tabManager.createTab(isPrivate: true)
             loadNewTabPage(in: tab)
             refreshChrome()
             omnibox.beginEditing()

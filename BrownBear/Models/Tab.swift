@@ -47,6 +47,11 @@ final class Tab {
     /// Stable identity that survives web-view recreation.
     let id: UUID
 
+    /// Whether this is a private/incognito tab. Private tabs use a non-persistent website data store
+    /// (cookies/cache wiped on close) and are never written to browsing history. Immutable: a tab's
+    /// privacy is fixed at creation because it is baked into the web view's configuration.
+    let isPrivate: Bool
+
     /// The renderer. Exposed so the browser controller can host it and assign nav/UI delegates.
     let webView: WKWebView
 
@@ -65,8 +70,9 @@ final class Tab {
     /// used so a freshly created tab can defer its first load until it is on screen.
     private(set) var pendingURL: URL?
 
-    init(id: UUID = UUID(), configuration: WKWebViewConfiguration) {
+    init(id: UUID = UUID(), configuration: WKWebViewConfiguration, isPrivate: Bool = false) {
         self.id = id
+        self.isPrivate = isPrivate
         self.webView = WKWebView(frame: .zero, configuration: configuration)
         self.webView.allowsBackForwardNavigationGestures = true
         self.webView.isFindInteractionEnabled = true   // native Find-on-Page (iOS 16+)

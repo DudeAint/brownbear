@@ -37,6 +37,11 @@ final class TabManager {
     var count: Int { tabs.count }
     var isEmpty: Bool { tabs.isEmpty }
 
+    /// Tabs split by privacy — the tab grid shows one set at a time (normal / private mode).
+    var normalTabs: [Tab] { tabs.filter { !$0.isPrivate } }
+    var privateTabs: [Tab] { tabs.filter { $0.isPrivate } }
+    var hasPrivateTabs: Bool { tabs.contains { $0.isPrivate } }
+
     var activeTab: Tab? {
         guard let activeTabID else { return nil }
         return tabs.first { $0.id == activeTabID }
@@ -48,10 +53,12 @@ final class TabManager {
 
     // MARK: - Mutations
 
-    /// Create a new tab, optionally loading a URL and making it active. Returns the new tab.
+    /// Create a new tab, optionally loading a URL and making it active. `isPrivate` selects the
+    /// non-persistent (incognito) data store. Returns the new tab.
     @discardableResult
-    func createTab(loading url: URL? = nil, activate: Bool = true) -> Tab {
-        let tab = Tab(configuration: configurationFactory.makeConfiguration())
+    func createTab(loading url: URL? = nil, activate: Bool = true, isPrivate: Bool = false) -> Tab {
+        let tab = Tab(configuration: configurationFactory.makeConfiguration(isPrivate: isPrivate),
+                      isPrivate: isPrivate)
         if let url { tab.setPendingURL(url) }
         tabs.append(tab)
         delegate?.tabManager(self, didUpdate: tabs)
@@ -63,9 +70,12 @@ final class TabManager {
 
     /// Create a tab that wraps a configuration WebKit handed us (a `target="_blank"` popup).
     /// The web view must be built from that exact configuration, so we cannot use the factory.
+    /// `isPrivate` should mirror the opener so a popup from a private tab stays private.
     @discardableResult
-    func createTab(adopting configuration: WKWebViewConfiguration, activate: Bool = true) -> Tab {
-        let tab = Tab(configuration: configuration)
+    func createTab(adopting configuration: WKWebViewConfiguration,
+                   activate: Bool = true,
+                   isPrivate: Bool = false) -> Tab {
+        let tab = Tab(configuration: configuration, isPrivate: isPrivate)
         tabs.append(tab)
         delegate?.tabManager(self, didUpdate: tabs)
         if activate || activeTabID == nil {
@@ -95,6 +105,7 @@ final class TabManager {
         let removed = tabs.remove(at: removalIndex)
         removed.stopLoading()
         delegate?.tabManager(self, didUpdate: tabs)
+        wipePrivateStoreIfNoPrivateTabsRemain(removed: removed)
 
         guard wasActive else { return }
         let previous = removed
@@ -112,11 +123,48 @@ final class TabManager {
 
     /// Close every tab. Used by the "close all" action in the tab grid.
     func closeAll() {
+        let hadPrivate = hasPrivateTabs
         let previous = activeTab
         tabs.forEach { $0.stopLoading() }
         tabs.removeAll()
         activeTabID = nil
         delegate?.tabManager(self, didUpdate: tabs)
+        if hadPrivate { wipePrivateDataStore() }
         delegate?.tabManager(self, didActivate: nil, previous: previous)
+    }
+
+    /// Close only the tabs of a given privacy (the grid's mode-aware "Close All"). The active tab is
+    /// reassigned to a surviving tab if it was among those closed.
+    func closeAll(isPrivate: Bool) {
+        let toRemove = tabs.filter { $0.isPrivate == isPrivate }
+        guard !toRemove.isEmpty else { return }
+        let activeWasRemoved = toRemove.contains { $0.id == activeTabID }
+        let previous = activeTab
+        toRemove.forEach { $0.stopLoading() }
+        tabs.removeAll { $0.isPrivate == isPrivate }
+        delegate?.tabManager(self, didUpdate: tabs)
+        if isPrivate { wipePrivateDataStore() }
+
+        guard activeWasRemoved else { return }
+        if let next = tabs.first {
+            activeTabID = next.id
+            delegate?.tabManager(self, didActivate: next, previous: previous)
+        } else {
+            activeTabID = nil
+            delegate?.tabManager(self, didActivate: nil, previous: previous)
+        }
+    }
+
+    // MARK: - Private data lifecycle
+
+    /// After closing one tab, wipe the private data store if that tab was the last private one, so a
+    /// private session leaves nothing behind.
+    private func wipePrivateStoreIfNoPrivateTabsRemain(removed: Tab) {
+        guard removed.isPrivate, !hasPrivateTabs else { return }
+        wipePrivateDataStore()
+    }
+
+    private func wipePrivateDataStore() {
+        Task { await configurationFactory.wipePrivateData() }
     }
 }
