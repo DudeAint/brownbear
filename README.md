@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/DudeAint/brownbear/main/docs/assets/banner.svg" alt="BrownBear — Userscripts & Power Browser for iOS" width="100%" />
+<img src="https://raw.githubusercontent.com/DudeAint/brownbear/main/docs/assets/banner.png" alt="BrownBear — Userscripts & Power Browser for iOS" width="100%" />
 
 <br/>
 
