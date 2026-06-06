@@ -22,5 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Module 3 — Sandbox & GM bridge:** isolated-world injected runtime (`brownbear-runtime.js`)
   with native-bound per-script identity, native `@grant` enforcement, per-script `GMValueStore`
   namespacing, and `GM_xmlhttpRequest` over native `URLSession` (CORS-free, `@connect`-gated).
+- **Module 4 — Background & @crontab:** `CrontabSchedule` (5-field cron + `@every` + `once`),
+  `HeadlessScriptRunner` (DOM-less `JSContext` with a background GM surface and an execution-time
+  limit), and `BrownBearBackgroundScheduler` (`BGTaskScheduler` app-refresh + processing tasks)
+  that runs `@crontab`/`@background` scripts while the app is closed, with durable logs and
+  schedule state.
 
 [Unreleased]: https://github.com/DudeAint/brownbear/commits/main

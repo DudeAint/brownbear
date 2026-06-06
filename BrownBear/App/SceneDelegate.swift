@@ -49,4 +49,9 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
               let browser = window?.rootViewController as? BrownBearBrowserViewController else { return }
         browser.handleExternalURL(context.url)
     }
+
+    func sceneDidEnterBackground(_ scene: UIScene) {
+        // Ask the OS to wake us to run due @crontab scripts.
+        BrownBearServices.shared.backgroundScheduler.scheduleNextRun()
+    }
 }

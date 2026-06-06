@@ -16,7 +16,11 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
                      didFinishLaunchingWithOptions launchOptions:
                      [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         configureGlobalAppearance()
-        // Module 4 will register BrownBearBackgroundScheduler's BGTask handlers here.
+        // Register background task handlers before launch finishes (required by BGTaskScheduler).
+        // Skipped under unit tests, which don't exercise (and can't permit) background tasks.
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
+            BrownBearServices.shared.backgroundScheduler.registerTaskHandlers()
+        }
         return true
     }
 

@@ -68,6 +68,12 @@ struct ScriptMetadata: Codable, Equatable {
     var injectInto: InjectInto
     var noFrames: Bool
 
+    // Background execution (Module 4, ScriptCat-style)
+    /// `@crontab` schedule expressions; a script with any runs in the background on schedule.
+    var crontabs: [String]
+    /// `@background` — a script that runs once when enabled/booted (no schedule).
+    var isBackground: Bool
+
     /// The verbatim metadata block text, exposed to scripts as `GM_info.scriptMetaStr`.
     var metadataBlock: String
 
@@ -90,6 +96,8 @@ struct ScriptMetadata: Codable, Equatable {
          runAt: RunAt = .default,
          injectInto: InjectInto = .default,
          noFrames: Bool = false,
+         crontabs: [String] = [],
+         isBackground: Bool = false,
          metadataBlock: String = "") {
         self.name = name
         self.namespace = namespace
@@ -110,6 +118,8 @@ struct ScriptMetadata: Codable, Equatable {
         self.runAt = runAt
         self.injectInto = injectInto
         self.noFrames = noFrames
+        self.crontabs = crontabs
+        self.isBackground = isBackground
         self.metadataBlock = metadataBlock
     }
 
@@ -133,5 +143,11 @@ struct ScriptMetadata: Codable, Equatable {
     /// Whether the script has any matching directive at all. A script with none never runs.
     var hasMatchingDirective: Bool {
         !(matches.isEmpty && includes.isEmpty)
+    }
+
+    /// Whether this script runs in the background (on a `@crontab` schedule or `@background`)
+    /// rather than being injected into pages.
+    var runsInBackground: Bool {
+        !crontabs.isEmpty || isBackground
     }
 }

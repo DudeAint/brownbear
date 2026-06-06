@@ -34,8 +34,8 @@ final class InjectionOrchestrator {
         didSet { router.host = bridgeHost }
     }
 
-    init(scriptStore: ScriptStore = ScriptStore(),
-         valueStore: GMValueStore = GMValueStore()) {
+    init(scriptStore: ScriptStore = BrownBearServices.shared.scriptStore,
+         valueStore: GMValueStore = BrownBearServices.shared.valueStore) {
         self.scriptStore = scriptStore
         self.valueStore = valueStore
         self.router = ScriptMessageRouter(scriptStore: scriptStore,

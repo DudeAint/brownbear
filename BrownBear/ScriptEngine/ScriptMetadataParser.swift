@@ -16,7 +16,7 @@ struct ScriptMetadataParser {
     /// Keys that may appear multiple times and accumulate into arrays.
     private static let multiValueKeys: Set<String> = [
         "match", "include", "exclude", "exclude-match",
-        "grant", "connect", "require", "resource", "antifeature"
+        "grant", "connect", "require", "resource", "antifeature", "crontab"
     ]
 
     /// Detects the metadata block. `(?s)` lets `.` span newlines; CRLF tolerated.
@@ -107,6 +107,8 @@ struct ScriptMetadataParser {
         case "inject-into":
             meta.injectInto = InjectInto(rawValue: value.lowercased()) ?? .default
         case "noframes": meta.noFrames = true
+        case "crontab" where !value.isEmpty: meta.crontabs.append(value)
+        case "background": meta.isBackground = true
 
         default:
             break // Unknown / unsupported keys are ignored, not fatal.
