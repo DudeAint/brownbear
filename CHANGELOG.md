@@ -23,9 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with native-bound per-script identity, native `@grant` enforcement, per-script `GMValueStore`
   namespacing, and `GM_xmlhttpRequest` over native `URLSession` (CORS-free, `@connect`-gated).
 - **Module 4 — Background & @crontab:** `CrontabSchedule` (5-field cron + `@every` + `once`),
-  `HeadlessScriptRunner` (DOM-less `JSContext` with a background GM surface and an execution-time
-  limit), and `BrownBearBackgroundScheduler` (`BGTaskScheduler` app-refresh + processing tasks)
-  that runs `@crontab`/`@background` scripts while the app is closed, with durable logs and
-  schedule state.
+  `HeadlessScriptRunner` (DOM-less `JSContext` with a background GM surface), and
+  `BrownBearBackgroundScheduler` (`BGTaskScheduler` app-refresh + processing tasks) that runs
+  `@crontab`/`@background` scripts while the app is closed, with durable logs and schedule state.
+- **Module 5 — Dashboard & editor:** a SwiftUI manager (`BrownBearDashboardView`) to install,
+  toggle, inspect, and delete scripts, view execution logs, and monitor background schedules;
+  plus an in-app code editor (`ScriptEditorScreen`) built on Runestone (line numbers, gutter,
+  auto-closing pairs, BrownBear theme) with live metadata parsing and save-time validation.
 
 [Unreleased]: https://github.com/DudeAint/brownbear/commits/main

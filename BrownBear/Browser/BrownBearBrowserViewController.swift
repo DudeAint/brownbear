@@ -296,7 +296,9 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
                 self?.presentShare(for: url)
             })
         }
-        // The Dashboard (Module 5) will be wired here.
+        sheet.addAction(UIAlertAction(title: "Userscripts…", style: .default) { [weak self] _ in
+            self?.presentDashboard()
+        })
         sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         sheet.popoverPresentationController?.sourceView = toolbar
         present(sheet, animated: true)
@@ -306,6 +308,10 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
         let share = UIActivityViewController(activityItems: [url], applicationActivities: nil)
         share.popoverPresentationController?.sourceView = toolbar
         present(share, animated: true)
+    }
+
+    private func presentDashboard() {
+        present(BrownBearDashboardView.makeHostingController(), animated: true)
     }
 
     private func presentError(_ error: Error) {
