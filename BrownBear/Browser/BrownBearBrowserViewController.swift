@@ -202,7 +202,7 @@ final class BrownBearBrowserViewController: UIViewController {
 
     /// A branded New Tab page: a search box plus shortcut tiles (the user's bookmarks, or suggested
     /// sites when there are none). Tiles are plain `<a>` links and the search box is a plain `<form>`,
-    /// so both navigate through the normal load flow — no native bridge. First-party content; bookmark
+    /// so both navigate through the normal load flow — no privileged bridge. First-party content; bookmark
     /// titles/URLs are HTML-escaped and limited to http(s) before injection (the page runs untrusted-
     /// adjacent, so we never inject raw user strings).
     private static func newTabHTML(bookmarks: [Bookmark]) -> String {
@@ -218,7 +218,7 @@ final class BrownBearBrowserViewController: UIViewController {
             let letter = htmlEscape((entry.title.first.map { String($0).uppercased() }) ?? "•")
             return """
             <a class="tile" href="\(url)">
-            <span class="ico"><img src="https://\(host)/favicon.ico" onerror="this.remove()" alt="">
+            <span class="ico"><img src="https://\(host)/favicon.ico" onload="this.style.opacity=1" onerror="this.remove()" alt="">
             <span class="mono">\(letter)</span></span>
             <span class="lbl">\(title)</span></a>
             """
@@ -251,7 +251,7 @@ final class BrownBearBrowserViewController: UIViewController {
           .ico{position:relative;width:60px;height:60px;border-radius:16px;background:var(--accent);
             display:grid;place-items:center;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.10);}
           .ico img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
-            padding:12px;background:#fff;}
+            padding:12px;background:#fff;opacity:0;transition:opacity .12s ease;}
           .ico .mono{font-size:26px;font-weight:700;color:#fff;}
           .lbl{font-size:12px;font-weight:500;max-width:72px;white-space:nowrap;overflow:hidden;
             text-overflow:ellipsis;text-align:center;}
