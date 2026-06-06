@@ -5,18 +5,12 @@ description: "Select Xcode, install XcodeGen, generate the project, and restore 
 # consistent setup. The slow part of iOS CI is resolving/compiling Swift packages — we pin the
 # clone path and cache it, keyed on project.yml (which pins dependency versions).
 
-inputs:
-  xcode:
-    description: "Xcode version to select"
-    required: false
-    default: "15.4"
-
 runs:
   using: composite
   steps:
-    - name: Select Xcode ${{ inputs.xcode }}
+    - name: Show selected Xcode
       shell: bash
-      run: sudo xcode-select -s "/Applications/Xcode_${{ inputs.xcode }}.app"
+      run: xcodebuild -version
 
     - name: Install XcodeGen
       shell: bash
@@ -30,9 +24,8 @@ runs:
       uses: actions/cache@v4
       with:
         path: .spm-cache
-        key: spm-${{ runner.os }}-${{ inputs.xcode }}-${{ hashFiles('project.yml') }}
+        key: spm-${{ runner.os }}-${{ hashFiles('project.yml') }}
         restore-keys: |
-          spm-${{ runner.os }}-${{ inputs.xcode }}-
           spm-${{ runner.os }}-
 
     - name: Resolve Swift packages (into cached path)

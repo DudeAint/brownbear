@@ -26,7 +26,7 @@ permissions:
 jobs:
   build:
     name: Build nightly IPA
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Setup iOS build (Xcode + XcodeGen + SPM cache)
