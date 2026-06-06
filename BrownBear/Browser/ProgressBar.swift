@@ -3,23 +3,35 @@
 //  BrownBear
 //
 //  The thin determinate load indicator under the omnibox, matching Chrome's behavior: it
-//  animates toward the page's estimated progress and fades out smoothly on completion.
+//  animates toward the page's estimated progress and fades out smoothly on completion. The fill
+//  is an amber gradient (accent → accentBright) whose leading edge stays the brightest, giving the
+//  bar a soft "head" as it advances (Brave). The gradient is the fill view's *backing layer*, so
+//  its geometry animates as a real view property inside `UIView.animate` — the bright head rides
+//  the progress edge in lock-step instead of drifting on Core Animation's default implicit timing.
 //
 
 import UIKit
 
 final class ProgressBar: UIView {
 
-    private let track = UIView()
-    private let fill = UIView()
+    /// A view whose backing layer is a `CAGradientLayer`. Because the gradient is the view's own
+    /// layer (not a hosted sublayer), animating the view's frame inside a `UIView.animate` block
+    /// drives the gradient with that block's duration/curve — no standalone-layer timing desync.
+    private final class GradientFillView: UIView {
+        override class var layerClass: AnyClass { CAGradientLayer.self }
+    }
+
+    private let fill = GradientFillView()
     private var fillWidthFraction: CGFloat = 0
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
-        track.backgroundColor = .clear
-        fill.backgroundColor = BrownBearTheme.Palette.accent
-        addSubview(track)
+        if let gradient = fill.layer as? CAGradientLayer {
+            gradient.startPoint = CGPoint(x: 0, y: 0.5)
+            gradient.endPoint = CGPoint(x: 1, y: 0.5)
+        }
+        refreshGradientColors()
         addSubview(fill)
     }
 
@@ -28,7 +40,6 @@ final class ProgressBar: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        track.frame = bounds
         layoutFill(animated: false)
     }
 
@@ -56,13 +67,42 @@ final class ProgressBar: UIView {
         }
     }
 
+    override func traitCollectionDidChange(_ previous: UITraitCollection?) {
+        super.traitCollectionDidChange(previous)
+        // CGColor-backed gradient stops must be rebuilt when light/dark appearance changes.
+        refreshGradientColors()
+    }
+
+    // MARK: - Private
+
+    private func refreshGradientColors() {
+        guard let gradient = fill.layer as? CAGradientLayer else { return }
+        // accent → accentBright: the right (leading) edge is the brightest, forming the head.
+        gradient.colors = [
+            BrownBearTheme.Palette.accent.cgColor,
+            BrownBearTheme.Palette.accentBright.cgColor
+        ]
+        gradient.locations = [0, 1]
+    }
+
     private func layoutFill(animated: Bool) {
-        let target = CGRect(x: 0, y: 0, width: bounds.width * fillWidthFraction, height: bounds.height)
-        guard animated else { fill.frame = target; return }
+        let width = bounds.width * fillWidthFraction
+        let frame = CGRect(x: 0, y: 0, width: width, height: bounds.height)
+        guard animated else {
+            // Force an instant update even if layoutSubviews is invoked inside an ambient
+            // animation (e.g. rotation): suppress the backing layer's implicit action.
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            fill.frame = frame
+            CATransaction.commit()
+            return
+        }
+        // fill.frame is a real view property here, so the backing gradient layer animates with the
+        // block's timing — the bright head advances in lock-step with the fill edge.
         UIView.animate(withDuration: BrownBearTheme.Motion.quick,
                        delay: 0,
                        options: [.curveEaseOut, .beginFromCurrentState]) {
-            self.fill.frame = target
+            self.fill.frame = frame
         }
     }
 }
