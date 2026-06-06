@@ -40,6 +40,7 @@ final class InjectionOrchestrator {
 
     init(scriptStore: ScriptStore = BrownBearServices.shared.scriptStore,
          valueStore: GMValueStore = BrownBearServices.shared.valueStore,
+         logStore: LogStore = BrownBearServices.shared.logStore,
          webExtensionStore: WebExtensionStore = BrownBearServices.shared.webExtensionStore,
          webExtensionStorage: WebExtensionStorage = BrownBearServices.shared.webExtensionStorage) {
         self.scriptStore = scriptStore
@@ -47,6 +48,7 @@ final class InjectionOrchestrator {
         self.router = ScriptMessageRouter(scriptStore: scriptStore,
                                           valueStore: valueStore,
                                           network: network,
+                                          logStore: logStore,
                                           contentWorld: contentWorld)
         self.webExtensionRouter = WebExtensionMessageRouter(store: webExtensionStore,
                                                             storage: webExtensionStorage,

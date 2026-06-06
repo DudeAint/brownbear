@@ -33,6 +33,8 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
     /// The native-bound identity behind a token. Created in getScripts, looked up on every call.
     private struct ScriptSession {
         let id: UUID
+        /// The script's display name, for attributing log lines.
+        let name: String
         let grants: Set<String>
         let connects: [String]
         /// URLs the script declared via @require / @resource — the only URLs fetchResource serves.
@@ -42,8 +44,12 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
     private let scriptStore: ScriptStore
     private let valueStore: GMValueStore
     private let network: GMNetworkService
+    private let logStore: LogStore
     private let contentWorld: WKContentWorld
     weak var host: ScriptBridgeHost?
+
+    /// Cap a single forwarded log line so a runaway script can't bloat the on-disk log.
+    private static let maxLogMessageLength = 8192
 
     /// token → session. Tokens are random per injection; a script only ever sees its own.
     private var sessions: [String: ScriptSession] = [:]
@@ -66,10 +72,12 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
     init(scriptStore: ScriptStore,
          valueStore: GMValueStore,
          network: GMNetworkService,
+         logStore: LogStore,
          contentWorld: WKContentWorld) {
         self.scriptStore = scriptStore
         self.valueStore = valueStore
         self.network = network
+        self.logStore = logStore
         self.contentWorld = contentWorld
     }
 
@@ -172,8 +180,21 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
             host?.bridgeOpenInTab(url: url, active: (payload["active"] as? Bool) ?? true)
             return NSNull()
 
-        case "GM_log":
-            // Module 4 routes this into the persistent LogEntry store; for now it's an ack.
+        case "GM_log", "log":
+            // Both GM_log and the runtime's bridged console.* land here. GM_log is grant-gated
+            // (above); "log" (console forwarding) is ungated so it works for every script,
+            // including @grant none. Writes a foreground LogEntry the dashboard's Logs tab shows.
+            let levelRaw = (payload["level"] as? String) ?? "info"
+            let level = LogEntry.Level(rawValue: levelRaw) ?? .info
+            let raw = (payload["message"] as? String) ?? ""
+            let message = raw.count > Self.maxLogMessageLength
+                ? String(raw.prefix(Self.maxLogMessageLength)) + "…"
+                : raw
+            await logStore.append(LogEntry(scriptID: session.id,
+                                           scriptName: session.name,
+                                           level: level,
+                                           message: message,
+                                           context: .foreground))
             return NSNull()
 
         case "GM_xmlhttpRequest":
@@ -247,6 +268,7 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
             var assetURLs = Set(meta.requires)
             assetURLs.formUnion(meta.resources.values)
             sessions[token] = ScriptSession(id: script.id,
+                                            name: meta.displayName,
                                             grants: Set(meta.effectiveGrants),
                                             connects: meta.connects,
                                             assetURLs: assetURLs)
