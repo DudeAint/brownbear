@@ -18,7 +18,7 @@ actor GMValueStore {
     private var caches: [UUID: [String: String]] = [:]
     private let defaults: UserDefaults
 
-    init(suiteName: String = "group.brownbear.gm") {
+    init(suiteName: String = "com.brownbear.gmstore") {
         self.defaults = UserDefaults(suiteName: suiteName) ?? .standard
     }
 

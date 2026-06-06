@@ -61,8 +61,10 @@ function_body_length:
   error: 120
 
 cyclomatic_complexity:
-  warning: 12
-  error: 20
+  # Dispatch switches (the GM bridge router, the metadata key dispatcher) have high cyclomatic
+  # but low cognitive complexity; allow them rather than fragmenting clear switches.
+  warning: 18
+  error: 30
 
 identifier_name:
   min_length:

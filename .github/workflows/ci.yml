@@ -99,6 +99,15 @@ jobs:
             -quiet \
             COMPILER_INDEX_STORE_ENABLE=NO \
             CODE_SIGNING_ALLOWED=NO
+      - name: Dump crash reports on failure
+        if: failure()
+        run: |
+          echo "=== DiagnosticReports (.ips) ==="
+          ls -t ~/Library/Logs/DiagnosticReports/*.ips 2>/dev/null | head -3 | while read -r f; do
+            echo "----- $f -----"; cat "$f"; echo; done
+          echo "=== Simulator crash logs ==="
+          find ~/Library/Developer/CoreSimulator/Devices -name '*.ips' -o -name '*.crash' 2>/dev/null \
+            | xargs -I {} sh -c 'echo "----- {} -----"; cat "{}"' 2>/dev/null | head -200
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
