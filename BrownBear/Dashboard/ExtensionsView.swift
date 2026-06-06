@@ -81,7 +81,11 @@ struct ExtensionsView: View {
                 DashboardEmptyState(
                     systemImage: "puzzlepiece.extension.fill",
                     title: "No extensions",
-                    message: "Install a Chrome/Firefox-style extension from a .crx/.zip file or straight from the Chrome Web Store. Content scripts, background workers, and declarativeNetRequest blocking all run with a chrome.* API surface.",
+                    message: """
+                    Install a Chrome/Firefox-style extension from a .crx/.zip file or straight from \
+                    the Chrome Web Store. Content scripts, background workers, and declarativeNetRequest \
+                    blocking all run with a chrome.* API surface.
+                    """,
                     action: { importing = true },
                     actionTitle: "Install extension"
                 )
