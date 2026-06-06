@@ -1,0 +1,63 @@
+<svg width="1280" height="360" viewBox="0 0 1280 360" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="BrownBear — Userscripts & Power Browser">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="360" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1B120B"/>
+      <stop offset="0.5" stop-color="#3A2417"/>
+      <stop offset="1" stop-color="#0E0907"/>
+    </linearGradient>
+    <linearGradient id="amber" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFB454"/>
+      <stop offset="1" stop-color="#E0832F"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#FFB454" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#FFB454" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+  </defs>
+
+  <rect width="1280" height="360" rx="24" fill="url(#bg)"/>
+  <circle cx="250" cy="120" r="260" fill="url(#glow)"/>
+  <circle cx="1050" cy="300" r="220" fill="url(#glow)"/>
+
+  <!-- subtle grid -->
+  <g stroke="#FFFFFF" stroke-opacity="0.04">
+    <path d="M0 90 H1280 M0 180 H1280 M0 270 H1280"/>
+    <path d="M160 0 V360 M320 0 V360 M480 0 V360 M640 0 V360 M800 0 V360 M960 0 V360 M1120 0 V360"/>
+  </g>
+
+  <!-- bear mark -->
+  <g transform="translate(150 180)">
+    <circle cx="-58" cy="-58" r="34" fill="url(#amber)"/>
+    <circle cx="58" cy="-58" r="34" fill="url(#amber)"/>
+    <circle cx="-58" cy="-58" r="15" fill="#2A1A0F"/>
+    <circle cx="58" cy="-58" r="15" fill="#2A1A0F"/>
+    <circle cx="0" cy="0" r="80" fill="url(#amber)"/>
+    <circle cx="0" cy="18" r="40" fill="#FFF1DD"/>
+    <circle cx="-26" cy="-18" r="9" fill="#2A1A0F"/>
+    <circle cx="26" cy="-18" r="9" fill="#2A1A0F"/>
+    <ellipse cx="0" cy="8" rx="13" ry="9" fill="#2A1A0F"/>
+  </g>
+
+  <!-- wordmark -->
+  <text x="300" y="158" font-family="-apple-system, SF Pro Display, Segoe UI, Helvetica, Arial, sans-serif" font-size="84" font-weight="800" fill="#FFFFFF" letter-spacing="-2">BrownBear</text>
+  <text x="304" y="210" font-family="-apple-system, SF Pro Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="30" font-weight="600" fill="url(#amber)">Userscripts &amp; Power Browser for iOS</text>
+
+  <!-- feature pills -->
+  <g font-family="-apple-system, SF Pro Text, Segoe UI, Helvetica, Arial, sans-serif" font-size="20" font-weight="600">
+    <g>
+      <rect x="304" y="248" width="220" height="44" rx="22" fill="#FFFFFF" fill-opacity="0.06" stroke="#FFB454" stroke-opacity="0.4"/>
+      <text x="414" y="276" fill="#FFE9C9" text-anchor="middle">Chromium-style UI</text>
+    </g>
+    <g>
+      <rect x="540" y="248" width="210" height="44" rx="22" fill="#FFFFFF" fill-opacity="0.06" stroke="#FFB454" stroke-opacity="0.4"/>
+      <text x="645" y="276" fill="#FFE9C9" text-anchor="middle">Sandboxed GM API</text>
+    </g>
+    <g>
+      <rect x="766" y="248" width="250" height="44" rx="22" fill="#FFFFFF" fill-opacity="0.06" stroke="#FFB454" stroke-opacity="0.4"/>
+      <text x="891" y="276" fill="#FFE9C9" text-anchor="middle">@crontab Background Jobs</text>
+    </g>
+  </g>
+</svg>

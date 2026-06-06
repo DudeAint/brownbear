@@ -15,4 +15,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reference documentation for the four source projects in `References/REFERENCES.md`.
 - Module roadmap (Browser → Engine → Sandbox → Background → Dashboard).
 
-[Unreleased]: https://github.com/<owner>/brownbear/commits/main
+[Unreleased]: https://github.com/DudeAint/brownbear/commits/main

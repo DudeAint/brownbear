@@ -19,7 +19,7 @@ covers the workflow, standards, and commit conventions. AI agents must **also** 
 ## Development Setup
 
 ```bash
-git clone https://github.com/<owner>/brownbear.git
+git clone https://github.com/DudeAint/brownbear.git
 cd brownbear
 # Open in Xcode 15+ once the project file lands:
 open BrownBear.xcodeproj
