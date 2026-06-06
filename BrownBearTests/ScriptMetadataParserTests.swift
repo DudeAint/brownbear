@@ -84,6 +84,21 @@ final class ScriptMetadataParserTests: XCTestCase {
         XCTAssertEqual(meta.matches, ["*://*/*"])
     }
 
+    func testParsesCrontabAndBackground() throws {
+        let script = """
+        // ==UserScript==
+        // @name      BG
+        // @background
+        // @crontab   */5 * * * *
+        // @crontab   0 9 * * 1
+        // ==/UserScript==
+        """
+        let meta = try parser.parse(script)
+        XCTAssertTrue(meta.isBackground)
+        XCTAssertEqual(meta.crontabs, ["*/5 * * * *", "0 9 * * 1"])
+        XCTAssertTrue(meta.runsInBackground)
+    }
+
     func testUnknownKeysIgnored() throws {
         let script = "// ==UserScript==\n// @name X\n// @unknownkey whatever\n// @match *://*/*\n// ==/UserScript==\n"
         let meta = try parser.parse(script)
