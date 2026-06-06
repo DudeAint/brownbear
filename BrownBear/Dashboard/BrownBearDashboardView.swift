@@ -77,13 +77,29 @@ struct BrownBearDashboardView: View {
                 } else {
                     List {
                         Section {
-                            ForEach(model.scripts) { script in
+                            ForEach(model.filteredScripts) { script in
                                 NavigationLink {
                                     ScriptDetailView(script: script, model: model)
                                 } label: {
                                     ScriptRowView(script: script, model: model)
                                 }
                                 .listRowBackground(BBTheme.Color.card)
+                                .swipeActions(edge: .trailing) {
+                                    Button(role: .destructive) {
+                                        Task { await model.delete(script) }
+                                    } label: { Label("Delete", systemImage: "trash") }
+                                }
+                                .contextMenu {
+                                    Button {
+                                        Task { await model.setEnabled(script, !script.enabled) }
+                                    } label: {
+                                        Label(script.enabled ? "Disable" : "Enable",
+                                              systemImage: script.enabled ? "pause.circle" : "play.circle")
+                                    }
+                                    Button(role: .destructive) {
+                                        Task { await model.delete(script) }
+                                    } label: { Label("Delete", systemImage: "trash") }
+                                }
                             }
                         } header: {
                             Text("\(model.scripts.count) installed · \(model.enabledCount) enabled")
@@ -91,6 +107,15 @@ struct BrownBearDashboardView: View {
                         }
                     }
                     .scrollContentBackground(.hidden)
+                    .searchable(text: $model.scriptSearch, prompt: "Search scripts")
+                    .overlay {
+                        if model.filteredScripts.isEmpty {
+                            DashboardEmptyState(
+                                systemImage: "magnifyingglass",
+                                title: "No matches",
+                                message: "No installed script matches “\(model.scriptSearch)”.")
+                        }
+                    }
                 }
             }
             .background(BBTheme.backgroundGradient)

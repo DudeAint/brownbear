@@ -27,6 +27,7 @@ struct LogsView: View {
             content
         }
         .background(BBTheme.backgroundGradient)
+        .searchable(text: $model.logSearch, prompt: "Search logs")
         .navigationTitle("Logs")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -56,7 +57,9 @@ struct LogsView: View {
             DashboardEmptyState(
                 systemImage: "line.3.horizontal.decrease.circle",
                 title: "No matching logs",
-                message: "No entries match the “\(model.logFilter.title)” filter."
+                message: model.logSearch.isEmpty
+                    ? "No entries match the “\(model.logFilter.title)” filter."
+                    : "No entries match “\(model.logSearch)”."
             )
         } else {
             ScrollView {
