@@ -99,15 +99,16 @@ jobs:
             -quiet \
             COMPILER_INDEX_STORE_ENABLE=NO \
             CODE_SIGNING_ALLOWED=NO
-      - name: Dump crash reports on failure
+      - name: Dump BrownBear crash report on failure
         if: failure()
         run: |
-          echo "=== DiagnosticReports (.ips) ==="
-          ls -t ~/Library/Logs/DiagnosticReports/*.ips 2>/dev/null | head -3 | while read -r f; do
-            echo "----- $f -----"; cat "$f"; echo; done
-          echo "=== Simulator crash logs ==="
-          find ~/Library/Developer/CoreSimulator/Devices -name '*.ips' -o -name '*.crash' 2>/dev/null \
-            | xargs -I {} sh -c 'echo "----- {} -----"; cat "{}"' 2>/dev/null | head -200
+          echo "=== BrownBear crash reports (host DiagnosticReports) ==="
+          found=$(grep -rl "BrownBear" ~/Library/Logs/DiagnosticReports/ 2>/dev/null | grep -iE '\.ips$' || true)
+          for f in $found; do echo "----- $f -----"; head -c 7000 "$f"; echo; echo; done
+          echo "=== BrownBear crash reports (simulator devices) ==="
+          for f in $(find ~/Library/Developer/CoreSimulator/Devices -name '*.ips' 2>/dev/null | xargs grep -l "BrownBear" 2>/dev/null); do
+            echo "----- $f -----"; head -c 7000 "$f"; echo; echo; done
+          if [ -z "$found" ]; then echo "(no BrownBear .ips in host reports; listing recent reports)"; ls -lt ~/Library/Logs/DiagnosticReports/ 2>/dev/null | head -8; fi
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
