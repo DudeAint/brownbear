@@ -53,6 +53,10 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
 
     /// token → session. Tokens are random per injection; a script only ever sees its own.
     private var sessions: [String: ScriptSession] = [:]
+    /// Insertion order, for FIFO eviction so the shared router's map can't grow unbounded across
+    /// every tab, navigation, and frame for the life of the app.
+    private var tokenOrder: [String] = []
+    private static let maxSessions = 2000
 
     /// Which @grant names satisfy each gated API (classic and GM.* aliases).
     private static let grantAliases: [String: Set<String>] = [
@@ -242,6 +246,16 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         return session
     }
 
+    /// Insert a session, evicting the oldest token once the map exceeds `maxSessions`.
+    private func registerSession(token: String, session: ScriptSession) {
+        sessions[token] = session
+        tokenOrder.append(token)
+        if tokenOrder.count > Self.maxSessions {
+            let evicted = tokenOrder.removeFirst()
+            sessions.removeValue(forKey: evicted)
+        }
+    }
+
     private func ensureGranted(api: String, session: ScriptSession) throws {
         guard let acceptable = Self.grantAliases[api] else { return } // ungated api
         guard !session.grants.isDisjoint(with: acceptable) else {
@@ -267,11 +281,12 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
             let token = UUID().uuidString
             var assetURLs = Set(meta.requires)
             assetURLs.formUnion(meta.resources.values)
-            sessions[token] = ScriptSession(id: script.id,
-                                            name: meta.displayName,
-                                            grants: Set(meta.effectiveGrants),
-                                            connects: meta.connects,
-                                            assetURLs: assetURLs)
+            registerSession(token: token,
+                            session: ScriptSession(id: script.id,
+                                                   name: meta.displayName,
+                                                   grants: Set(meta.effectiveGrants),
+                                                   connects: meta.connects,
+                                                   assetURLs: assetURLs))
             let values = await valueStore.snapshot(scriptID: script.id)
             result.append(Self.scriptPayload(script, token: token, values: values))
         }

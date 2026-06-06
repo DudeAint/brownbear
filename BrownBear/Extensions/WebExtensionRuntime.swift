@@ -138,7 +138,19 @@ final class WebExtensionRuntime {
                      backgroundSource: source,
                      manifestJSON: ext.manifestJSON,
                      baseURL: ext.baseURLString,
-                     messages: messages)
+                     messages: messages,
+                     firstInstall: Self.consumeFirstInstall(ext.id))
+    }
+
+    /// True exactly once per extension id (its first-ever boot), so chrome.runtime.onInstalled fires
+    /// reason 'install' only then; every boot still fires onStartup. Ids are random per install, so a
+    /// reinstall is naturally a fresh id and fires 'install' again.
+    private static func consumeFirstInstall(_ extensionID: String) -> Bool {
+        let key = "brownbear.webext.installedFired.\(extensionID)"
+        let defaults = UserDefaults.standard
+        if defaults.bool(forKey: key) { return false }
+        defaults.set(true, forKey: key)
+        return true
     }
 
     // MARK: - storage.onChanged fan-out

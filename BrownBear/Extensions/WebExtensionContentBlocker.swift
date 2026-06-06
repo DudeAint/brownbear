@@ -29,6 +29,11 @@ final class WebExtensionContentBlocker {
     private let store: WebExtensionStore
     private let ruleListStore: WKContentRuleListStore?
     private(set) var reports: [Report] = []
+    // Single-flight: refresh suspends at every await, and it's fired fire-and-forget from boot AND
+    // every extension-change notification. Without coalescing, two overlapping refreshes interleave
+    // their remove/add calls and install a stale rule-list set.
+    private var isRefreshing = false
+    private var refreshRequested = false
 
     init(store: WebExtensionStore = BrownBearServices.shared.webExtensionStore,
          ruleListStore: WKContentRuleListStore? = WKContentRuleListStore.default()) {
@@ -40,51 +45,64 @@ final class WebExtensionContentBlocker {
     var activeRuleCount: Int { reports.reduce(0) { $0 + $1.compiledCount } }
 
     /// Recompile every enabled extension's enabled DNR rulesets and install them into the shared
-    /// content controller, replacing whatever was there. Idempotent; safe to call on any change.
+    /// content controller, replacing whatever was there. Coalesced (single-flight + one trailing
+    /// pass) so overlapping calls can't interleave; the swap is atomic.
     func refresh(into userContentController: WKUserContentController) async {
-        userContentController.removeAllContentRuleLists()
+        if isRefreshing { refreshRequested = true; return }
+        isRefreshing = true
+        defer { isRefreshing = false }
+        repeat {
+            refreshRequested = false
+            await performRefresh(into: userContentController)
+        } while refreshRequested
+    }
+
+    private func performRefresh(into userContentController: WKUserContentController) async {
         var newReports: [Report] = []
+        var compiledLists: [WKContentRuleList] = []
 
-        guard let ruleListStore else {
-            reports = []
-            return
-        }
+        if let ruleListStore {
+            for ext in await store.enabledExtensions() {
+                guard let manifest = ext.manifest, !manifest.declarativeNetRequest.isEmpty else { continue }
+                for ruleset in manifest.declarativeNetRequest where ruleset.enabled {
+                    let identifier = "brownbear-dnr-\(ext.id)-\(ruleset.id)"
 
-        for ext in await store.enabledExtensions() {
-            guard let manifest = ext.manifest, !manifest.declarativeNetRequest.isEmpty else { continue }
-            for ruleset in manifest.declarativeNetRequest where ruleset.enabled {
-                let identifier = "brownbear-dnr-\(ext.id)-\(ruleset.id)"
+                    guard let data = await store.file(extensionID: ext.id, path: ruleset.path) else {
+                        newReports.append(Report(extensionID: ext.id, extensionName: ext.displayName,
+                                                 rulesetID: ruleset.id, compiledCount: 0, skippedCount: 0,
+                                                 error: "ruleset file '\(ruleset.path)' not found"))
+                        continue
+                    }
 
-                guard let data = await store.file(extensionID: ext.id, path: ruleset.path) else {
-                    newReports.append(Report(extensionID: ext.id, extensionName: ext.displayName,
-                                             rulesetID: ruleset.id, compiledCount: 0, skippedCount: 0,
-                                             error: "ruleset file '\(ruleset.path)' not found"))
-                    continue
-                }
+                    let result = DeclarativeNetRequest.compile(rulesetData: data)
+                    guard !result.isEmpty else {
+                        newReports.append(Report(extensionID: ext.id, extensionName: ext.displayName,
+                                                 rulesetID: ruleset.id, compiledCount: 0,
+                                                 skippedCount: result.skippedCount,
+                                                 error: result.warnings.first ?? "no rules compiled"))
+                        continue
+                    }
 
-                let result = DeclarativeNetRequest.compile(rulesetData: data)
-                guard !result.isEmpty else {
-                    newReports.append(Report(extensionID: ext.id, extensionName: ext.displayName,
-                                             rulesetID: ruleset.id, compiledCount: 0,
-                                             skippedCount: result.skippedCount,
-                                             error: result.warnings.first ?? "no rules compiled"))
-                    continue
-                }
-
-                do {
-                    let list = try await compile(store: ruleListStore, identifier: identifier, json: result.json)
-                    userContentController.add(list)
-                    newReports.append(Report(extensionID: ext.id, extensionName: ext.displayName,
-                                             rulesetID: ruleset.id, compiledCount: result.compiledCount,
-                                             skippedCount: result.skippedCount, error: nil))
-                } catch {
-                    newReports.append(Report(extensionID: ext.id, extensionName: ext.displayName,
-                                             rulesetID: ruleset.id, compiledCount: 0,
-                                             skippedCount: result.skippedCount,
-                                             error: error.localizedDescription))
+                    do {
+                        let list = try await compile(store: ruleListStore, identifier: identifier, json: result.json)
+                        compiledLists.append(list)
+                        newReports.append(Report(extensionID: ext.id, extensionName: ext.displayName,
+                                                 rulesetID: ruleset.id, compiledCount: result.compiledCount,
+                                                 skippedCount: result.skippedCount, error: nil))
+                    } catch {
+                        newReports.append(Report(extensionID: ext.id, extensionName: ext.displayName,
+                                                 rulesetID: ruleset.id, compiledCount: 0,
+                                                 skippedCount: result.skippedCount,
+                                                 error: error.localizedDescription))
+                    }
                 }
             }
         }
+
+        // Atomic swap: remove + add happen together with NO await between, so there's never a window
+        // where the page is left with a partial rule set.
+        userContentController.removeAllContentRuleLists()
+        for list in compiledLists { userContentController.add(list) }
         reports = newReports
     }
 

@@ -18,8 +18,10 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
     private let store: WebExtensionStore
     private let storage: WebExtensionStorage
     private let runtime: WebExtensionRuntime
-    /// token → extension id. Minted per content-script injection.
+    /// token → extension id. Minted per content-script injection / page.
     private var sessions: [String: String] = [:]
+    /// Insertion order of tokens, for FIFO eviction once `sessions` exceeds `maxSessions`.
+    private var tokenOrder: [String] = []
 
     init(store: WebExtensionStore, storage: WebExtensionStorage, runtime: WebExtensionRuntime) {
         self.store = store
@@ -32,7 +34,7 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
     /// same native-bound identity model content scripts use.
     func makePageSession(for extensionID: String) -> String {
         let token = UUID().uuidString
-        sessions[token] = extensionID
+        registerSession(token: token, extensionID: extensionID)
         return token
     }
 
@@ -66,7 +68,7 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
             return try await handleGetContentScripts(payload: payload)
         }
 
-        let extensionID = try resolve(token)
+        let extensionID = try await resolve(token)
         let area = WebExtensionStorage.Area(rawValue: (payload["area"] as? String) ?? "local") ?? .local
 
         switch api {
@@ -110,11 +112,29 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
         }
     }
 
-    private func resolve(_ token: String?) throws -> String {
+    private func resolve(_ token: String?) async throws -> String {
         guard let token, let extensionID = sessions[token] else {
             throw BrownBearError.bridgeRejected("unrecognized extension token")
         }
+        // Fail closed if the extension was disabled/removed after this token was minted — otherwise
+        // an already-injected content script keeps read/write access to storage until it navigates.
+        guard await store.ext(for: extensionID)?.enabled == true else {
+            sessions.removeValue(forKey: token)
+            throw BrownBearError.bridgeRejected("extension is disabled")
+        }
         return extensionID
+    }
+
+    /// token → extensionID, with a FIFO cap so the map can't grow unbounded across a long session of
+    /// navigations (a fresh token is minted per content-script injection / page).
+    private static let maxSessions = 2000
+    private func registerSession(token: String, extensionID: String) {
+        sessions[token] = extensionID
+        tokenOrder.append(token)
+        if tokenOrder.count > Self.maxSessions {
+            let evicted = tokenOrder.removeFirst()
+            sessions.removeValue(forKey: evicted)
+        }
     }
 
     // MARK: - getContentScripts
@@ -148,7 +168,7 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
                 }
 
                 let token = UUID().uuidString
-                sessions[token] = ext.id
+                registerSession(token: token, extensionID: ext.id)
                 result.append([
                     "token": token,
                     "extensionId": ext.id,

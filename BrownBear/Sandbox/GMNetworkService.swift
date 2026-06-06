@@ -55,13 +55,19 @@ final class GMNetworkService: NSObject, @unchecked Sendable {
     private final class Context {
         let requestID: String
         let request: GMXHRRequest
+        /// The script's @connect allowlist + page host — re-checked on every redirect hop.
+        let connects: [String]
+        let pageHost: String?
         let emit: (String, [String: Any]) -> Void
         var received = Data()
         var response: HTTPURLResponse?
         var expectedLength: Int64 = -1
-        init(requestID: String, request: GMXHRRequest, emit: @escaping (String, [String: Any]) -> Void) {
+        init(requestID: String, request: GMXHRRequest, connects: [String], pageHost: String?,
+             emit: @escaping (String, [String: Any]) -> Void) {
             self.requestID = requestID
             self.request = request
+            self.connects = connects
+            self.pageHost = pageHost
             self.emit = emit
         }
     }
@@ -105,7 +111,8 @@ final class GMNetworkService: NSObject, @unchecked Sendable {
         if request.anonymous { urlRequest.httpShouldHandleCookies = false }
 
         let task = session.dataTask(with: urlRequest)
-        let context = Context(requestID: requestID, request: request, emit: emit)
+        let context = Context(requestID: requestID, request: request,
+                              connects: connects, pageHost: pageHost, emit: emit)
         lock.lock()
         contexts[task.taskIdentifier] = context
         taskByRequestID[requestID] = task
@@ -190,6 +197,24 @@ final class GMNetworkService: NSObject, @unchecked Sendable {
 
 extension GMNetworkService: URLSessionDataDelegate {
 
+    /// Re-validate every HTTP redirect against the script's @connect allowlist. Without this,
+    /// URLSession silently follows a 3xx to ANY host — letting a declared host bounce the request
+    /// (and its response) to an undeclared one, defeating the allowlist entirely (SSRF). A refused
+    /// redirect returns the 3xx body to the script rather than fetching the disallowed target.
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        lock.lock()
+        let context = contexts[task.taskIdentifier]
+        lock.unlock()
+        guard let context,
+              Self.isConnectAllowed(host: request.url?.host, connects: context.connects, pageHost: context.pageHost) else {
+            completionHandler(nil)   // refuse the redirect; the 3xx response stands
+            return
+        }
+        completionHandler(GMRedirectGuard.stripSensitiveHeadersIfCrossHost(request, from: task.originalRequest))
+    }
+
     func urlSession(_ session: URLSession,
                     dataTask: URLSessionDataTask,
                     didReceive response: URLResponse,
@@ -239,5 +264,44 @@ extension GMNetworkService: URLSessionDataDelegate {
         context.emit("readystatechange", payload)
         context.emit("load", payload)
         context.emit("loadend", payload)
+    }
+}
+
+// MARK: - Redirect guard (shared with the headless background path)
+
+/// A per-task `URLSessionTaskDelegate` that re-validates HTTP redirects against a script's @connect
+/// allowlist. The headless runner (which uses completion-handler tasks on a delegate-less session)
+/// attaches one of these per task; GMNetworkService re-implements the same check inline against its
+/// per-request context. Either way, a redirect to an undeclared host is refused.
+final class GMRedirectGuard: NSObject, URLSessionTaskDelegate {
+
+    private let connects: [String]
+    private let pageHost: String?
+
+    init(connects: [String], pageHost: String?) {
+        self.connects = connects
+        self.pageHost = pageHost
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        guard GMNetworkService.isConnectAllowed(host: request.url?.host, connects: connects, pageHost: pageHost) else {
+            completionHandler(nil)
+            return
+        }
+        completionHandler(Self.stripSensitiveHeadersIfCrossHost(request, from: task.originalRequest))
+    }
+
+    /// Strip credentials when a redirect crosses to a different host, matching browser fetch
+    /// semantics (Foundation already strips Authorization cross-origin; we also drop Cookie).
+    static func stripSensitiveHeadersIfCrossHost(_ request: URLRequest, from original: URLRequest?) -> URLRequest {
+        guard let originalHost = original?.url?.host?.lowercased(),
+              originalHost != request.url?.host?.lowercased() else { return request }
+        var stripped = request
+        for field in ["Authorization", "Cookie", "Proxy-Authorization"] {
+            stripped.setValue(nil, forHTTPHeaderField: field)
+        }
+        return stripped
     }
 }

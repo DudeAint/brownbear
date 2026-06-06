@@ -162,15 +162,18 @@ struct CrontabSchedule: Equatable {
 
     // MARK: - Evaluation
 
-    /// Whether a fire is due at `now` given the last time the script ran (nil = never).
-    func isDue(now: Date, lastFire: Date?, calendar: Calendar = .gregorianUTC) -> Bool {
+    /// Whether a fire is due at `now` given the last time the script ran (nil = never). For a
+    /// never-fired cron, `eligibleSince` (the script's install/enable time) is the catch-up lower
+    /// bound — without it, the only window was now−60s, so the first-ever fire was missed whenever
+    /// the first background wake landed >60s after the scheduled minute.
+    func isDue(now: Date, lastFire: Date?, eligibleSince: Date? = nil, calendar: Calendar = .gregorianUTC) -> Bool {
         switch kind {
         case .interval(let seconds):
             return (lastFire ?? .distantPast).addingTimeInterval(seconds) <= now
         case .onceEver:
             return lastFire == nil
         case .cron(_, _, _, _, _, let once):
-            let from = lastFire ?? now.addingTimeInterval(-60)
+            let from = lastFire ?? eligibleSince ?? now.addingTimeInterval(-60)
             guard let next = nextFireDate(after: from, calendar: calendar), next <= now else { return false }
             if let once, let lastFire, sameUnit(lastFire, now, once, calendar: calendar) {
                 return false   // already ran this minute/hour/day/month/week

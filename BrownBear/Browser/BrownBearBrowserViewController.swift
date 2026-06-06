@@ -421,8 +421,6 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
     /// Present the install card for a userscript URL, with a "View source" escape that re-loads the
     /// raw file (allowed through the interceptor once).
     private func presentScriptInstall(for url: URL) {
-        // Don't stack it on top of another modal (e.g. the dashboard).
-        guard presentedViewController == nil else { return }
         let controller = ScriptInstallView.makeHostingController(
             url: url,
             onViewSource: { [weak self] sourceURL in
@@ -430,7 +428,9 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
                 self.viewSourceAllowOnce.insert(sourceURL)
                 self.tabManager.activeTab?.load(sourceURL)
             })
-        present(controller, animated: true)
+        // Present on the top-most controller so the card still appears when a modal (the menu
+        // action sheet, the dashboard) is already up — rather than silently swallowing the load.
+        TopViewControllerPresenter.present(controller)
     }
 }
 
@@ -441,6 +441,14 @@ extension BrownBearBrowserViewController: WKUIDelegate {
                  createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction,
                  windowFeatures: WKWindowFeatures) -> WKWebView? {
+        // A target="_blank" link to a *.user.js (common on Greasy Fork / GitHub raw) must NOT spawn
+        // a blank tab that then dumps raw JS — show the install card and open no window.
+        if let url = navigationAction.request.url,
+           ["http", "https", "file"].contains(url.scheme?.lowercased() ?? ""),
+           UserScriptInstaller.isUserScriptURL(url) {
+            presentScriptInstall(for: url)
+            return nil
+        }
         // A link asked to open in a new window/tab — honor it by creating a real new tab whose
         // web view is built from the exact configuration WebKit handed us.
         let tab = tabManager.createTab(adopting: configuration)

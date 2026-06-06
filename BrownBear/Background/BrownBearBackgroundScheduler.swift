@@ -129,8 +129,11 @@ final class BrownBearBackgroundScheduler: @unchecked Sendable {
         if script.metadata.crontabs.isEmpty {
             return script.metadata.isBackground && lastFire == nil
         }
+        // updatedAt = when the script was installed/last enabled-or-edited: the catch-up floor for a
+        // never-fired cron so a missed first fire is run on the next wake (not skipped forever).
         return script.metadata.crontabs.contains { expression in
-            CrontabSchedule.parse(expression)?.isDue(now: now, lastFire: lastFire) ?? false
+            CrontabSchedule.parse(expression)?.isDue(now: now, lastFire: lastFire,
+                                                     eligibleSince: script.updatedAt) ?? false
         }
     }
 
