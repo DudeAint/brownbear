@@ -67,9 +67,12 @@ struct OmniboxInputClassifier {
     /// Returns the lowercased scheme if `text` begins with one, else nil.
     private func explicitScheme(in text: String) -> String? {
         guard let range = text.range(of: "://") else {
-            // Handle scheme-only forms like "about:blank" / "mailto:x@y.com".
+            // Handle scheme-only forms like "about:blank" / "mailto:x@y.com", but NOT a
+            // host:port such as "localhost:3000" — if digits follow the colon it's a port.
             if let colon = text.firstIndex(of: ":") {
                 let candidate = String(text[text.startIndex..<colon]).lowercased()
+                let afterColon = text[text.index(after: colon)...]
+                if let first = afterColon.first, first.isNumber { return nil }
                 if !candidate.isEmpty, candidate.allSatisfy({ $0.isLetter }) {
                     return candidate
                 }
@@ -97,11 +100,12 @@ struct OmniboxInputClassifier {
         let tld = hostNoPort[hostNoPort.index(after: lastDot)...]
         guard tld.count >= 2, tld.allSatisfy({ $0.isLetter }) else { return false }
 
-        // The label before the TLD must be non-empty and use host-legal characters.
+        // The label before the TLD must be non-empty and use host-legal characters
+        // (letters, digits, hyphen, underscore, and the dots that separate labels).
         let labels = hostNoPort.split(separator: ".")
         guard labels.count >= 2 else { return false }
         let legal = CharacterSet(charactersIn:
-            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.")
         return hostNoPort.unicodeScalars.allSatisfy { legal.contains($0) }
     }
 
