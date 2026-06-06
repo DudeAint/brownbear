@@ -421,7 +421,7 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
     /// Present the install card for a userscript URL, with a "View source" escape that re-loads the
     /// raw file (allowed through the interceptor once).
     private func presentScriptInstall(for url: URL) {
-        let controller = ScriptInstallView.makeHostingController(
+        let installer = ScriptInstallViewController(
             url: url,
             onViewSource: { [weak self] sourceURL in
                 guard let self else { return }
@@ -430,7 +430,7 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
             })
         // Present on the top-most controller so the card still appears when a modal (the menu
         // action sheet, the dashboard) is already up — rather than silently swallowing the load.
-        TopViewControllerPresenter.present(controller)
+        TopViewControllerPresenter.present(installer.wrappedForPresentation())
     }
 }
 
