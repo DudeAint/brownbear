@@ -9,14 +9,37 @@
 import Foundation
 import SwiftUI
 
+/// The Logs tab filter — All, errors/warnings only, userscript output, or page/iframe console.
+enum LogFilter: String, CaseIterable, Identifiable {
+    case all, errors, userscripts
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .all: return "All"
+        case .errors: return "Errors"
+        case .userscripts: return "Userscripts"
+        }
+    }
+}
+
 @MainActor
 final class DashboardViewModel: ObservableObject {
 
     @Published private(set) var scripts: [UserScript] = []
     @Published private(set) var recentLogs: [LogEntry] = []
+    @Published var logFilter: LogFilter = .all
     @Published private(set) var scheduleStates: [String: ScheduleState] = [:]
     @Published private(set) var isLoading = false
     @Published var errorMessage: String?
+
+    /// `recentLogs` narrowed by the active `logFilter`.
+    var filteredLogs: [LogEntry] {
+        switch logFilter {
+        case .all: return recentLogs
+        case .errors: return recentLogs.filter { $0.level == .error || $0.level == .warn }
+        case .userscripts: return recentLogs.filter { $0.source == .userscript }
+        }
+    }
 
     private var scriptStore: ScriptStore { BrownBearServices.shared.scriptStore }
     private var logStore: LogStore { BrownBearServices.shared.logStore }
