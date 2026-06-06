@@ -15,7 +15,9 @@ final class BrownBearBrowserViewController: UIViewController {
 
     // MARK: - Core model
 
-    private let configurationFactory = WebViewConfigurationFactory()
+    /// Owns the shared userscript runtime (Modules 2–3) plumbed into every tab's configuration.
+    let injection = InjectionOrchestrator()
+    private lazy var configurationFactory = WebViewConfigurationFactory(injection: injection)
     private lazy var tabManager = TabManager(configurationFactory: configurationFactory)
     private let omniboxClassifier = OmniboxInputClassifier()
 
@@ -38,6 +40,7 @@ final class BrownBearBrowserViewController: UIViewController {
         tabManager.delegate = self
         omnibox.delegate = self
         toolbar.delegate = self
+        injection.bridgeHost = self
         buildHierarchy()
     }
 
@@ -397,5 +400,16 @@ extension BrownBearBrowserViewController: WKUIDelegate {
         let tab = tabManager.createTab(adopting: configuration)
         tab.delegate = self
         return tab.webView
+    }
+}
+
+// MARK: - ScriptBridgeHost (GM_openInTab)
+
+extension BrownBearBrowserViewController: ScriptBridgeHost {
+    func bridgeOpenInTab(url: URL, active: Bool) {
+        let tab = tabManager.createTab(loading: url, activate: active)
+        tab.delegate = self
+        tab.loadPendingURLIfNeeded()
+        if active { refreshChrome() }
     }
 }

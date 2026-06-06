@@ -2,34 +2,34 @@
 //  WebViewConfigurationFactory.swift
 //  BrownBear
 //
-//  Produces the WKWebViewConfiguration every tab shares. Centralizing this matters because
-//  Modules 2–3 inject userscripts through a single WKUserContentController: every tab must be
-//  built from a configuration that wires that controller in consistently. For Module 1 the
-//  content controller is empty; the injection pipeline plugs into `userContentController` later.
+//  Produces the WKWebViewConfiguration every tab shares. The content controller comes from the
+//  InjectionOrchestrator (Modules 2–3), so every tab is wired into the same userscript runtime:
+//  the bootstrap WKUserScript and the `brownbear` message handler in the isolated content world.
 //
 
 import WebKit
 
-/// Builds and vends the shared web configuration for all tabs.
+@MainActor
 final class WebViewConfigurationFactory {
 
-    /// One process pool shared across tabs so they can share cookies/session state like a
-    /// real multi-tab browser.
+    /// One process pool shared across tabs so they can share cookies/session state.
     private let processPool = WKProcessPool()
 
-    /// The shared content controller. Module 2's `InjectionOrchestrator` will register its
-    /// `WKUserScript`s and `WKScriptMessageHandler`s here.
-    let userContentController = WKUserContentController()
+    /// Owns the shared content controller + the injected userscript runtime.
+    let injection: InjectionOrchestrator
 
-    /// A non-persistent option could be added later for a private mode; default is persistent.
     private let websiteDataStore = WKWebsiteDataStore.default()
 
-    /// Produce a fresh configuration for a new web view. The returned object is safe to mutate
-    /// per-tab, but it points at the shared process pool and content controller.
+    init(injection: InjectionOrchestrator) {
+        self.injection = injection
+    }
+
+    /// Produce a fresh configuration for a new web view, wired into the shared content
+    /// controller and process pool.
     func makeConfiguration() -> WKWebViewConfiguration {
         let config = WKWebViewConfiguration()
         config.processPool = processPool
-        config.userContentController = userContentController
+        config.userContentController = injection.userContentController
         config.websiteDataStore = websiteDataStore
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
