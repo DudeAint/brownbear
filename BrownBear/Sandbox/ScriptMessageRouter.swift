@@ -35,6 +35,8 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         let id: UUID
         let grants: Set<String>
         let connects: [String]
+        /// URLs the script declared via @require / @resource — the only URLs fetchResource serves.
+        var assetURLs: Set<String> = []
     }
 
     private let scriptStore: ScriptStore
@@ -178,9 +180,36 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
             try handleXHR(payload: payload, session: session, frameURL: frameURL, webView: webView)
             return NSNull()
 
+        case "fetchResource":
+            // Fetch a declared @require/@resource natively (no page CORS), so lib-dependent and
+            // obfuscated scripts load their dependencies reliably. Restricted to the script's own
+            // declared asset URLs so it can't be used as an open fetch proxy.
+            guard let urlString = payload["url"] as? String else {
+                throw BrownBearError.bridgeRejected("missing url")
+            }
+            guard session.assetURLs.contains(urlString), let url = URL(string: urlString) else {
+                throw BrownBearError.bridgeRejected("url is not a declared @require/@resource")
+            }
+            return try await fetchAsset(url)
+
         default:
             throw BrownBearError.bridgeRejected("unsupported api '\(api)'")
         }
+    }
+
+    /// Fetch a script asset (@require/@resource) natively. Returns text + base64 + mime so the
+    /// runtime can serve both GM_getResourceText and GM_getResourceURL (as a data: URL).
+    private func fetchAsset(_ url: URL) async throws -> [String: Any] {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 30
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let mime = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type")
+            ?? "application/octet-stream"
+        return [
+            "text": String(data: data, encoding: .utf8) ?? "",
+            "base64": data.base64EncodedString(),
+            "mimeType": mime
+        ]
     }
 
     // MARK: - Identity & grants
@@ -215,9 +244,12 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
             guard URLMatcher(metadata: meta).matches(urlString) else { continue }
 
             let token = UUID().uuidString
+            var assetURLs = Set(meta.requires)
+            assetURLs.formUnion(meta.resources.values)
             sessions[token] = ScriptSession(id: script.id,
                                             grants: Set(meta.effectiveGrants),
-                                            connects: meta.connects)
+                                            connects: meta.connects,
+                                            assetURLs: assetURLs)
             let values = await valueStore.snapshot(scriptID: script.id)
             result.append(Self.scriptPayload(script, token: token, values: values))
         }
@@ -249,6 +281,7 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
             "noFrames": meta.noFrames,
             "injectInto": meta.injectInto.rawValue,
             "requires": meta.requires,
+            "resources": meta.resources,
             "source": script.executableBody,
             "values": values,
             "info": info

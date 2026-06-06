@@ -161,11 +161,34 @@
   }
 
   // --- Per-script execution -------------------------------------------------------------------
-  function loadRequires(requires) {
-    if (!requires || !requires.length || !_fetch) { return _Promise.resolve(""); }
+  // @require/@resource are fetched NATIVELY (via the bridge) so they bypass page CORS — this is
+  // what lets lib-dependent and obfuscated scripts load their dependencies reliably.
+  function loadRequires(requires, token) {
+    if (!requires || !requires.length) { return _Promise.resolve(""); }
     return _Promise.all(requires.map(function (url) {
-      return _fetch(url).then(function (r) { return r.text(); }).catch(function () { return ""; });
+      return bridge("fetchResource", { url: url }, token)
+        .then(function (r) { return (r && r.text) || ""; })
+        .catch(function () { return ""; });
     })).then(function (codes) { return codes.join("\n;\n"); });
+  }
+
+  function loadResources(resources, token) {
+    var names = resources ? _Object.keys(resources) : [];
+    var out = _Object.create(null);
+    if (!names.length) { return _Promise.resolve(out); }
+    return _Promise.all(names.map(function (name) {
+      var url = resources[name];
+      return bridge("fetchResource", { url: url }, token).then(function (r) {
+        var dataUrl = (r && r.base64)
+          ? ("data:" + ((r && r.mimeType) || "application/octet-stream") + ";base64," + r.base64)
+          : url;
+        out[name] = { text: (r && r.text) || "", url: dataUrl };
+      }).catch(function () { out[name] = { text: "", url: url }; });
+    })).then(function () { return out; });
+  }
+
+  function safeParse(json) {
+    try { return _JSON.parse(json); } catch (e) { return undefined; }
   }
 
   function buildGM(data) {
@@ -176,17 +199,43 @@
 
     function call(api, payload) { return bridge(api, payload, token); }
 
+    // Value-change listeners (local, same-context) — Tampermonkey/ScriptCat parity.
+    var valueListeners = _Object.create(null);
+    var listenerCounter = 0;
+    function fireValueChange(key, oldValue, newValue, remote) {
+      _Object.keys(valueListeners).forEach(function (id) {
+        var entry = valueListeners[id];
+        if (entry.key === key) {
+          try { entry.fn(key, oldValue, newValue, !!remote); }
+          catch (e) { _console.error("[BrownBear] value listener error:", e); }
+        }
+      });
+    }
+    function GM_addValueChangeListener(key, fn) {
+      listenerCounter += 1;
+      valueListeners[listenerCounter] = { key: key, fn: fn };
+      return listenerCounter;
+    }
+    function GM_removeValueChangeListener(id) { delete valueListeners[id]; }
+
     function GM_getValue(key, dflt) {
       if (key in cache) { try { return _JSON.parse(cache[key]); } catch (e) { return dflt; } }
       return dflt;
     }
     function GM_setValue(key, value) {
       if (value === undefined) { GM_deleteValue(key); return; }
+      var oldValue = (key in cache) ? safeParse(cache[key]) : undefined;
       var json = _JSON.stringify(value);
       cache[key] = json;
+      fireValueChange(key, oldValue, value, false);
       call("GM_setValue", { key: key, value: json });
     }
-    function GM_deleteValue(key) { delete cache[key]; call("GM_deleteValue", { key: key }); }
+    function GM_deleteValue(key) {
+      var oldValue = (key in cache) ? safeParse(cache[key]) : undefined;
+      delete cache[key];
+      fireValueChange(key, oldValue, undefined, false);
+      call("GM_deleteValue", { key: key });
+    }
     function GM_listValues() { return _Object.keys(cache); }
     function GM_getValues(keysOrDefaults) {
       var out = {};
@@ -264,6 +313,8 @@
       getValues: function (k) { return _Promise.resolve(GM_getValues(k)); },
       setValues: function (o) { GM_setValues(o); return _Promise.resolve(); },
       deleteValues: function (k) { GM_deleteValues(k); return _Promise.resolve(); },
+      addValueChangeListener: function (k, fn) { return GM_addValueChangeListener(k, fn); },
+      removeValueChangeListener: function (id) { GM_removeValueChangeListener(id); },
       addStyle: function (c) { return _Promise.resolve(GM_addStyle(c)); },
       addElement: function () { return _Promise.resolve(GM_addElement.apply(null, arguments)); },
       setClipboard: function (d, i) { GM_setClipboard(d, i); return _Promise.resolve(); },
@@ -289,6 +340,8 @@
         GM_deleteValues: GM_deleteValues, GM_addStyle: GM_addStyle, GM_addElement: GM_addElement,
         GM_setClipboard: GM_setClipboard, GM_openInTab: GM_openInTab, GM_log: GM_log,
         GM_getResourceText: GM_getResourceText, GM_getResourceURL: GM_getResourceURL,
+        GM_addValueChangeListener: GM_addValueChangeListener,
+        GM_removeValueChangeListener: GM_removeValueChangeListener,
         GM_xmlhttpRequest: GM_xmlhttpRequest
       },
       GM: GM,
@@ -297,7 +350,11 @@
   }
 
   function run(data) {
-    return loadRequires(data.requires).then(function (requireCode) {
+    var token = data.token;
+    return _Promise.all([loadRequires(data.requires, token), loadResources(data.resources, token)])
+      .then(function (loaded) {
+      var requireCode = loaded[0];
+      data.resources = loaded[1];   // name -> { text, url } (fetched natively)
       var env = buildGM(data);
       var grantNone = !!data.grantNone;
       var grants = data.grants || [];
