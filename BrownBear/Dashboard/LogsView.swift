@@ -11,6 +11,7 @@ import SwiftUI
 struct LogsView: View {
 
     @ObservedObject var model: DashboardViewModel
+    @AppStorage(PageConsoleHandler.captureDefaultsKey) private var capturePageConsole = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -30,10 +31,19 @@ struct LogsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button("Clear", role: .destructive) {
-                    Task { await model.clearAllLogs() }
+                Menu {
+                    Toggle(isOn: $capturePageConsole) {
+                        Label("Capture page console", systemImage: "doc.text.magnifyingglass")
+                    }
+                    Button(role: .destructive) {
+                        Task { await model.clearAllLogs() }
+                    } label: {
+                        Label("Clear logs", systemImage: "trash")
+                    }
+                    .disabled(model.recentLogs.isEmpty)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
                 }
-                .disabled(model.recentLogs.isEmpty)
             }
         }
     }

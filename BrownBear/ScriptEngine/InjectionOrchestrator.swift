@@ -26,6 +26,8 @@ final class InjectionOrchestrator {
 
     private let router: ScriptMessageRouter
     private let webExtensionRouter: WebExtensionMessageRouter
+    /// Captures the page's own console.* output (PAGE world) for the Logs "Page" filter.
+    private let pageConsoleHandler: PageConsoleHandler
     /// Compiles each extension's declarativeNetRequest rulesets into WKContentRuleLists (Module 6 P2).
     let contentBlocker: WebExtensionContentBlocker
     let scriptStore: ScriptStore
@@ -54,6 +56,7 @@ final class InjectionOrchestrator {
                                                             storage: webExtensionStorage,
                                                             runtime: BrownBearServices.shared.webExtensionRuntime)
         self.contentBlocker = WebExtensionContentBlocker(store: webExtensionStore)
+        self.pageConsoleHandler = PageConsoleHandler(logStore: logStore)
         configure()
     }
 
@@ -75,6 +78,18 @@ final class InjectionOrchestrator {
                                                       contentWorld: contentWorld,
                                                       name: WebExtensionMessageRouter.handlerName)
         addBootstrap(resource: "brownbear-webext-runtime")
+
+        // Page-console capture — registered in the PAGE world (not the isolated bridge world) with
+        // its own handler, so the page's console.* can be surfaced in the Logs "Page" filter without
+        // ever exposing the privileged BrownBear bridge to page scripts.
+        userContentController.add(pageConsoleHandler,
+                                  contentWorld: .page,
+                                  name: PageConsoleHandler.handlerName)
+        let pageConsole = WKUserScript(source: Self.bootstrapSource("brownbear-pageconsole"),
+                                       injectionTime: .atDocumentStart,
+                                       forMainFrameOnly: false,
+                                       in: .page)
+        userContentController.addUserScript(pageConsole)
 
         // Boot background service workers + the content↔background message bus (self-observes
         // extension changes thereafter).
