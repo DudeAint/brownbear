@@ -277,7 +277,9 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
                   let json = String(data: data, encoding: .utf8) else { return }
             let js = "window.__brownbear && window.__brownbear.dispatchXHR.apply(null, \(json));"
             DispatchQueue.main.async {
-                weakWebView?.evaluateJavaScript(js, in: nil, in: world)
+                // Via the Objective-C shim so we don't link the Swift WebKit overlay (see
+                // BBWebKitBridge.h). Delivered FIFO on the main queue, in event order.
+                if let webView = weakWebView { BBEvaluateJavaScript(webView, js, world) }
             }
         }
     }
