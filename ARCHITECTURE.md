@@ -145,6 +145,35 @@ it reuses the same trust boundary and injection plumbing.
 "add extensions directly" UX, and the official Chrome/Firefox WebExtensions API docs.
 **Maps to:** `BrownBear/Extensions/` (new module), reusing `Sandbox/` and `Background/`.
 
+**Status — Phase 1 (shipped):** MV2/MV3 manifest parsing, CRX2/CRX3 + ZIP unpack, install/manage,
+content-script injection in the isolated world, and `chrome.storage`/`runtime`/`i18n`/`extension`.
+
+**Status — Phase 2 (shipped):**
+- **`declarativeNetRequest`** static rulesets compiled to `WKContentRuleList` and applied to every
+  tab (`DeclarativeNetRequest` pure compiler + `WebExtensionContentBlocker`), recompiled live on
+  change. Fidelity-over-coverage: unrepresentable rules (redirect/modifyHeaders/requestMethods/
+  requestDomains) are skipped and counted, never approximated.
+- **Background service workers / event pages** run headless in a per-extension `JSContext`
+  (`WebExtensionBackgroundContext` + `WebExtensionRuntime` + `brownbear-webext-background.js`) with
+  `chrome.runtime`/`storage`/`alarms`/`i18n`, `console.*`, and `setTimeout`/`setInterval`.
+- **Messaging**: content → background `runtime.sendMessage`/`onMessage` with sync **and** async
+  `sendResponse` (and Promise-returning listeners), over the same native-bound-token bridge.
+- **`chrome.alarms`**, **`storage.onChanged`** (in workers), and **direct Chrome Web Store install**
+  (`ChromeWebStore` — paste a link or id, fetch the CRX).
+
+**Status — Phase 3 (shipped, final):**
+- **Popup & options pages** render in a real WKWebView over a `chrome-extension://` scheme
+  (`WebExtensionSchemeHandler` serves the packaged files; `WebExtensionPageViewController` hosts the
+  page). The page gets a synchronous `chrome.*` surface — storage (+ live `onChanged`), runtime
+  (`sendMessage`→background, `getManifest`/`getURL`/`getPlatformInfo`/`openOptionsPage`), i18n,
+  extension — via `brownbear-webext-page.js` with identity baked in at document-start. Reachable
+  from Dashboard → Extensions (long-press).
+
+**Module 6 is COMPLETE.** The remaining Chrome APIs (blocking `webRequest`, background→content
+`tabs.sendMessage` / long-lived ports, write-side `chrome.tabs`/`scripting`, `commands` dispatch,
+suspended-app alarms, native messaging) are the hard edges of WebKit's extension-less model on iOS;
+they degrade to honest no-ops/rejections rather than fakes. See `docs/WEB_EXTENSIONS.md`.
+
 ---
 
 ## 3. Data Model (Core Data)

@@ -15,6 +15,9 @@ struct BrownBearDashboardView: View {
 
     @StateObject private var model = DashboardViewModel()
     @State private var addingScript = false
+    @State private var urlPrompt = false
+    @State private var urlText = ""
+    @State private var installFromURL: IdentifiableURL?
 
     init(onClose: @escaping () -> Void = {}) {
         self.onClose = onClose
@@ -79,6 +82,7 @@ struct BrownBearDashboardView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
                         Button { addingScript = true } label: { Label("New script", systemImage: "plus") }
+                        Button { urlPrompt = true } label: { Label("Import from URL…", systemImage: "link") }
                         Button { importFromClipboard() } label: { Label("Import from clipboard", systemImage: "doc.on.clipboard") }
                     } label: {
                         Image(systemName: "plus")
@@ -93,7 +97,34 @@ struct BrownBearDashboardView: View {
             } message: {
                 Text(model.errorMessage ?? "")
             }
+            .alert("Import from URL", isPresented: $urlPrompt) {
+                TextField("https://example.com/script.user.js", text: $urlText)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+                Button("Import") { beginURLImport() }
+                Button("Cancel", role: .cancel) { urlText = "" }
+            } message: {
+                Text("Paste a link to a userscript (a .user.js file). You'll see what it does before installing.")
+            }
+            .sheet(item: $installFromURL) { item in
+                ScriptInstallView(url: item.url, onClose: {
+                    installFromURL = nil
+                    Task { await model.load() }
+                })
+            }
         }
+    }
+
+    private func beginURLImport() {
+        let trimmed = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
+        urlText = ""
+        guard let url = URL(string: trimmed),
+              let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
+            model.errorMessage = "That doesn't look like a valid http(s) URL."
+            return
+        }
+        installFromURL = IdentifiableURL(url: url)
     }
 
     private func importFromClipboard() {

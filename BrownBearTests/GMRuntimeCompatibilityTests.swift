@@ -103,7 +103,71 @@ final class GMRuntimeCompatibilityTests: XCTestCase {
         return store
     }
 
+    /// Run a script and capture every line it sent to the log bridge — the `log` (console.*) and
+    /// `GM_log` APIs. Proves foreground console output actually reaches native (the dashboard Logs).
+    private func runForLogs(_ script: String,
+                            grants: [String] = []) throws -> [(level: String, message: String)] {
+        let runtime = try runtimeSource()
+        guard let context = JSContext() else { throw XCTSkip("no JSContext") }
+        var logs: [(level: String, message: String)] = []
+
+        let scriptData: [String: Any] = [
+            "token": "tok", "runAt": "document-start", "name": "logtest",
+            "grants": grants, "grantNone": false, "noFrames": false, "injectInto": "auto",
+            "requires": [String](), "resources": [String: String](),
+            "source": script, "values": [String: String](), "info": ["scriptHandler": "BrownBear"]
+        ]
+
+        let bridge: @convention(block) (String) -> String = { bodyJSON in
+            func reply(_ value: Any?) -> String {
+                let payload: [String: Any] = ["value": value ?? NSNull()]
+                let data = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data("{\"value\":null}".utf8)
+                return String(decoding: data, as: UTF8.self)
+            }
+            guard let data = bodyJSON.data(using: .utf8),
+                  let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let api = body["api"] as? String else { return "{\"value\":null}" }
+            let payload = body["payload"] as? [String: Any] ?? [:]
+            switch api {
+            case "getScripts":
+                return reply([scriptData])
+            case "log", "GM_log":
+                logs.append((level: (payload["level"] as? String) ?? "info",
+                             message: (payload["message"] as? String) ?? ""))
+                return reply(nil)
+            default:
+                return reply(nil)
+            }
+        }
+
+        installDOMStubs(context)
+        context.setObject(bridge, forKeyedSubscript: "__nativeBridge" as NSString)
+        context.evaluateScript(Self.bridgePrelude)
+        context.evaluateScript(runtime)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        return logs
+    }
+
     // MARK: - Tests
+
+    func testConsoleLogReachesLogBridge() throws {
+        // No grant needed — console works for every script, even @grant none.
+        let logs = try runForLogs("console.log('hello', 42);")
+        XCTAssertTrue(logs.contains { $0.level == "info" && $0.message == "hello 42" },
+                      "console.log should forward to the native log bridge; got \(logs)")
+    }
+
+    func testConsoleLevelsMapToLogLevels() throws {
+        let logs = try runForLogs("console.warn('w'); console.error('e'); console.debug('d');")
+        XCTAssertTrue(logs.contains { $0.level == "warn" && $0.message == "w" })
+        XCTAssertTrue(logs.contains { $0.level == "error" && $0.message == "e" })
+        XCTAssertTrue(logs.contains { $0.level == "debug" && $0.message == "d" })
+    }
+
+    func testGMLogReachesLogBridge() throws {
+        let logs = try runForLogs("GM_log('via gm');", grants: ["GM_log"])
+        XCTAssertTrue(logs.contains { $0.message == "via gm" })
+    }
 
     func testTypedStorageRoundTrip() throws {
         let store = try runScript("""

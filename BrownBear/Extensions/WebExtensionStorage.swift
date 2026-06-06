@@ -37,10 +37,14 @@ actor WebExtensionStorage {
         var map = map(extensionID: extensionID, area: area)
         var changes: [String: (old: String?, new: String?)] = [:]
         for (key, value) in items {
+            // Skip no-op writes so onChanged isn't fired for an unchanged value.
+            if map[key] == value { continue }
             changes[key] = (map[key], value)
             map[key] = value
         }
+        guard !changes.isEmpty else { return [:] }
         commit(map, extensionID: extensionID, area: area)
+        broadcast(extensionID: extensionID, area: area, changes: changes)
         return changes
     }
 
@@ -52,12 +56,21 @@ actor WebExtensionStorage {
             changes[key] = (map[key], nil)
             map.removeValue(forKey: key)
         }
+        guard !changes.isEmpty else { return [:] }
         commit(map, extensionID: extensionID, area: area)
+        broadcast(extensionID: extensionID, area: area, changes: changes)
         return changes
     }
 
-    func clear(extensionID: String, area: Area) {
+    @discardableResult
+    func clear(extensionID: String, area: Area) -> [String: (old: String?, new: String?)] {
+        let existing = map(extensionID: extensionID, area: area)
+        guard !existing.isEmpty else { return [:] }
+        var changes: [String: (old: String?, new: String?)] = [:]
+        for (key, value) in existing { changes[key] = (value, nil) }
         commit([:], extensionID: extensionID, area: area)
+        broadcast(extensionID: extensionID, area: area, changes: changes)
+        return changes
     }
 
     /// Remove every area for an extension (called on uninstall).
@@ -92,5 +105,21 @@ actor WebExtensionStorage {
         if let data = try? JSONEncoder().encode(map) {
             defaults.set(data, forKey: storageKey(extensionID, area))
         }
+    }
+
+    /// Announce a change set so `chrome.storage.onChanged` listeners (in background workers) fire.
+    /// Posting from the actor is fine — NotificationCenter is thread-safe and observers hop to main.
+    private func broadcast(extensionID: String, area: Area, changes: [String: (old: String?, new: String?)]) {
+        var encoded: [String: [String: String]] = [:]
+        for (key, change) in changes {
+            var entry: [String: String] = [:]
+            if let old = change.old { entry["oldValue"] = old }
+            if let new = change.new { entry["newValue"] = new }
+            encoded[key] = entry
+        }
+        NotificationCenter.default.post(
+            name: .brownBearExtensionStorageDidChange,
+            object: nil,
+            userInfo: ["extensionID": extensionID, "area": area.rawValue, "changes": encoded])
     }
 }

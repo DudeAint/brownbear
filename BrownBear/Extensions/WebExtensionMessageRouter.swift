@@ -17,12 +17,23 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
 
     private let store: WebExtensionStore
     private let storage: WebExtensionStorage
+    private let runtime: WebExtensionRuntime
     /// token → extension id. Minted per content-script injection.
     private var sessions: [String: String] = [:]
 
-    init(store: WebExtensionStore, storage: WebExtensionStorage) {
+    init(store: WebExtensionStore, storage: WebExtensionStorage, runtime: WebExtensionRuntime) {
         self.store = store
         self.storage = storage
+        self.runtime = runtime
+    }
+
+    /// Mint a token bound to `extensionID` for an extension PAGE (popup/options). The page's chrome.*
+    /// surface carries this token so its storage/runtime calls resolve to the right extension — the
+    /// same native-bound identity model content scripts use.
+    func makePageSession(for extensionID: String) -> String {
+        let token = UUID().uuidString
+        sessions[token] = extensionID
+        return token
     }
 
     nonisolated func userContentController(_ userContentController: WKUserContentController,
@@ -77,6 +88,21 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
 
         case "storage.clear":
             await storage.clear(extensionID: extensionID, area: area)
+            return NSNull()
+
+        case "runtime.sendMessage":
+            // Content script / popup → its own extension's background worker. `message` is any JSON.
+            let message = payload["message"] ?? NSNull()
+            var sender: [String: Any] = ["id": extensionID]
+            if let url = payload["url"] as? String { sender["url"] = url }
+            guard let response = await runtime.sendRuntimeMessage(message, sender: sender, to: extensionID) else {
+                return NSNull()
+            }
+            return response
+
+        case "runtime.openOptionsPage":
+            // The options page is opened from BrownBear's own UI (dashboard/browser); acknowledge so
+            // the page's callback fires without error. (Programmatic navigation isn't wired here.)
             return NSNull()
 
         default:

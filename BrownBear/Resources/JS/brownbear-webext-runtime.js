@@ -101,9 +101,14 @@
         getManifest: function () { return manifest; },
         getURL: getURL,
         sendMessage: function () {
-          var cb = arguments.length ? arguments[arguments.length - 1] : null;
-          if (typeof cb === "function") { cb(undefined); return undefined; }
-          return _Promise.resolve(undefined);
+          // Overloaded like Chrome: (extensionId?, message, options?, callback?). We deliver to
+          // this extension's own background worker and resolve with the listener's response value.
+          var args = _Array.prototype.slice.call(arguments);
+          var cb = (args.length && typeof args[args.length - 1] === "function") ? args.pop() : null;
+          var message = (typeof args[0] === "string" && args.length > 1) ? args[1] : args[0];
+          var promise = bridge("runtime.sendMessage", { message: (message === undefined ? null : message), url: location.href }, token)
+            .then(function (resp) { return resp ? resp.value : undefined; });
+          return settle(promise, cb);
         },
         onMessage: noopEvent,
         onConnect: noopEvent,
@@ -176,6 +181,6 @@
       .catch(function (e) { if (_console.error) { _console.error("[BrownBear ext] loader error:", e); } });
   }
 
-  W.__brownbearWebext = { version: 1 };
+  W.__brownbearWebext = { version: 2 };
   loadAndRun();
 })();

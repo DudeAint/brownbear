@@ -42,14 +42,22 @@ actor WebExtensionStore {
         return extensions.first { $0.id == id }
     }
 
-    /// Read a file packaged inside an extension (e.g. a content script or resource). Paths come
-    /// from the extension's own manifest, so we contain them to this extension's directory — a
-    /// `..` path must not let one extension read another's on-disk source.
+    /// Read a file packaged inside an extension (e.g. a content script or resource). Both the
+    /// extension id and the path are contained: the id is the `chrome-extension://` host, which
+    /// arrives from untrusted page navigations, so a host like `..` must not relocate the
+    /// containment root above this extension's directory; and a `..` path must not let one
+    /// extension read another's on-disk source.
     func file(extensionID: String, path: String) -> Data? {
+        // Reject anything that isn't a well-formed Chrome id (a `..`/`../../x` host would otherwise
+        // standardize the root up and out of the extensions directory before the anchor is taken).
+        guard ChromeWebStore.isExtensionID(extensionID) else { return nil }
         let cleaned = path.hasPrefix("/") ? String(path.dropFirst()) : path
         let root = directory(for: extensionID).standardizedFileURL
         let url = root.appendingPathComponent(cleaned).standardizedFileURL
-        guard url.path == root.path || url.path.hasPrefix(root.path + "/") else { return nil }
+        // Contain within this extension's directory AND within the extensions base directory.
+        let baseRoot = baseDirectory.standardizedFileURL.path
+        guard url.path == root.path || url.path.hasPrefix(root.path + "/"),
+              url.path.hasPrefix(baseRoot + "/") else { return nil }
         return try? Data(contentsOf: url)
     }
 

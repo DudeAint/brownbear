@@ -32,6 +32,9 @@ final class BrownBearBrowserViewController: UIViewController {
     /// The web view currently installed in the content container.
     private weak var installedWebView: WKWebView?
 
+    /// `*.user.js` URLs the user chose to view as raw source instead of installing — let through once.
+    private var viewSourceAllowOnce: Set<URL> = []
+
     // MARK: - Lifecycle
 
     override func viewDidLoad() {
@@ -292,6 +295,11 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
             self.refreshChrome()
         })
         if let url = tabManager.activeTab?.state.url {
+            if UserScriptInstaller.isUserScriptURL(url) {
+                sheet.addAction(UIAlertAction(title: "Install this userscript…", style: .default) { [weak self] _ in
+                    self?.presentScriptInstall(for: url)
+                })
+            }
             sheet.addAction(UIAlertAction(title: "Share…", style: .default) { [weak self] _ in
                 self?.presentShare(for: url)
             })
@@ -381,16 +389,48 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
     func webView(_ webView: WKWebView,
                  decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        // Open external app schemes (mailto:, tel:, etc.) via the system.
-        if let url = navigationAction.request.url,
-           let scheme = url.scheme?.lowercased(),
-           !["http", "https", "about", "file", "data"].contains(scheme),
-           UIApplication.shared.canOpenURL(url) {
-            UIApplication.shared.open(url)
-            decisionHandler(.cancel)
-            return
+        if let url = navigationAction.request.url {
+            // Open external app schemes (mailto:, tel:, etc.) via the system.
+            if let scheme = url.scheme?.lowercased(),
+               !["http", "https", "about", "file", "data"].contains(scheme),
+               UIApplication.shared.canOpenURL(url) {
+                UIApplication.shared.open(url)
+                decisionHandler(.cancel)
+                return
+            }
+
+            // One-tap userscript install: opening a *.user.js in the main frame shows the install
+            // card instead of dumping raw JavaScript — the Tampermonkey/Greasemonkey behavior.
+            let isMainFrame = navigationAction.targetFrame?.isMainFrame ?? true
+            let scheme = url.scheme?.lowercased() ?? ""
+            if isMainFrame,
+               ["http", "https", "file"].contains(scheme),
+               UserScriptInstaller.isUserScriptURL(url) {
+                if viewSourceAllowOnce.remove(url) != nil {
+                    decisionHandler(.allow)   // user picked "View source" — let it load as text
+                    return
+                }
+                decisionHandler(.cancel)
+                presentScriptInstall(for: url)
+                return
+            }
         }
         decisionHandler(.allow)
+    }
+
+    /// Present the install card for a userscript URL, with a "View source" escape that re-loads the
+    /// raw file (allowed through the interceptor once).
+    private func presentScriptInstall(for url: URL) {
+        // Don't stack it on top of another modal (e.g. the dashboard).
+        guard presentedViewController == nil else { return }
+        let controller = ScriptInstallView.makeHostingController(
+            url: url,
+            onViewSource: { [weak self] sourceURL in
+                guard let self else { return }
+                self.viewSourceAllowOnce.insert(sourceURL)
+                self.tabManager.activeTab?.load(sourceURL)
+            })
+        present(controller, animated: true)
     }
 }
 

@@ -191,6 +191,38 @@
     try { return _JSON.parse(json); } catch (e) { return undefined; }
   }
 
+  // A per-script `console` that BOTH writes to the page's real console (so Web Inspector still
+  // works) AND forwards to BrownBear's persistent log store, so console.log shows up in the
+  // dashboard Logs tab — the behavior users expect from a userscript manager. Token-bound so the
+  // native side attributes the line to the right script; fire-and-forget so it never blocks the page.
+  function makeConsole(token) {
+    function stringify(a) {
+      return typeof a === "string" ? a : (function () { try { return _JSON.stringify(a); } catch (e) { return String(a); } })();
+    }
+    function forward(method, level) {
+      return function () {
+        var args = arguments;
+        try { if (typeof _console[method] === "function") { _console[method].apply(_console, args); } } catch (e) { /* ignore */ }
+        var parts = [].slice.call(args).map(stringify);
+        bridge("log", { level: level, message: parts.join(" ") }, token).catch(function () {});
+      };
+    }
+    // Preserve the non-leveled console methods (bound to the real console for correct `this`).
+    var passthrough = ["dir", "dirxml", "table", "group", "groupCollapsed", "groupEnd", "count",
+                       "countReset", "time", "timeEnd", "timeLog", "assert", "clear"];
+    var c = {};
+    passthrough.forEach(function (m) {
+      c[m] = (typeof _console[m] === "function") ? _console[m].bind(_console) : function () {};
+    });
+    c.log = forward("log", "info");
+    c.info = forward("info", "info");
+    c.warn = forward("warn", "warn");
+    c.error = forward("error", "error");
+    c.debug = forward("debug", "debug");
+    c.trace = forward("trace", "debug");
+    return c;
+  }
+
   function buildGM(data) {
     var token = data.token;
     var cache = _Object.create(null);
@@ -361,8 +393,9 @@
       var grantSet = _Object.create(null);
       grants.forEach(function (g) { grantSet[g] = true; });
 
+      var scriptConsole = makeConsole(token);
       var argNames = ["unsafeWindow", "GM", "GM_info", "console", "window"];
-      var argVals = [W, env.GM, env.GM_info, _console, W];
+      var argVals = [W, env.GM, env.GM_info, scriptConsole, W];
 
       if (!grantNone) {
         _Object.keys(env.registry).forEach(function (name) {

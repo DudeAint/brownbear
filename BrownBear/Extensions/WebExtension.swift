@@ -8,6 +8,19 @@
 
 import Foundation
 
+extension Notification.Name {
+    /// Posted (on the main thread) whenever the installed-extension set changes — install, enable/
+    /// disable, or uninstall. The foreground engine recompiles content blockers and reloads
+    /// background service workers in response, so a change takes effect without an app relaunch.
+    static let brownBearExtensionsDidChange = Notification.Name("brownBearExtensionsDidChange")
+
+    /// Posted whenever an extension's `chrome.storage` area changes (from any source: a content
+    /// script, the background worker, or uninstall cleanup). Drives `chrome.storage.onChanged`.
+    /// userInfo: `extensionID: String`, `area: String`, `changes: [String: [String: String]]`
+    /// where each change is `["oldValue": json]` / `["newValue": json]` (omitted key = absent).
+    static let brownBearExtensionStorageDidChange = Notification.Name("brownBearExtensionStorageDidChange")
+}
+
 struct WebExtension: Codable, Identifiable, Equatable {
 
     /// A Chrome-style 32-character extension id (lowercase a–p).
