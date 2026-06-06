@@ -287,15 +287,29 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
         let tab = tabManager.activeTab
         let state = tab?.state ?? NavigationState()
         let url = state.url
-        let menuState = BrowserMenuState(
-            title: state.title,
-            host: state.displayHost,
-            isLoading: state.isLoading,
-            isDesktopSite: tab?.webView.customUserAgent != nil,
-            canInteractWithPage: url != nil,
-            canInstallUserscript: url.map { UserScriptInstaller.isUserScriptURL($0) } ?? false)
-        let menu = BrowserMenuViewController(state: menuState, delegate: self)
-        present(menu.wrappedForPresentation(), animated: true)
+        let isDesktop = tab?.webView.customUserAgent != nil
+        // The bookmarked check is async (actor); build + present the menu once it resolves.
+        Task { @MainActor in
+            let isBookmarked: Bool
+            if let url {
+                isBookmarked = await BrownBearServices.shared.bookmarkStore.contains(url: url)
+            } else {
+                isBookmarked = false
+            }
+            let menuState = BrowserMenuState(
+                title: state.title,
+                host: state.displayHost,
+                isLoading: state.isLoading,
+                isDesktopSite: isDesktop,
+                canInteractWithPage: url != nil,
+                canInstallUserscript: url.map { UserScriptInstaller.isUserScriptURL($0) } ?? false,
+                isBookmarked: isBookmarked)
+            // The actor hop above defers this present to a later turn; don't stack a second menu if
+            // a rapid double-tap already presented one.
+            guard presentedViewController == nil else { return }
+            let menu = BrowserMenuViewController(state: menuState, delegate: self)
+            present(menu.wrappedForPresentation(), animated: true)
+        }
     }
 
     /// Present the system Find-on-Page bar for the active tab (the find interaction is enabled at
@@ -321,6 +335,25 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
 
     private func presentDashboard(initialTab: BrownBearDashboardView.DashboardTab = .scripts) {
         present(BrownBearDashboardView.makeHostingController(initialTab: initialTab), animated: true)
+    }
+
+    private func toggleBookmarkForActiveTab() {
+        guard let tab = tabManager.activeTab, let url = tab.state.url else { return }
+        let title = tab.state.displayTitle
+        Task { await BrownBearServices.shared.bookmarkStore.toggle(title: title, url: url) }
+    }
+
+    private func presentBookmarks() {
+        present(BookmarksView.makeHostingController(onOpen: { [weak self] url in
+            self?.openBookmark(url)
+        }), animated: true)
+    }
+
+    private func openBookmark(_ url: URL) {
+        let tab = tabManager.createTab(loading: url)
+        tab.delegate = self
+        tab.loadPendingURLIfNeeded()
+        refreshChrome()
     }
 
     private func presentError(_ error: Error) {
@@ -496,6 +529,10 @@ extension BrownBearBrowserViewController: BrowserMenuDelegate {
             presentDashboard(initialTab: .extensions)
         case .installUserscript:
             if let url = tabManager.activeTab?.state.url { presentScriptInstall(for: url) }
+        case .toggleBookmark:
+            toggleBookmarkForActiveTab()
+        case .bookmarks:
+            presentBookmarks()
         }
     }
 }
