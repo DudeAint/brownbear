@@ -28,6 +28,8 @@ struct BrownBearDashboardView: View {
                 .tabItem { Label("Logs", systemImage: "list.bullet.rectangle.fill") }
             NavigationStack { BackgroundMonitorView(model: model) }
                 .tabItem { Label("Background", systemImage: "clock.arrow.circlepath") }
+            NavigationStack { ExtensionsView() }
+                .tabItem { Label("Extensions", systemImage: "puzzlepiece.extension.fill") }
         }
         .tint(BBTheme.Color.accent)
         .task { await model.load() }

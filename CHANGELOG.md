@@ -30,5 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   toggle, inspect, and delete scripts, view execution logs, and monitor background schedules;
   plus an in-app code editor (`ScriptEditorScreen`) built on Runestone (line numbers, gutter,
   auto-closing pairs, BrownBear theme) with live metadata parsing and save-time validation.
+- **Module 6 — Web Extensions (foundation):** install Chrome/Firefox `.crx`/`.zip` extensions —
+  dependency-free CRX/ZIP unpacker, MV2/MV3 manifest parser, on-disk store, `content_scripts`
+  injection via the shared isolated world, and a `chrome.*`/`browser.*` surface
+  (`storage.{local,sync,session}`, `runtime`, `i18n`, `extension`) with per-extension isolation.
+  See `docs/WEB_EXTENSIONS.md` for the support matrix.
+- **GM engine hardening:** native (CORS-free) `@require`/`@resource` fetch, value-change listeners,
+  and verified `eval`-of-fetched/obfuscated code with `GM_*` in scope (`docs/GM_API.md`).
 
 [Unreleased]: https://github.com/DudeAint/brownbear/commits/main
