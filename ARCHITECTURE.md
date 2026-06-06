@@ -119,6 +119,32 @@ The app is built in five sequenced modules. Each is shippable and verifiable on 
 or mirror its Tree-sitter highlighting + line management; `quoid/userscripts` for the manager
 dashboard UX; Gear's settings ergonomics. (Stay is now closed-source — screenshots only.)
 
+### Module 6 — Web Extensions (Chrome Web Store) · north-star epic
+**Goal:** install and run real browser extensions from the Chrome Web Store / Firefox AMO,
+the way **Orion** and **Gear Browser** do — not just userscripts.
+
+This is a large, multi-release epic, deliberately sequenced after the userscript engine because
+it reuses the same trust boundary and injection plumbing.
+
+- **Manifest support:** parse MV2/MV3 `manifest.json`; map `content_scripts`, `background`
+  (service worker / event page), `permissions`, `host_permissions`, `web_accessible_resources`,
+  `action`/`browser_action` popups, and `options_ui`.
+- **WebExtension API surface:** implement the `chrome.*` / `browser.*` namespaces the same way
+  we implement `GM_*` — a `WKScriptMessageHandler` bridge to native Swift services
+  (`storage`, `tabs`, `runtime`, `webRequest`-lite, `scripting`, `i18n`, `alarms`). The existing
+  sandbox (Module 3) and background scheduler (Module 4) are the foundation.
+- **CRX ingestion:** accept `.crx`/`.zip` extension bundles and Chrome Web Store URLs; unpack,
+  validate, and store like a script package.
+- **Reality check (iOS constraints):** Apple mandates WebKit, so we cannot run Chromium's
+  extension engine. We provide a *compatibility layer* — many content-script/storage/action
+  extensions will work; deeply Chromium-internal APIs (e.g. full `webRequest` blocking,
+  `declarativeNetRequest` at scale) are constrained by what WKWebView exposes. We document
+  exactly which APIs are supported, partial, or unsupported, and degrade honestly.
+
+**Reference:** Orion's WebExtensions compatibility approach (product study), Gear's
+"add extensions directly" UX, and the official Chrome/Firefox WebExtensions API docs.
+**Maps to:** `BrownBear/Extensions/` (new module), reusing `Sandbox/` and `Background/`.
+
 ---
 
 ## 3. Data Model (Core Data)

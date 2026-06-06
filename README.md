@@ -112,6 +112,7 @@ and save-time metadata validation**.
 | **Background scripts (no tab)** | ✅ | ⚠️ limited | ❌ | ❌ | ✅ |
 | **`@crontab` scheduling** | ✅ | ❌ | ❌ | ❌ | ✅ |
 | Built-in code editor | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Chrome Web Store extensions** | 🔜 planned (Module 6) | ✅ | ❌ | ❌ | ❌ |
 | Open source | ✅ MIT | ❌ | ✅ GPL | ✅ | ✅ GPL |
 
 > ⚠️ iOS background execution is **budgeted and best-effort** by design — `@crontab` is a
@@ -158,11 +159,19 @@ The engineering bar is App-Store-shippable code: no stubs, no mocks, no truncati
 **Requirements:** Xcode 15+ · iOS/iPadOS 16.4+ deployment target · an Apple Developer account
 for on-device background-task testing.
 
+**Recommended: let GitHub Actions build it.** CI on free macOS runners is the canonical build
+path — open a PR and it's built + tested automatically. To build locally, the Xcode project is
+generated from [`project.yml`](project.yml) with [XcodeGen](https://github.com/yonsm/XcodeGen):
+
 ```bash
 git clone https://github.com/DudeAint/brownbear.git
 cd brownbear
-open BrownBear.xcodeproj   # generated once Module 1 lands the Xcode project
+brew install xcodegen          # one-time
+xcodegen generate              # creates BrownBear.xcodeproj from project.yml
+open BrownBear.xcodeproj
 ```
+
+Full instructions (CI, local, tests, lint): [`docs/BUILDING.md`](docs/BUILDING.md).
 
 > Reference repositories are documented in [`References/REFERENCES.md`](References/REFERENCES.md).
 > We study their architecture; we never vendor their (GPL/AGPL) source.
