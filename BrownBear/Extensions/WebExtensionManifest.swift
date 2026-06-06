@@ -43,6 +43,22 @@ struct WebExtensionManifest: Equatable {
         var matches: [String]
     }
 
+    /// A declarativeNetRequest static ruleset: a JSON file of block/allow/redirect rules the
+    /// extension ships, which we compile to a WKContentRuleList. (`declarative_net_request`.)
+    struct DNRRuleset: Equatable {
+        var id: String
+        var enabled: Bool
+        var path: String
+    }
+
+    /// A keyboard `command` the extension declares (MV2/MV3). We surface them so the runtime can
+    /// dispatch `chrome.commands.onCommand`; the reserved `_execute_action` opens the popup.
+    struct Command: Equatable {
+        var name: String
+        var suggestedKey: String?
+        var description: String?
+    }
+
     // Identity
     var manifestVersion: Int
     var name: String
@@ -62,6 +78,8 @@ struct WebExtensionManifest: Equatable {
     var optionsPage: String?
     var optionsOpenInTab: Bool
     var contentSecurityPolicy: String?
+    var declarativeNetRequest: [DNRRuleset]
+    var commands: [Command]
 
     // MARK: - Derived
 
@@ -131,6 +149,9 @@ struct WebExtensionManifest: Equatable {
             csp = nil
         }
 
+        let dnr = parseDNRRulesets(json["declarative_net_request"])
+        let commands = parseCommands(json["commands"])
+
         return WebExtensionManifest(
             manifestVersion: manifestVersion,
             name: name,
@@ -147,7 +168,9 @@ struct WebExtensionManifest: Equatable {
             webAccessibleResources: war,
             optionsPage: optionsPage,
             optionsOpenInTab: optionsOpenInTab,
-            contentSecurityPolicy: csp)
+            contentSecurityPolicy: csp,
+            declarativeNetRequest: dnr,
+            commands: commands)
     }
 
     // MARK: - Field parsers
@@ -185,6 +208,34 @@ struct WebExtensionManifest: Equatable {
         return Action(defaultTitle: dict["default_title"] as? String,
                       defaultPopup: dict["default_popup"] as? String,
                       defaultIcon: icon)
+    }
+
+    /// `declarative_net_request.rule_resources`: [{ id, enabled, path }]. Defaults: enabled=true.
+    private static func parseDNRRulesets(_ value: Any?) -> [DNRRuleset] {
+        guard let dict = value as? [String: Any],
+              let resources = dict["rule_resources"] as? [[String: Any]] else { return [] }
+        return resources.compactMap { entry in
+            guard let id = entry["id"] as? String, !id.isEmpty,
+                  let path = entry["path"] as? String, !path.isEmpty else { return nil }
+            return DNRRuleset(id: id, enabled: (entry["enabled"] as? Bool) ?? true, path: path)
+        }
+    }
+
+    /// `commands`: { name: { suggested_key: {default|...}, description } }. The suggested key may be
+    /// a string or a per-platform object; we keep the default (or any) binding for display only.
+    private static func parseCommands(_ value: Any?) -> [Command] {
+        guard let dict = value as? [String: Any] else { return [] }
+        return dict.compactMap { name, raw in
+            let body = raw as? [String: Any]
+            var key: String?
+            if let keyString = body?["suggested_key"] as? String {
+                key = keyString
+            } else if let keyMap = body?["suggested_key"] as? [String: Any] {
+                key = (keyMap["default"] as? String) ?? keyMap.values.compactMap { $0 as? String }.first
+            }
+            return Command(name: name, suggestedKey: key, description: body?["description"] as? String)
+        }
+        .sorted { $0.name < $1.name }   // stable order (dictionary iteration is unordered)
     }
 
     private static func parseWebAccessibleResources(_ value: Any?) -> [WebAccessibleResource] {

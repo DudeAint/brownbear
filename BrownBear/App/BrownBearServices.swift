@@ -24,11 +24,18 @@ final class BrownBearServices {
     // Module 6 — browser extensions.
     let webExtensionStore = WebExtensionStore()
     let webExtensionStorage = WebExtensionStorage()
+    /// Module 6 Phase 2 — headless background service workers + the content↔background message bus.
+    let webExtensionRuntime: WebExtensionRuntime
 
     private init() {
         backgroundScheduler = BrownBearBackgroundScheduler(scriptStore: scriptStore,
                                                            valueStore: valueStore,
                                                            logStore: logStore,
                                                            scheduleStore: scheduleStore)
+        // Constructed with explicit dependencies — `BrownBearServices.shared` isn't assigned yet
+        // while this initializer runs, so the runtime's defaulted args would recurse.
+        webExtensionRuntime = WebExtensionRuntime(store: webExtensionStore,
+                                                  storage: webExtensionStorage,
+                                                  logStore: logStore)
     }
 }

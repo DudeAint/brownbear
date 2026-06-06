@@ -26,9 +26,12 @@ final class InjectionOrchestrator {
 
     private let router: ScriptMessageRouter
     private let webExtensionRouter: WebExtensionMessageRouter
+    /// Compiles each extension's declarativeNetRequest rulesets into WKContentRuleLists (Module 6 P2).
+    let contentBlocker: WebExtensionContentBlocker
     let scriptStore: ScriptStore
     let valueStore: GMValueStore
     private let network = GMNetworkService()
+    private var extensionsObserver: NSObjectProtocol?
 
     /// Forwarded to the router so GM_openInTab can reach the browser.
     weak var bridgeHost: ScriptBridgeHost? {
@@ -46,8 +49,14 @@ final class InjectionOrchestrator {
                                           network: network,
                                           contentWorld: contentWorld)
         self.webExtensionRouter = WebExtensionMessageRouter(store: webExtensionStore,
-                                                            storage: webExtensionStorage)
+                                                            storage: webExtensionStorage,
+                                                            runtime: BrownBearServices.shared.webExtensionRuntime)
+        self.contentBlocker = WebExtensionContentBlocker(store: webExtensionStore)
         configure()
+    }
+
+    deinit {
+        if let extensionsObserver { NotificationCenter.default.removeObserver(extensionsObserver) }
     }
 
     // MARK: - Setup
@@ -64,6 +73,24 @@ final class InjectionOrchestrator {
                                                       contentWorld: contentWorld,
                                                       name: WebExtensionMessageRouter.handlerName)
         addBootstrap(resource: "brownbear-webext-runtime")
+
+        // Boot background service workers + the content↔background message bus (self-observes
+        // extension changes thereafter).
+        BrownBearServices.shared.webExtensionRuntime.start()
+
+        // Compile declarativeNetRequest rulesets now, and recompile whenever extensions change.
+        refreshExtensionContentBlockers()
+        extensionsObserver = NotificationCenter.default.addObserver(
+            forName: .brownBearExtensionsDidChange, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.refreshExtensionContentBlockers() }
+        }
+    }
+
+    /// Recompile and reinstall every enabled extension's content-blocking rules. Fire-and-forget;
+    /// the next navigation picks up the new rule lists.
+    func refreshExtensionContentBlockers() {
+        let controller = userContentController
+        Task { await contentBlocker.refresh(into: controller) }
     }
 
     private func addBootstrap(resource: String) {

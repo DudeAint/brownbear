@@ -145,6 +145,26 @@ it reuses the same trust boundary and injection plumbing.
 "add extensions directly" UX, and the official Chrome/Firefox WebExtensions API docs.
 **Maps to:** `BrownBear/Extensions/` (new module), reusing `Sandbox/` and `Background/`.
 
+**Status — Phase 1 (shipped):** MV2/MV3 manifest parsing, CRX2/CRX3 + ZIP unpack, install/manage,
+content-script injection in the isolated world, and `chrome.storage`/`runtime`/`i18n`/`extension`.
+
+**Status — Phase 2 (shipped):**
+- **`declarativeNetRequest`** static rulesets compiled to `WKContentRuleList` and applied to every
+  tab (`DeclarativeNetRequest` pure compiler + `WebExtensionContentBlocker`), recompiled live on
+  change. Fidelity-over-coverage: unrepresentable rules (redirect/modifyHeaders/requestMethods/
+  requestDomains) are skipped and counted, never approximated.
+- **Background service workers / event pages** run headless in a per-extension `JSContext`
+  (`WebExtensionBackgroundContext` + `WebExtensionRuntime` + `brownbear-webext-background.js`) with
+  `chrome.runtime`/`storage`/`alarms`/`i18n`, `console.*`, and `setTimeout`/`setInterval`.
+- **Messaging**: content → background `runtime.sendMessage`/`onMessage` with sync **and** async
+  `sendResponse` (and Promise-returning listeners), over the same native-bound-token bridge.
+- **`chrome.alarms`**, **`storage.onChanged`** (in workers), and **direct Chrome Web Store install**
+  (`ChromeWebStore` — paste a link or id, fetch the CRX).
+
+**Deferred — Phase 3:** popup/options UI, background→content (`tabs.sendMessage`) + long-lived
+ports, `storage.onChanged` in content scripts, durable (suspended-app) alarms via BGTask,
+`chrome.tabs`/`webNavigation`/`scripting`/`commands` dispatch.
+
 ---
 
 ## 3. Data Model (Core Data)

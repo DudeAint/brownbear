@@ -17,12 +17,14 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
 
     private let store: WebExtensionStore
     private let storage: WebExtensionStorage
+    private let runtime: WebExtensionRuntime
     /// token → extension id. Minted per content-script injection.
     private var sessions: [String: String] = [:]
 
-    init(store: WebExtensionStore, storage: WebExtensionStorage) {
+    init(store: WebExtensionStore, storage: WebExtensionStorage, runtime: WebExtensionRuntime) {
         self.store = store
         self.storage = storage
+        self.runtime = runtime
     }
 
     nonisolated func userContentController(_ userContentController: WKUserContentController,
@@ -78,6 +80,16 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
         case "storage.clear":
             await storage.clear(extensionID: extensionID, area: area)
             return NSNull()
+
+        case "runtime.sendMessage":
+            // Content script → its own extension's background worker. `message` is any JSON value.
+            let message = payload["message"] ?? NSNull()
+            var sender: [String: Any] = ["id": extensionID]
+            if let url = payload["url"] as? String { sender["url"] = url }
+            guard let response = await runtime.sendRuntimeMessage(message, sender: sender, to: extensionID) else {
+                return NSNull()
+            }
+            return response
 
         default:
             throw BrownBearError.bridgeRejected("unsupported extension api '\(api)'")

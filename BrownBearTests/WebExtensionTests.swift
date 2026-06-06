@@ -130,6 +130,77 @@ final class WebExtensionManifestTests: XCTestCase {
         XCTAssertThrowsError(try WebExtensionManifest.parse(Data(#"{"manifest_version":3,"version":"1"}"#.utf8)))
         XCTAssertThrowsError(try WebExtensionManifest.parse(Data(#"{"manifest_version":3,"name":"x"}"#.utf8)))
     }
+
+    func testParsesDeclarativeNetRequestAndCommands() throws {
+        let json = """
+        {
+          "manifest_version": 3,
+          "name": "Blocker",
+          "version": "1.0",
+          "declarative_net_request": {
+            "rule_resources": [
+              { "id": "ads", "enabled": true, "path": "rules/ads.json" },
+              { "id": "social", "enabled": false, "path": "rules/social.json" },
+              { "path": "rules/incomplete.json" }
+            ]
+          },
+          "commands": {
+            "toggle": { "suggested_key": { "default": "Ctrl+Shift+Y" }, "description": "Toggle" },
+            "_execute_action": { "suggested_key": "Ctrl+Shift+A" }
+          }
+        }
+        """
+        let meta = try WebExtensionManifest.parse(Data(json.utf8))
+        XCTAssertEqual(meta.declarativeNetRequest.count, 2)   // the id-less entry is dropped
+        XCTAssertEqual(meta.declarativeNetRequest[0].id, "ads")
+        XCTAssertTrue(meta.declarativeNetRequest[0].enabled)
+        XCTAssertEqual(meta.declarativeNetRequest[1].id, "social")
+        XCTAssertFalse(meta.declarativeNetRequest[1].enabled)
+
+        XCTAssertEqual(meta.commands.count, 2)
+        // Commands are sorted by name for stable iteration.
+        XCTAssertEqual(meta.commands.map(\.name), ["_execute_action", "toggle"])
+        XCTAssertEqual(meta.commands.first { $0.name == "toggle" }?.suggestedKey, "Ctrl+Shift+Y")
+        XCTAssertEqual(meta.commands.first { $0.name == "_execute_action" }?.suggestedKey, "Ctrl+Shift+A")
+    }
+}
+
+// MARK: - Chrome Web Store
+
+final class ChromeWebStoreTests: XCTestCase {
+
+    func testExtractsExtensionIDFromBareID() {
+        let id = "abcdefghijklmnopabcdefghijklmnop"  // 32 chars, a–p
+        XCTAssertEqual(ChromeWebStore.extensionID(from: id), id)
+        XCTAssertTrue(ChromeWebStore.isExtensionID(id))
+    }
+
+    func testExtractsExtensionIDFromStoreURLs() {
+        let id = "cjpalhdlnbpafiamejdnhcphjbkeiagm"  // uBlock Origin's real id (all a–p)
+        XCTAssertEqual(
+            ChromeWebStore.extensionID(from: "https://chromewebstore.google.com/detail/ublock-origin/\(id)"), id)
+        XCTAssertEqual(
+            ChromeWebStore.extensionID(from: "https://chrome.google.com/webstore/detail/ublock-origin/\(id)?hl=en"), id)
+    }
+
+    func testRejectsNonIDs() {
+        XCTAssertNil(ChromeWebStore.extensionID(from: "https://example.com/not-an-extension"))
+        XCTAssertNil(ChromeWebStore.extensionID(from: "tooshort"))
+        XCTAssertFalse(ChromeWebStore.isExtensionID("ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP")) // uppercase out of a–p
+        XCTAssertFalse(ChromeWebStore.isExtensionID("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz")) // z is past p
+    }
+
+    func testBuildsDownloadURL() throws {
+        let id = "cjpalhdlnbpafiamejdnhcphjbkeiagm"
+        let url = try XCTUnwrap(ChromeWebStore.downloadURL(extensionID: id))
+        let string = url.absoluteString
+        XCTAssertTrue(string.hasPrefix("https://clients2.google.com/service/update2/crx"))
+        XCTAssertTrue(string.contains("response=redirect"))
+        XCTAssertTrue(string.contains("acceptformat=crx2,crx3"))
+        // The nested x blob must be percent-encoded so its inner & doesn't split the query.
+        XCTAssertFalse(string.contains("x=id="))
+        XCTAssertTrue(string.contains(id))
+    }
 }
 
 // MARK: - Archive
@@ -236,5 +307,26 @@ final class WebExtensionStorageTests: XCTestCase {
         await storage.clear(extensionID: "e", area: .local)
         values = await storage.get(extensionID: "e", area: .local, keys: nil)
         XCTAssertTrue(values.isEmpty)
+    }
+
+    func testSetReportsChangesAndSkipsNoOps() async {
+        let storage = makeStorage()
+        let first = await storage.set(extensionID: "e", area: .local, items: ["k": "\"v\""])
+        XCTAssertEqual(first["k"]?.old, nil)
+        XCTAssertEqual(first["k"]?.new, "\"v\"")
+
+        // Re-setting the identical value is a no-op — no change is reported (and onChanged won't fire).
+        let second = await storage.set(extensionID: "e", area: .local, items: ["k": "\"v\""])
+        XCTAssertTrue(second.isEmpty)
+
+        // Changing it does report old → new.
+        let third = await storage.set(extensionID: "e", area: .local, items: ["k": "\"w\""])
+        XCTAssertEqual(third["k"]?.old, "\"v\"")
+        XCTAssertEqual(third["k"]?.new, "\"w\"")
+
+        // Clear reports the removed keys.
+        let cleared = await storage.clear(extensionID: "e", area: .local)
+        XCTAssertEqual(cleared["k"]?.old, "\"w\"")
+        XCTAssertNil(cleared["k"]?.new ?? nil)
     }
 }
