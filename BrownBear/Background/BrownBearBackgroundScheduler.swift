@@ -122,6 +122,19 @@ final class BrownBearBackgroundScheduler: @unchecked Sendable {
         return ranCount
     }
 
+    /// Run one background script immediately — the dashboard "Run now" action — bypassing the due
+    /// check. Persists its logs and result and records the fire time, exactly like the scheduled
+    /// path, so the dashboard's last-run/next-due update and the logs appear in the Logs tab.
+    func runNow(_ script: UserScript) async {
+        let fireTime = Date()
+        let deadline = fireTime.addingTimeInterval(30)   // a generous budget for a manual foreground run
+        let (outcome, logs) = await runner.run(script, deadline: deadline)
+        await logStore.append(logs)
+        await logStore.append([resultLog(for: script, outcome: outcome)])
+        let next = nextFireDate(for: script, after: fireTime)
+        await scheduleStore.record(scriptID: script.id, lastFire: fireTime, nextFire: next)
+    }
+
     // MARK: - Scheduling math
 
     func isDue(script: UserScript, now: Date, lastFire: Date?) -> Bool {
