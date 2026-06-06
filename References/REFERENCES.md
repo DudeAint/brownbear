@@ -47,17 +47,37 @@ teaches us and exactly which subsystems map to it.
 - **Maps to:** Module 2 — `brownbear-core.js`, `ScriptMetadataParser`, `URLMatcher`,
   `WKUserContentController` injection wiring.
 
-## 4. mapleDistant/Stay
+## 4. shenruisi/Stay — ⚠️ stale / now closed-source (UX inspiration only)
 
-- **URL:** https://github.com/mapleDistant/Stay (verify availability; repo may be
-  renamed/private — fall back to the App Store listing for UX study)
+- **URL:** https://github.com/shenruisi/Stay (the original `mapleDistant/Stay` handle in the
+  brief was incorrect; this is the real one)
 - **App Store:** https://apps.apple.com/app/stay-for-safari/id1591620171
-- **License:** review before any direct reference.
-- **What we learn:**
-  - Mobile-friendly script library/manager dashboard.
+- **Status:** ⚠️ **Last open-source release was 2022; the project has since gone closed-source.**
+  Treat the GitHub repo as a frozen historical snapshot, not a living reference.
+- **License:** review the specific 2022 snapshot before referencing anything; when in doubt,
+  use only the **public App Store screenshots** for UX study, not the code.
+- **What we still learn (UX only):**
+  - Mobile-friendly script library/manager dashboard layout.
   - Settings toggles and per-script controls.
-  - In-app code editor UX.
-- **Maps to:** Module 5 — `BrownBearDashboardView`, `ScriptEditorView`.
+- **Maps to:** Module 5 — `BrownBearDashboardView` (dashboard *layout inspiration only*).
+- **Decision:** demoted from a code reference to product/UX inspiration. For the **dashboard
+  manager UX** we lean on the actively-maintained `quoid/userscripts` (§3) instead; for the
+  **code editor** we adopt Runestone (§5 below).
+
+## 5. simonbs/Runestone — code editor engine (active, MIT) ✅
+
+- **URL:** https://github.com/simonbs/Runestone
+- **License:** **MIT — safe to reference *and* to use as a direct dependency.**
+- **Status:** actively maintained (29+ releases), Tree-sitter based.
+- **What we learn / use:**
+  - A performant iOS plain-text editor with **syntax highlighting (Tree-sitter), line numbers,
+    selected-line highlight, invisible characters, and character-pair insertion** — exactly the
+    feature set Module 5's editor needs.
+  - We may either integrate Runestone directly (fastest, license-clean) or mirror its
+    line-management approach in our own `ScriptEditorView`.
+- **Maps to:** Module 5 — `ScriptEditorView` (the in-app code editor).
+- **Rationale:** replaces the stale/closed Stay editor reference with an active, MIT-licensed,
+  purpose-built one — better quality and zero license risk.
 
 ---
 

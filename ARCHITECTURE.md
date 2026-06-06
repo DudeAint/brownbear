@@ -115,7 +115,9 @@ The app is built in five sequenced modules. Each is shippable and verifiable on 
   bracket matching) wrapped for SwiftUI, with a save pipeline that re-parses metadata and
   rejects invalid headers before persisting.
 
-**Reference:** Stay's mobile library dashboard + editor UX; Gear's settings ergonomics.
+**Reference:** **Runestone** (simonbs/Runestone, MIT) for the code editor — integrate directly
+or mirror its Tree-sitter highlighting + line management; `quoid/userscripts` for the manager
+dashboard UX; Gear's settings ergonomics. (Stay is now closed-source — screenshots only.)
 
 ---
 

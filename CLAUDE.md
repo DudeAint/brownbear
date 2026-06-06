@@ -89,7 +89,8 @@ Never paste GPL/AGPL or incompatibly-licensed source into our tree.
 | `chromium/chromium` (`/ios`) | Omnibox, tab grid controllers, WebState lifecycle, browser chrome layout | BSD-3 — patterns OK, do not vendor code |
 | `scriptscat/scriptcat` | Background script framework, crontab queue, sandbox runtime, GM event loop | GPLv3 — **architecture only, no code reuse** |
 | `quoid/userscripts` | WebKit metadata parsing, document-start injection lifecycle | GPLv3 — **architecture only** |
-| `mapleDistant/Stay` | Mobile script library dashboard, settings toggles, editor UX | review license before any reference |
+| `shenruisi/Stay` | Mobile script-library dashboard layout (UX only) | ⚠️ **stale: last OSS 2022, now closed-source** — App Store screenshots for UX only |
+| `simonbs/Runestone` | iOS code-editor engine: Tree-sitter syntax highlighting, line numbers | **MIT** — safe to reference *and* depend on directly |
 
 > ⚠️ **License hygiene:** ScriptCat and Userscripts are GPL/AGPL. We learn *how the system
 > behaves* and re-implement independently under our own MIT license. Do not copy functions,
