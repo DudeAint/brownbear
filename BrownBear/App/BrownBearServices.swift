@@ -21,6 +21,10 @@ final class BrownBearServices {
     let scheduleStore = ScheduleStateStore()
     let backgroundScheduler: BrownBearBackgroundScheduler
 
+    // Module 6 — browser extensions.
+    let webExtensionStore = WebExtensionStore()
+    let webExtensionStorage = WebExtensionStorage()
+
     private init() {
         backgroundScheduler = BrownBearBackgroundScheduler(scriptStore: scriptStore,
                                                            valueStore: valueStore,

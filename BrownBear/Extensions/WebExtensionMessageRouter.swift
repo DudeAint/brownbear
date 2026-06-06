@@ -1,0 +1,157 @@
+//
+//  WebExtensionMessageRouter.swift
+//  BrownBear
+//
+//  The native side of the extension runtime. It answers getContentScripts (which extensions'
+//  content scripts match this URL, with their JS/CSS/manifest/i18n) and the chrome.storage.*
+//  calls, with the same native-bound-token identity model as the userscript bridge so one
+//  extension's storage stays isolated from another's.
+//
+
+import WebKit
+
+@MainActor
+final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
+
+    static let handlerName = "brownbearWebext"
+
+    private let store: WebExtensionStore
+    private let storage: WebExtensionStorage
+    /// token → extension id. Minted per content-script injection.
+    private var sessions: [String: String] = [:]
+
+    init(store: WebExtensionStore, storage: WebExtensionStorage) {
+        self.store = store
+        self.storage = storage
+    }
+
+    nonisolated func userContentController(_ userContentController: WKUserContentController,
+                                           didReceive message: WKScriptMessage,
+                                           replyHandler: @escaping (Any?, String?) -> Void) {
+        guard let body = message.body as? [String: Any],
+              let api = body["api"] as? String else {
+            replyHandler(nil, "malformed extension bridge message")
+            return
+        }
+        let payload = body["payload"] as? [String: Any] ?? [:]
+        let token = body["token"] as? String
+
+        Task { @MainActor in
+            do {
+                let result = try await self.route(api: api, payload: payload, token: token)
+                replyHandler(result, nil)
+            } catch let error as BrownBearError {
+                replyHandler(nil, error.errorDescription ?? "extension bridge error")
+            } catch {
+                replyHandler(nil, error.localizedDescription)
+            }
+        }
+    }
+
+    // MARK: - Routing
+
+    private func route(api: String, payload: [String: Any], token: String?) async throws -> Any? {
+        if api == "getContentScripts" {
+            return try await handleGetContentScripts(payload: payload)
+        }
+
+        let extensionID = try resolve(token)
+        let area = WebExtensionStorage.Area(rawValue: (payload["area"] as? String) ?? "local") ?? .local
+
+        switch api {
+        case "storage.get":
+            let keys = payload["keys"] as? [String]   // nil = all
+            return await storage.get(extensionID: extensionID, area: area, keys: keys)
+
+        case "storage.set":
+            guard let items = payload["items"] as? [String: String] else {
+                throw BrownBearError.bridgeRejected("storage.set missing items")
+            }
+            await storage.set(extensionID: extensionID, area: area, items: items)
+            return NSNull()
+
+        case "storage.remove":
+            let keys = payload["keys"] as? [String] ?? []
+            await storage.remove(extensionID: extensionID, area: area, keys: keys)
+            return NSNull()
+
+        case "storage.clear":
+            await storage.clear(extensionID: extensionID, area: area)
+            return NSNull()
+
+        default:
+            throw BrownBearError.bridgeRejected("unsupported extension api '\(api)'")
+        }
+    }
+
+    private func resolve(_ token: String?) throws -> String {
+        guard let token, let extensionID = sessions[token] else {
+            throw BrownBearError.bridgeRejected("unrecognized extension token")
+        }
+        return extensionID
+    }
+
+    // MARK: - getContentScripts
+
+    private func handleGetContentScripts(payload: [String: Any]) async throws -> [[String: Any]] {
+        guard let urlString = payload["url"] as? String else {
+            throw BrownBearError.bridgeRejected("missing url")
+        }
+        let isSubframe = (payload["isSubframe"] as? Bool) ?? false
+        let extensions = await store.enabledExtensions()
+        var result: [[String: Any]] = []
+
+        for ext in extensions {
+            guard let manifest = ext.manifest else { continue }
+            let messages = await loadMessages(ext, manifest: manifest)
+            for contentScript in manifest.contentScripts {
+                if isSubframe && !contentScript.allFrames { continue }
+                let matcher = URLMatcher(matches: contentScript.matches,
+                                         includes: contentScript.includeGlobs,
+                                         excludes: contentScript.excludeGlobs,
+                                         excludeMatches: contentScript.excludeMatches)
+                guard matcher.matches(urlString) else { continue }
+
+                var jsCode = ""
+                for path in contentScript.js {
+                    if let text = await store.text(extensionID: ext.id, path: path) { jsCode += text + "\n;\n" }
+                }
+                var cssCode = ""
+                for path in contentScript.css {
+                    if let text = await store.text(extensionID: ext.id, path: path) { cssCode += text + "\n" }
+                }
+
+                let token = UUID().uuidString
+                sessions[token] = ext.id
+                result.append([
+                    "token": token,
+                    "extensionId": ext.id,
+                    "runAt": contentScript.runAt,
+                    "allFrames": contentScript.allFrames,
+                    "js": jsCode,
+                    "css": cssCode,
+                    "manifestJSON": ext.manifestJSON,
+                    "baseURL": ext.baseURLString,
+                    "messages": messages
+                ])
+            }
+        }
+        return result
+    }
+
+    /// Load the default-locale messages.json (flattened to key → message) for chrome.i18n.
+    private func loadMessages(_ ext: WebExtension, manifest: WebExtensionManifest) async -> [String: String] {
+        guard let locale = manifest.defaultLocale,
+              let data = await store.file(extensionID: ext.id, path: "_locales/\(locale)/messages.json"),
+              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return [:]
+        }
+        var out: [String: String] = [:]
+        for (key, value) in json {
+            if let entry = value as? [String: Any], let message = entry["message"] as? String {
+                out[key] = message
+            }
+        }
+        return out
+    }
+}

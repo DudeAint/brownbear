@@ -25,6 +25,7 @@ final class InjectionOrchestrator {
     let contentWorld = WKContentWorld.world(name: "BrownBear")
 
     private let router: ScriptMessageRouter
+    private let webExtensionRouter: WebExtensionMessageRouter
     let scriptStore: ScriptStore
     let valueStore: GMValueStore
     private let network = GMNetworkService()
@@ -35,24 +36,38 @@ final class InjectionOrchestrator {
     }
 
     init(scriptStore: ScriptStore = BrownBearServices.shared.scriptStore,
-         valueStore: GMValueStore = BrownBearServices.shared.valueStore) {
+         valueStore: GMValueStore = BrownBearServices.shared.valueStore,
+         webExtensionStore: WebExtensionStore = BrownBearServices.shared.webExtensionStore,
+         webExtensionStorage: WebExtensionStorage = BrownBearServices.shared.webExtensionStorage) {
         self.scriptStore = scriptStore
         self.valueStore = valueStore
         self.router = ScriptMessageRouter(scriptStore: scriptStore,
                                           valueStore: valueStore,
                                           network: network,
                                           contentWorld: contentWorld)
+        self.webExtensionRouter = WebExtensionMessageRouter(store: webExtensionStore,
+                                                            storage: webExtensionStorage)
         configure()
     }
 
     // MARK: - Setup
 
     private func configure() {
+        // Userscript runtime.
         userContentController.addScriptMessageHandler(router,
                                                       contentWorld: contentWorld,
                                                       name: ScriptMessageRouter.handlerName)
+        addBootstrap(resource: "brownbear-runtime")
 
-        let bootstrap = WKUserScript(source: Self.bootstrapSource(),
+        // Browser-extension runtime (Module 6).
+        userContentController.addScriptMessageHandler(webExtensionRouter,
+                                                      contentWorld: contentWorld,
+                                                      name: WebExtensionMessageRouter.handlerName)
+        addBootstrap(resource: "brownbear-webext-runtime")
+    }
+
+    private func addBootstrap(resource: String) {
+        let bootstrap = WKUserScript(source: Self.bootstrapSource(resource),
                                      injectionTime: .atDocumentStart,
                                      forMainFrameOnly: false,
                                      in: contentWorld)
@@ -61,15 +76,14 @@ final class InjectionOrchestrator {
 
     // MARK: - Bootstrap source
 
-    /// The injected runtime (brownbear-runtime.js): one closure containing the private bridge,
-    /// the GM surface, and the loader. Loaded from the app bundle.
-    private static func bootstrapSource() -> String {
-        guard let url = Bundle.main.url(forResource: "brownbear-runtime", withExtension: "js", subdirectory: nil)
-                ?? Bundle.main.url(forResource: "brownbear-runtime", withExtension: "js", subdirectory: "JS"),
+    /// Load an injected runtime closure from the app bundle.
+    private static func bootstrapSource(_ resource: String) -> String {
+        guard let url = Bundle.main.url(forResource: resource, withExtension: "js", subdirectory: nil)
+                ?? Bundle.main.url(forResource: resource, withExtension: "js", subdirectory: "JS"),
               let source = try? String(contentsOf: url, encoding: .utf8) else {
             // If the resource is missing we inject nothing rather than crash; CI's js-runtime job
-            // guards the file's presence and syntax.
-            return "/* BrownBear runtime resource missing */"
+            // guards the files' presence and syntax.
+            return "/* BrownBear runtime resource \(resource) missing */"
         }
         return source
     }
