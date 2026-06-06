@@ -372,6 +372,15 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
             } else {
                 isBookmarked = false
             }
+            var matchedScripts: [MenuScript] = []
+            if let url {
+                let urlString = url.absoluteString
+                matchedScripts = await BrownBearServices.shared.scriptStore.all()
+                    .filter { $0.metadata.hasMatchingDirective && URLMatcher(metadata: $0.metadata).matches(urlString) }
+                    .prefix(6)
+                    .map { MenuScript(id: $0.id, name: $0.metadata.displayName,
+                                      iconURL: $0.metadata.iconURL, enabled: $0.enabled) }
+            }
             let menuState = BrowserMenuState(
                 title: state.title,
                 host: state.displayHost,
@@ -379,7 +388,8 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
                 isDesktopSite: isDesktop,
                 canInteractWithPage: url != nil,
                 canInstallUserscript: url.map { UserScriptInstaller.isUserScriptURL($0) } ?? false,
-                isBookmarked: isBookmarked)
+                isBookmarked: isBookmarked,
+                matchedScripts: matchedScripts)
             // The actor hop above defers this present to a later turn; don't stack a second menu if
             // a rapid double-tap already presented one.
             guard presentedViewController == nil else { return }
@@ -617,5 +627,11 @@ extension BrownBearBrowserViewController: BrowserMenuDelegate {
         case .bookmarks:
             presentBookmarks()
         }
+    }
+
+    func browserMenu(_ menu: BrowserMenuViewController, didToggleScript id: UUID, enabled: Bool) {
+        // Persist the toggle; re-injection happens on the next navigation (no hot re-inject), which
+        // matches the engine's existing behavior.
+        Task { await BrownBearServices.shared.scriptStore.setEnabled(id: id, enabled) }
     }
 }

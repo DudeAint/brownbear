@@ -34,11 +34,21 @@ struct BrowserMenuState {
     var canInteractWithPage: Bool   // a real page is loaded (share/copy/find/desktop apply)
     var canInstallUserscript: Bool  // the current URL is a *.user.js
     var isBookmarked: Bool = false  // the current URL is already bookmarked
+    var matchedScripts: [MenuScript] = []  // userscripts whose @match/@include matched this page
+}
+
+/// A userscript matching the active page, rendered in the menu's "On this page" section.
+struct MenuScript {
+    let id: UUID
+    let name: String
+    let iconURL: String?
+    let enabled: Bool
 }
 
 @MainActor
 protocol BrowserMenuDelegate: AnyObject {
     func browserMenu(_ menu: BrowserMenuViewController, didSelect action: BrowserMenuAction)
+    func browserMenu(_ menu: BrowserMenuViewController, didToggleScript id: UUID, enabled: Bool)
 }
 
 @MainActor
@@ -75,21 +85,40 @@ final class BrowserMenuViewController: UIViewController {
     // MARK: - Layout
 
     private func buildLayout() {
+        // A scroll view so the menu never clips: with the "On this page" section the content can
+        // exceed even the .large detent on smaller iPhones, and the lower rows must stay reachable.
+        let scrollView = UIScrollView()
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.alwaysBounceVertical = true
+        view.addSubview(scrollView)
+
         let root = UIStackView()
         root.axis = .vertical
         root.spacing = 16
         root.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(root)
+        scrollView.addSubview(root)
 
         let guide = view.safeAreaLayoutGuide
         NSLayoutConstraint.activate([
-            root.topAnchor.constraint(equalTo: guide.topAnchor, constant: 20),
-            root.leadingAnchor.constraint(equalTo: guide.leadingAnchor, constant: 16),
-            root.trailingAnchor.constraint(equalTo: guide.trailingAnchor, constant: -16)
+            scrollView.topAnchor.constraint(equalTo: guide.topAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: guide.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: guide.trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: guide.bottomAnchor),
+
+            root.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor, constant: 20),
+            root.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor, constant: -20),
+            root.leadingAnchor.constraint(equalTo: scrollView.frameLayoutGuide.leadingAnchor, constant: 16),
+            root.trailingAnchor.constraint(equalTo: scrollView.frameLayoutGuide.trailingAnchor, constant: -16)
         ])
 
         root.addArrangedSubview(makeHeader())
         root.addArrangedSubview(makeTileRow())
+        if !state.matchedScripts.isEmpty {
+            root.addArrangedSubview(makeScriptsSection())
+        }
+        // Userscripts & Extensions are the headline features — keep them prominent in a Library
+        // section near the top, not buried beneath the page actions.
+        root.addArrangedSubview(makeLibrarySection())
         root.addArrangedSubview(makeActionList())
     }
 
@@ -132,12 +161,9 @@ final class BrowserMenuViewController: UIViewController {
         return row
     }
 
+    /// The page-action card (reload/stop, bookmark this page, copy link, install). Library
+    /// destinations live in their own prominent section — see makeLibrarySection.
     private func makeActionList() -> UIView {
-        let container = UIView()
-        container.backgroundColor = BrownBearTheme.Palette.cell
-        container.layer.cornerRadius = BrownBearTheme.Metrics.cellCornerRadius
-        container.layer.cornerCurve = .continuous
-
         var rows: [UIView] = []
         if state.canInteractWithPage {
             rows.append(makeRow(icon: state.isLoading ? "xmark" : "arrow.clockwise",
@@ -150,10 +176,34 @@ final class BrowserMenuViewController: UIViewController {
         if state.canInstallUserscript {
             rows.append(makeRow(icon: "arrow.down.doc", title: "Install this userscript", action: .installUserscript))
         }
-        rows.append(makeRow(icon: "bookmark", title: "Bookmarks", action: .bookmarks))
-        rows.append(makeRow(icon: "scroll", title: "Userscripts", action: .userscripts))
-        rows.append(makeRow(icon: "puzzlepiece.extension", title: "Extensions", action: .extensions))
+        guard !rows.isEmpty else { return UIView() }   // a fresh tab has no page actions
+        return cardContainer(rows: rows)
+    }
 
+    /// Userscripts, Extensions, and Bookmarks — BrownBear's headline surfaces — kept prominent in a
+    /// "Library" section near the top of the menu rather than buried beneath the page actions.
+    private func makeLibrarySection() -> UIView {
+        let header = UILabel()
+        header.text = "Library"
+        header.font = .systemFont(ofSize: 13, weight: .semibold)
+        header.textColor = BrownBearTheme.Palette.textSecondary
+        let card = cardContainer(rows: [
+            makeRow(icon: "scroll", title: "Userscripts", action: .userscripts),
+            makeRow(icon: "puzzlepiece.extension", title: "Extensions", action: .extensions),
+            makeRow(icon: "bookmark", title: "Bookmarks", action: .bookmarks)
+        ])
+        let section = UIStackView(arrangedSubviews: [header, card])
+        section.axis = .vertical
+        section.spacing = 8
+        return section
+    }
+
+    /// A rounded card wrapping a vertical list of rows with hairline separators.
+    private func cardContainer(rows: [UIView]) -> UIView {
+        let container = UIView()
+        container.backgroundColor = BrownBearTheme.Palette.cell
+        container.layer.cornerRadius = BrownBearTheme.Metrics.cellCornerRadius
+        container.layer.cornerCurve = .continuous
         let stack = UIStackView(arrangedSubviews: interleaveSeparators(rows))
         stack.axis = .vertical
         stack.spacing = 0
@@ -190,6 +240,83 @@ final class BrowserMenuViewController: UIViewController {
             }
         }
         return out
+    }
+
+    /// "On this page": the userscripts matching the active URL, each with its @icon and an inline
+    /// enable toggle (re-injection happens on the next navigation, matching the engine's behavior).
+    private func makeScriptsSection() -> UIView {
+        let header = UILabel()
+        header.text = "On this page"
+        header.font = .systemFont(ofSize: 13, weight: .semibold)
+        header.textColor = BrownBearTheme.Palette.textSecondary
+
+        let card = UIView()
+        card.backgroundColor = BrownBearTheme.Palette.cell
+        card.layer.cornerRadius = BrownBearTheme.Metrics.cellCornerRadius
+        card.layer.cornerCurve = .continuous
+
+        let rows = state.matchedScripts.map { makeScriptRow($0) }
+        let stack = UIStackView(arrangedSubviews: interleaveSeparators(rows))
+        stack.axis = .vertical
+        stack.spacing = 0
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        card.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: card.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: card.bottomAnchor),
+            stack.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: card.trailingAnchor)
+        ])
+
+        let section = UIStackView(arrangedSubviews: [header, card])
+        section.axis = .vertical
+        section.spacing = 8
+        return section
+    }
+
+    private func makeScriptRow(_ script: MenuScript) -> UIView {
+        let icon = UIImageView(image: UIImage(systemName: "scroll"))
+        icon.tintColor = BrownBearTheme.Palette.accent
+        icon.contentMode = .scaleAspectFit
+        icon.backgroundColor = BrownBearTheme.Palette.accent.withAlphaComponent(0.14)
+        icon.layer.cornerRadius = 7
+        icon.layer.cornerCurve = .continuous
+        icon.clipsToBounds = true
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([icon.widthAnchor.constraint(equalToConstant: 28),
+                                     icon.heightAnchor.constraint(equalToConstant: 28)])
+        if let iconURL = script.iconURL {
+            Task { @MainActor in
+                if let image = await ScriptIconLoader.shared.icon(forURLString: iconURL) {
+                    icon.image = image
+                    icon.contentMode = .scaleAspectFill
+                }
+            }
+        }
+
+        let name = UILabel()
+        name.text = script.name
+        name.font = .systemFont(ofSize: 15)
+        name.textColor = BrownBearTheme.Palette.textPrimary
+        name.numberOfLines = 1
+
+        let toggle = UISwitch()
+        toggle.isOn = script.enabled
+        toggle.onTintColor = BrownBearTheme.Palette.accent
+        toggle.setContentHuggingPriority(.required, for: .horizontal)
+        let id = script.id
+        toggle.addAction(UIAction { [weak self, weak toggle] _ in
+            guard let self, let toggle else { return }
+            self.delegate?.browserMenu(self, didToggleScript: id, enabled: toggle.isOn)
+        }, for: .valueChanged)
+
+        let row = UIStackView(arrangedSubviews: [icon, name, toggle])
+        row.axis = .horizontal
+        row.spacing = 12
+        row.alignment = .center
+        row.isLayoutMarginsRelativeArrangement = true
+        row.layoutMargins = UIEdgeInsets(top: 10, left: 16, bottom: 10, right: 16)
+        return row
     }
 
     // MARK: - Components
