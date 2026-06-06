@@ -16,13 +16,24 @@ import XCTest
 
 final class GMRuntimeCompatibilityTests: XCTestCase {
 
-    /// The bundled runtime source. Fails (and flags a missing resource) if it isn't in the bundle.
+    struct RuntimeNotBundled: Error {}
+
+    /// Locate the bundled runtime. The app's injection reads this same resource, so if it is
+    /// missing the app itself is broken — hence a hard failure, not a skip.
+    private func runtimeURL() -> URL? {
+        Bundle.main.url(forResource: "brownbear-runtime", withExtension: "js")
+            ?? Bundle(for: Self.self).url(forResource: "brownbear-runtime", withExtension: "js")
+    }
+
     private func runtimeSource() throws -> String {
-        guard let url = Bundle.main.url(forResource: "brownbear-runtime", withExtension: "js")
-                ?? Bundle(for: Self.self).url(forResource: "brownbear-runtime", withExtension: "js") else {
-            throw XCTSkip("brownbear-runtime.js is not bundled in this configuration")
-        }
+        guard let url = runtimeURL() else { throw RuntimeNotBundled() }
         return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    /// The injected runtime MUST be bundled into the app — otherwise userscript injection silently
+    /// does nothing. This guards that invariant (and proves the GM tests below run for real).
+    func testRuntimeIsBundled() {
+        XCTAssertNotNil(runtimeURL(), "brownbear-runtime.js must be in the app bundle")
     }
 
     /// Run `script` through the real runtime and return the GM value store it produced
