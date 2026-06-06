@@ -324,7 +324,14 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
         let desktopUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
             + "(KHTML, like Gecko) Version/17.0 Safari/605.1.15"
         webView.customUserAgent = (webView.customUserAgent == nil) ? desktopUA : nil
-        webView.reload()
+        // Re-load the current URL rather than reload(): reload() can serve from cache and doesn't
+        // reliably re-request with the just-changed customUserAgent, so the page would come back
+        // unchanged (looking like the toggle did nothing). A fresh load applies the new UA.
+        if let url = webView.url {
+            webView.load(URLRequest(url: url))
+        } else {
+            webView.reloadFromOrigin()
+        }
     }
 
     private func presentShare(for url: URL) {
