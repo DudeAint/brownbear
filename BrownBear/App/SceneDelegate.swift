@@ -20,6 +20,15 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         let window = UIWindow(windowScene: windowScene)
         window.tintColor = BrownBearTheme.Palette.accent
 
+        // Under unit tests the host app must not boot the full browser/WebKit stack — the logic
+        // tests don't need it, and doing so just couples them to app launch. Install a blank root.
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            window.rootViewController = UIViewController()
+            window.makeKeyAndVisible()
+            self.window = window
+            return
+        }
+
         let browser = BrownBearBrowserViewController()
         window.rootViewController = browser
         window.makeKeyAndVisible()

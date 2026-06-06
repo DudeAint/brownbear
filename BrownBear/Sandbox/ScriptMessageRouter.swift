@@ -73,9 +73,12 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
 
     // MARK: - WKScriptMessageHandlerWithReply
 
-    func userContentController(_ userContentController: WKUserContentController,
-                               didReceive message: WKScriptMessage,
-                               replyHandler: @escaping (Any?, String?) -> Void) {
+    // `nonisolated` to satisfy the non-isolated protocol requirement cleanly; we read the
+    // message on WebKit's delivery thread (main) and hop to the MainActor for the actual work,
+    // avoiding any actor-executor assumption mismatch.
+    nonisolated func userContentController(_ userContentController: WKUserContentController,
+                                           didReceive message: WKScriptMessage,
+                                           replyHandler: @escaping (Any?, String?) -> Void) {
         guard let body = message.body as? [String: Any],
               let api = body["api"] as? String else {
             replyHandler(nil, "malformed bridge message")
@@ -84,7 +87,7 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         let payload = body["payload"] as? [String: Any] ?? [:]
         let token = body["token"] as? String
         let frameURL = message.frameInfo.request.url
-        weak var webView = message.webView
+        let webView = message.webView
 
         Task { @MainActor in
             do {
