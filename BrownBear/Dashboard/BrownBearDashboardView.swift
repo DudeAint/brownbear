@@ -11,27 +11,36 @@ import UIKit
 
 struct BrownBearDashboardView: View {
 
+    /// The selectable dashboard sections, so callers can deep-link to a specific tab.
+    enum DashboardTab: Hashable { case scripts, logs, background, extensions }
+
     private let onClose: () -> Void
 
     @StateObject private var model = DashboardViewModel()
+    @State private var selection: DashboardTab
     @State private var addingScript = false
     @State private var urlPrompt = false
     @State private var urlText = ""
 
-    init(onClose: @escaping () -> Void = {}) {
+    init(initialTab: DashboardTab = .scripts, onClose: @escaping () -> Void = {}) {
+        self._selection = State(initialValue: initialTab)
         self.onClose = onClose
     }
 
     var body: some View {
-        TabView {
+        TabView(selection: $selection) {
             scriptsTab
                 .tabItem { Label("Scripts", systemImage: "doc.text.fill") }
+                .tag(DashboardTab.scripts)
             NavigationStack { LogsView(model: model) }
                 .tabItem { Label("Logs", systemImage: "list.bullet.rectangle.fill") }
+                .tag(DashboardTab.logs)
             NavigationStack { BackgroundMonitorView(model: model) }
                 .tabItem { Label("Background", systemImage: "clock.arrow.circlepath") }
+                .tag(DashboardTab.background)
             NavigationStack { ExtensionsView() }
                 .tabItem { Label("Extensions", systemImage: "puzzlepiece.extension.fill") }
+                .tag(DashboardTab.extensions)
         }
         .tint(BBTheme.Color.accent)
         .task { await model.load() }
@@ -135,9 +144,9 @@ struct BrownBearDashboardView: View {
 
 extension BrownBearDashboardView {
     /// Wrap the dashboard in a hosting controller wired to dismiss itself.
-    static func makeHostingController() -> UIViewController {
+    static func makeHostingController(initialTab: DashboardTab = .scripts) -> UIViewController {
         var hosting: UIHostingController<BrownBearDashboardView>?
-        let view = BrownBearDashboardView(onClose: { hosting?.dismiss(animated: true) })
+        let view = BrownBearDashboardView(initialTab: initialTab, onClose: { hosting?.dismiss(animated: true) })
         let controller = UIHostingController(rootView: view)
         controller.modalPresentationStyle = .fullScreen
         hosting = controller
