@@ -72,3 +72,10 @@ secrets.xcconfig
 # ─── Node (tooling for JS runtime build/lint, if used) ──────────────────────
 node_modules/
 npm-debug.log*
+
+# Study references cloned by scripts/fetch_references.sh (never vendored)
+.references/
+
+# XcodeGen-generated artifacts (project is defined in project.yml)
+*.xcodeproj/
+BrownBear/App/Info.plist

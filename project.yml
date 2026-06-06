@@ -1,0 +1,97 @@
+# XcodeGen project specification for BrownBear.
+# Generate the Xcode project with:  xcodegen generate   (brew install xcodegen)
+# This keeps the project definition reviewable in git instead of an opaque .pbxproj.
+
+name: BrownBear
+options:
+  bundleIdPrefix: com.brownbear
+  deploymentTarget:
+    iOS: "16.4"
+  developmentLanguage: en
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    SWIFT_VERSION: "5.8"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: NO
+    GCC_TREAT_WARNINGS_AS_ERRORS: NO
+
+packages:
+  # MIT — consumed as a dependency (used by Module 5's ScriptEditorView).
+  Runestone:
+    url: https://github.com/simonbs/Runestone.git
+    from: "0.4.0"
+
+targets:
+  BrownBear:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.4"
+    sources:
+      - path: BrownBear
+        excludes:
+          - "**/.gitkeep"
+    info:
+      path: BrownBear/App/Info.plist
+      properties:
+        CFBundleDisplayName: BrownBear
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        UILaunchStoryboardName: ""
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations:
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Default Configuration
+                UISceneDelegateClassName: $(PRODUCT_MODULE_NAME).SceneDelegate
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIBackgroundModes:
+          - fetch
+          - processing
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.brownbear.refresh
+          - com.brownbear.processing
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.brownbear.app
+        INFOPLIST_KEY_UIStatusBarStyle: UIStatusBarStyleLightContent
+        TARGETED_DEVICE_FAMILY: "1,2"
+    dependencies:
+      - package: Runestone
+
+  BrownBearTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "16.4"
+    sources:
+      - path: BrownBearTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.brownbear.app.tests
+    dependencies:
+      - target: BrownBear
+
+schemes:
+  BrownBear:
+    build:
+      targets:
+        BrownBear: all
+        BrownBearTests: [test]
+    test:
+      targets:
+        - BrownBearTests
+      gatherCoverageData: true
