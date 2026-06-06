@@ -172,28 +172,104 @@ final class BrownBearBrowserViewController: UIViewController {
 
     private func loadNewTabPage(in tab: Tab) {
         tab.delegate = self
-        tab.webView.loadHTMLString(Self.newTabHTML, baseURL: nil)
+        // Build the page from the user's bookmarks (a fast actor read), then load it.
+        Task { @MainActor in
+            let bookmarks = await BrownBearServices.shared.bookmarkStore.all()
+            tab.webView.loadHTMLString(Self.newTabHTML(bookmarks: bookmarks), baseURL: nil)
+        }
     }
 
-    /// A branded, offline New Tab page so a fresh tab never shows a blank white void.
-    private static let newTabHTML: String = """
-    <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
-    <style>
-      :root { color-scheme: light dark; }
-      html,body{height:100%;margin:0;font-family:-apple-system,system-ui,sans-serif;}
-      body{display:flex;flex-direction:column;align-items:center;justify-content:center;
-           background:radial-gradient(circle at 50% 35%, #3A2417, #14110E);color:#F5EFE7;}
-      .bear{font-size:72px;line-height:1;}
-      h1{font-size:30px;font-weight:800;margin:18px 0 4px;letter-spacing:-.5px;}
-      p{margin:0;color:#FFB454;font-size:16px;font-weight:600;}
-      small{margin-top:22px;color:#B6A99C;font-size:13px;}
-    </style></head><body>
-      <div class="bear">🐻</div>
-      <h1>BrownBear</h1>
-      <p>Userscripts &amp; Power Browser</p>
-      <small>Tap the address bar to search or enter a website.</small>
-    </body></html>
-    """
+    /// Suggested shortcut tiles shown when the user has no bookmarks yet.
+    private static let suggestedSites: [(title: String, url: String, host: String)] = [
+        ("Google", "https://www.google.com/", "www.google.com"),
+        ("YouTube", "https://www.youtube.com/", "www.youtube.com"),
+        ("Wikipedia", "https://www.wikipedia.org/", "www.wikipedia.org"),
+        ("GitHub", "https://github.com/", "github.com"),
+        ("Reddit", "https://www.reddit.com/", "www.reddit.com"),
+        ("GreasyFork", "https://greasyfork.org/", "greasyfork.org"),
+        ("Hacker News", "https://news.ycombinator.com/", "news.ycombinator.com"),
+        ("DuckDuckGo", "https://duckduckgo.com/", "duckduckgo.com")
+    ]
+
+    private static func htmlEscape(_ string: String) -> String {
+        var out = string.replacingOccurrences(of: "&", with: "&amp;")
+        out = out.replacingOccurrences(of: "<", with: "&lt;")
+        out = out.replacingOccurrences(of: ">", with: "&gt;")
+        out = out.replacingOccurrences(of: "\"", with: "&quot;")
+        out = out.replacingOccurrences(of: "'", with: "&#39;")
+        return out
+    }
+
+    /// A branded New Tab page: a search box plus shortcut tiles (the user's bookmarks, or suggested
+    /// sites when there are none). Tiles are plain `<a>` links and the search box is a plain `<form>`,
+    /// so both navigate through the normal load flow — no native bridge. First-party content; bookmark
+    /// titles/URLs are HTML-escaped and limited to http(s) before injection (the page runs untrusted-
+    /// adjacent, so we never inject raw user strings).
+    private static func newTabHTML(bookmarks: [Bookmark]) -> String {
+        let web = bookmarks.filter { ["http", "https"].contains($0.url.scheme?.lowercased() ?? "") }
+        let entries: [(title: String, url: String, host: String)] = web.isEmpty
+            ? suggestedSites
+            : web.prefix(12).map { (title: $0.displayTitle, url: $0.url.absoluteString, host: $0.url.host ?? "") }
+
+        let tiles = entries.map { entry -> String in
+            let title = htmlEscape(entry.title)
+            let url = htmlEscape(entry.url)
+            let host = htmlEscape(entry.host)
+            let letter = htmlEscape((entry.title.first.map { String($0).uppercased() }) ?? "•")
+            return """
+            <a class="tile" href="\(url)">
+            <span class="ico"><img src="https://\(host)/favicon.ico" onerror="this.remove()" alt="">
+            <span class="mono">\(letter)</span></span>
+            <span class="lbl">\(title)</span></a>
+            """
+        }.joined(separator: "\n")
+
+        return """
+        <!doctype html><html><head><meta charset="utf-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+        <style>
+          :root{color-scheme:light dark;
+            --bg:#F7F5F2;--field:#EFEAE4;--text:#1A140E;--sub:#6B6058;--accent:#E0832F;--border:#E2DBD2;}
+          @media (prefers-color-scheme:dark){:root{
+            --bg:#14110E;--field:#2A231C;--text:#F5EFE7;--sub:#B6A99C;--accent:#FFB454;--border:#322A22;}}
+          *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+          html,body{margin:0;height:100%;font-family:-apple-system,system-ui,sans-serif;
+            background:var(--bg);color:var(--text);}
+          .wrap{max-width:680px;margin:0 auto;padding:max(40px,8vh) 20px 40px;}
+          .brand{display:flex;align-items:center;gap:10px;justify-content:center;margin-bottom:26px;}
+          .brand .bear{font-size:30px;}
+          .brand h1{font-size:22px;font-weight:800;margin:0;letter-spacing:-.4px;}
+          .brand h1 b{color:var(--accent);font-weight:800;}
+          form.search{display:flex;align-items:center;gap:10px;background:var(--field);
+            border:1px solid var(--border);border-radius:16px;padding:0 14px;height:52px;
+            margin-bottom:30px;box-shadow:0 4px 16px rgba(0,0,0,.06);}
+          form.search svg{width:20px;height:20px;fill:var(--sub);flex:none;}
+          form.search input{flex:1;border:0;background:transparent;font-size:17px;color:var(--text);outline:none;}
+          .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;}
+          .tile{display:flex;flex-direction:column;align-items:center;gap:8px;
+            text-decoration:none;color:var(--text);}
+          .ico{position:relative;width:60px;height:60px;border-radius:16px;background:var(--accent);
+            display:grid;place-items:center;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.10);}
+          .ico img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
+            padding:12px;background:#fff;}
+          .ico .mono{font-size:26px;font-weight:700;color:#fff;}
+          .lbl{font-size:12px;font-weight:500;max-width:72px;white-space:nowrap;overflow:hidden;
+            text-overflow:ellipsis;text-align:center;}
+          @media (max-width:380px){.grid{grid-template-columns:repeat(3,1fr);}}
+        </style></head><body>
+          <div class="wrap">
+            <div class="brand"><span class="bear">🐻</span><h1>Brown<b>Bear</b></h1></div>
+            <form class="search" action="https://www.google.com/search" method="GET" autocomplete="off">
+              <svg viewBox="0 0 24 24"><path d="M21 20l-5.6-5.6a7 7 0 10-1.4 1.4L20 21zM5 10a5 5 0 1110 0 5 5 0 01-10 0z"/></svg>
+              <input name="q" placeholder="Search the web" autocapitalize="off" autocorrect="off" spellcheck="false">
+            </form>
+            <div class="grid">
+        \(tiles)
+            </div>
+          </div>
+        </body></html>
+        """
+    }
 }
 
 // MARK: - TabManagerDelegate

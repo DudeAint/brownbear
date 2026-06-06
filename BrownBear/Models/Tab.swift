@@ -139,7 +139,14 @@ final class Tab {
 
     private func recomputeState() {
         var next = NavigationState()
-        next.url = webView.url ?? pendingURL
+        // `loadHTMLString(baseURL: nil)` (the New Tab page) makes webView.url report "about:blank";
+        // that's not a real destination, so surface it as no-URL — the omnibox then shows its
+        // placeholder instead of the literal text "about:blank".
+        if let current = webView.url, current.absoluteString != "about:blank" {
+            next.url = current
+        } else {
+            next.url = pendingURL
+        }
         next.title = webView.title
         next.estimatedProgress = webView.estimatedProgress
         next.isLoading = webView.isLoading
