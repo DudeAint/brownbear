@@ -58,6 +58,7 @@ final class Tab {
 
     weak var delegate: TabDelegate?
 
+    private let refreshControl = UIRefreshControl()
     private var observations: [NSKeyValueObservation] = []
 
     /// The destination this tab was asked to open before its web view had a chance to load,
@@ -72,6 +73,10 @@ final class Tab {
         self.webView.scrollView.contentInsetAdjustmentBehavior = .never
         self.webView.isOpaque = false
         self.webView.backgroundColor = BrownBearTheme.Palette.background
+        // Pull-to-refresh on web content: reload on overscroll; ended when the load settles
+        // (see recomputeState). Tab isn't an NSObject, so use a UIAction rather than target-action.
+        self.webView.scrollView.refreshControl = refreshControl
+        refreshControl.addAction(UIAction { [weak self] _ in self?.reload() }, for: .valueChanged)
         installObservations()
     }
 
@@ -156,6 +161,7 @@ final class Tab {
 
         guard next != state else { return }
         state = next
+        if !next.isLoading, refreshControl.isRefreshing { refreshControl.endRefreshing() }
         delegate?.tab(self, didChange: next)
     }
 }
