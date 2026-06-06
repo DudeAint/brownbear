@@ -16,6 +16,10 @@ actor LogStore {
     private var entries: [LogEntry] = []
     private var didLoad = false
     private let fileURL: URL
+    /// Coalesces bursty appends into a single trailing-edge disk write, so a chatty (or hostile)
+    /// writer can't force a full-file re-encode + atomic write per line. In-memory reads
+    /// (`recent`/`entries(forScript:)`) are unaffected — they always see the latest `entries`.
+    private var flushTask: Task<Void, Never>?
 
     init(fileURL: URL? = nil, capacity: Int = 1000) {
         self.capacity = capacity
@@ -37,7 +41,7 @@ actor LogStore {
         if entries.count > capacity {
             entries.removeFirst(entries.count - capacity)
         }
-        persist()
+        scheduleFlush()
     }
 
     func append(_ newEntries: [LogEntry]) {
@@ -47,7 +51,7 @@ actor LogStore {
         if entries.count > capacity {
             entries.removeFirst(entries.count - capacity)
         }
-        persist()
+        scheduleFlush()
     }
 
     // MARK: - Reads
@@ -65,6 +69,8 @@ actor LogStore {
     }
 
     func clear() {
+        flushTask?.cancel()
+        flushTask = nil
         entries.removeAll()
         persist()
     }
@@ -76,6 +82,20 @@ actor LogStore {
     }
 
     // MARK: - Persistence
+
+    /// Mark dirty and persist on a trailing-edge timer, coalescing a burst of appends into one write.
+    private func scheduleFlush() {
+        guard flushTask == nil else { return }
+        flushTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            await self?.performFlush()
+        }
+    }
+
+    private func performFlush() {
+        flushTask = nil
+        persist()
+    }
 
     private func loadIfNeeded() {
         guard !didLoad else { return }

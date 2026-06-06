@@ -14,8 +14,8 @@ struct LogEntry: Codable, Identifiable, Equatable {
     enum Level: String, Codable { case debug, info, warn, error }
     enum Context: String, Codable { case foreground, background }
 
-    /// Where the line originated. `userscript` and `engine` are populated today; `page`/`iframe`
-    /// are reserved for the page-console capture (added next) and are not produced yet.
+    /// Where the line originated: `userscript` (GM_log/console from the isolated world), `page` or
+    /// `iframe` (the page's own console.*, captured per-frame), or `engine` (system/extension).
     enum Source: String, Codable { case userscript, page, iframe, engine }
 
     let id: UUID

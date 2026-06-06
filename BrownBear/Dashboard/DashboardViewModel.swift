@@ -11,13 +11,14 @@ import SwiftUI
 
 /// The Logs tab filter — All, errors/warnings only, userscript output, or page/iframe console.
 enum LogFilter: String, CaseIterable, Identifiable {
-    case all, errors, userscripts
+    case all, errors, userscripts, page
     var id: String { rawValue }
     var title: String {
         switch self {
         case .all: return "All"
         case .errors: return "Errors"
         case .userscripts: return "Userscripts"
+        case .page: return "Page"
         }
     }
 }
@@ -38,6 +39,7 @@ final class DashboardViewModel: ObservableObject {
         case .all: return recentLogs
         case .errors: return recentLogs.filter { $0.level == .error || $0.level == .warn }
         case .userscripts: return recentLogs.filter { $0.source == .userscript }
+        case .page: return recentLogs.filter { $0.source == .page || $0.source == .iframe }
         }
     }
 
