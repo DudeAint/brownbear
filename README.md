@@ -20,7 +20,7 @@
 
 <br/>
 
-[**Features**](#-features) · [**Why BrownBear**](#-why-brownbear) · [**How It Compares**](#-how-it-compares) · [**Architecture**](#-architecture) · [**Roadmap**](#-roadmap) · [**Contributing**](#-contributing)
+[**Features**](#-features) · [**Why BrownBear**](#-why-brownbear) · [**How It Compares**](#-how-it-compares) · [**Architecture**](#-architecture) · [**Contributing**](#-contributing)
 
 </div>
 
@@ -142,20 +142,6 @@ engine, a security bridge, and a background scheduler:
 ```
 
 📐 Full technical blueprint: [**ARCHITECTURE.md**](ARCHITECTURE.md)
-
----
-
-## 🗺️ Roadmap
-
-Built in five sequenced, individually-shippable modules:
-
-- [ ] **Module 1 — Browser Foundation** · multi-tab `WKWebView`, rounded omnibox, square tab grid
-- [ ] **Module 2 — Metadata Parser & Injection** · header parsing, glob→regex matcher, document-start/end injection
-- [ ] **Module 3 — Sandbox & GM Bridge** · hostile-page-safe runtime, native GM APIs, message pipeline
-- [ ] **Module 4 — Background & @crontab** · `BGTaskScheduler`, crontab evaluator, headless `JSContext`
-- [ ] **Module 5 — Dashboard & Editor** · SwiftUI manager, logs, syntax-highlighting editor
-
-Track progress in the [commit history](https://github.com/DudeAint/brownbear/commits/main) and [CHANGELOG](CHANGELOG.md).
 
 ---
 
