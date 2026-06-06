@@ -284,32 +284,33 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
     }
 
     private func presentMenu() {
-        let sheet = UIAlertController(title: "BrownBear", message: nil, preferredStyle: .actionSheet)
-        sheet.addAction(UIAlertAction(title: "Reload", style: .default) { [weak self] _ in
-            self?.tabManager.activeTab?.reload()
-        })
-        sheet.addAction(UIAlertAction(title: "New Tab", style: .default) { [weak self] _ in
-            guard let self else { return }
-            let tab = self.tabManager.createTab()
-            self.loadNewTabPage(in: tab)
-            self.refreshChrome()
-        })
-        if let url = tabManager.activeTab?.state.url {
-            if UserScriptInstaller.isUserScriptURL(url) {
-                sheet.addAction(UIAlertAction(title: "Install this userscript…", style: .default) { [weak self] _ in
-                    self?.presentScriptInstall(for: url)
-                })
-            }
-            sheet.addAction(UIAlertAction(title: "Share…", style: .default) { [weak self] _ in
-                self?.presentShare(for: url)
-            })
-        }
-        sheet.addAction(UIAlertAction(title: "Userscripts…", style: .default) { [weak self] _ in
-            self?.presentDashboard()
-        })
-        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        sheet.popoverPresentationController?.sourceView = toolbar
-        present(sheet, animated: true)
+        let tab = tabManager.activeTab
+        let state = tab?.state ?? NavigationState()
+        let url = state.url
+        let menuState = BrowserMenuState(
+            title: state.title,
+            host: state.displayHost,
+            isLoading: state.isLoading,
+            isDesktopSite: tab?.webView.customUserAgent != nil,
+            canInteractWithPage: url != nil,
+            canInstallUserscript: url.map { UserScriptInstaller.isUserScriptURL($0) } ?? false)
+        let menu = BrowserMenuViewController(state: menuState, delegate: self)
+        present(menu.wrappedForPresentation(), animated: true)
+    }
+
+    /// Present the system Find-on-Page bar for the active tab (the find interaction is enabled at
+    /// tab creation).
+    private func presentFindOnPage() {
+        installedWebView?.findInteraction?.presentFindNavigator(showingReplace: false)
+    }
+
+    /// Toggle a desktop user-agent on the active tab and reload, so a page renders its desktop site.
+    private func toggleDesktopSite() {
+        guard let webView = tabManager.activeTab?.webView else { return }
+        let desktopUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
+            + "(KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+        webView.customUserAgent = (webView.customUserAgent == nil) ? desktopUA : nil
+        webView.reload()
     }
 
     private func presentShare(for url: URL) {
@@ -465,5 +466,34 @@ extension BrownBearBrowserViewController: ScriptBridgeHost {
         tab.delegate = self
         tab.loadPendingURLIfNeeded()
         if active { refreshChrome() }
+    }
+}
+
+// MARK: - BrowserMenuDelegate (the rich "•••" menu)
+
+extension BrownBearBrowserViewController: BrowserMenuDelegate {
+    func browserMenu(_ menu: BrowserMenuViewController, didSelect action: BrowserMenuAction) {
+        switch action {
+        case .newTab:
+            let tab = tabManager.createTab()
+            loadNewTabPage(in: tab)
+            refreshChrome()
+            omnibox.beginEditing()
+        case .reloadOrStop:
+            guard let tab = tabManager.activeTab else { return }
+            if tab.state.isLoading { tab.stopLoading() } else { tab.reload() }
+        case .share:
+            if let url = tabManager.activeTab?.state.url { presentShare(for: url) }
+        case .copyLink:
+            if let url = tabManager.activeTab?.state.url { UIPasteboard.general.url = url }
+        case .findOnPage:
+            presentFindOnPage()
+        case .toggleDesktopSite:
+            toggleDesktopSite()
+        case .userscripts:
+            presentDashboard()
+        case .installUserscript:
+            if let url = tabManager.activeTab?.state.url { presentScriptInstall(for: url) }
+        }
     }
 }
