@@ -193,6 +193,38 @@ final class GMRuntimeCompatibilityTests: XCTestCase {
         XCTAssertEqual(store["captured"], "99")
     }
 
+    func testRemoteValueChangePropagation() throws {
+        // Simulate native pushing a GM value change made by the SAME script in another frame/tab
+        // (the keystone behind cross-frame/tab GM value sync): applyValueChange must update this
+        // injection's cache (so GM_getValue sees it) and fire listeners with remote = true.
+        let store = try runScript("""
+        GM_addValueChangeListener('shared', function (key, oldVal, newVal, remote) {
+          GM_setValue('capturedNew', newVal);
+          GM_setValue('capturedRemote', remote);
+        });
+        window.__brownbear.applyValueChange(JSON.stringify({ token: 'tok', key: 'shared', old: null, new: '42' }));
+        GM_setValue('readBack', GM_getValue('shared'));
+        """)
+        XCTAssertEqual(store["capturedNew"], "42")
+        XCTAssertEqual(store["capturedRemote"], "true")
+        XCTAssertEqual(store["readBack"], "42")
+    }
+
+    func testRemoteValueDeletePropagation() throws {
+        let store = try runScript("""
+        GM_setValue('shared', 7);
+        GM_addValueChangeListener('shared', function (key, oldVal, newVal, remote) {
+          GM_setValue('deletedRemote', remote);
+          GM_setValue('newIsUndefined', newVal === undefined);
+        });
+        window.__brownbear.applyValueChange(JSON.stringify({ token: 'tok', key: 'shared', old: '7', new: null }));
+        GM_setValue('readBackAfterDelete', GM_getValue('shared', 'MISSING'));
+        """)
+        XCTAssertEqual(store["deletedRemote"], "true")
+        XCTAssertEqual(store["newIsUndefined"], "true")
+        XCTAssertEqual(store["readBackAfterDelete"], "\"MISSING\"")
+    }
+
     func testAsyncGMPromises() throws {
         let store = try runScript("""
         GM.setValue('a', 7).then(function () { return GM.getValue('a'); })

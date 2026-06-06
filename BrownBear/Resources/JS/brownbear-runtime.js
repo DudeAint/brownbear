@@ -47,6 +47,11 @@
     }
   }
 
+  // token → { cache, fire } for each running script, so native can push a value change made in
+  // ANOTHER frame or tab running the SAME script into this one's cache + listeners in real time
+  // (GM value propagation — ScriptCat/Tampermonkey parity). Keyed by the per-injection token.
+  var valueEnvByToken = _Object.create(null);
+
   // --- GM_xmlhttpRequest streaming ------------------------------------------------------------
   var xhrCallbacks = _Object.create(null);
 
@@ -249,6 +254,10 @@
       return listenerCounter;
     }
     function GM_removeValueChangeListener(id) { delete valueListeners[id]; }
+
+    // Register this script's value environment so native can deliver remote changes (see
+    // valueEnvByToken). The cache + fireValueChange are this script's own, so isolation holds.
+    valueEnvByToken[token] = { cache: cache, fire: fireValueChange };
 
     function GM_getValue(key, dflt) {
       if (key in cache) { try { return _JSON.parse(cache[key]); } catch (e) { return dflt; } }
@@ -457,8 +466,27 @@
       });
   }
 
-  // Only dispatchXHR is exposed; bridge/getScripts/run remain private to this closure.
-  W.__brownbear = { dispatchXHR: dispatchXHR };
+  // Apply a value change native forwarded from another frame/tab running the same script. The
+  // payload is a JSON string: { token, key, old, new } where old/new are JSON-encoded values
+  // (new === null means the key was deleted; a value set to JSON null arrives as the string "null").
+  function applyRemoteValueChange(payloadJSON) {
+    var p = safeParse(payloadJSON);
+    if (!p || typeof p.token !== "string") { return; }
+    var env = valueEnvByToken[p.token];
+    if (!env) { return; }
+    var oldVal = (p.old == null) ? undefined : safeParse(p.old);
+    if (p.new == null) {
+      delete env.cache[p.key];
+      env.fire(p.key, oldVal, undefined, true);
+    } else {
+      env.cache[p.key] = p.new;
+      env.fire(p.key, oldVal, safeParse(p.new), true);
+    }
+  }
+
+  // Only these are exposed; bridge/getScripts/run remain private to this closure. applyValueChange
+  // is reachable from native (in this isolated world) to deliver cross-frame/tab value changes.
+  W.__brownbear = { dispatchXHR: dispatchXHR, applyValueChange: applyRemoteValueChange };
 
   loadAndRun();
 })();

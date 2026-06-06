@@ -14,3 +14,11 @@ void BBEvaluateJavaScript(WKWebView *webView, NSString *script, WKContentWorld *
                  inContentWorld:world
               completionHandler:nil];
 }
+
+void BBEvaluateJavaScriptInFrame(WKWebView *webView, NSString *script,
+                                 WKFrameInfo *_Nullable frame, WKContentWorld *world) {
+    [webView evaluateJavaScript:script
+                        inFrame:frame
+                 inContentWorld:world
+              completionHandler:nil];
+}

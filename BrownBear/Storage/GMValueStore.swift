@@ -51,6 +51,50 @@ actor GMValueStore {
         map(for: scriptID)
     }
 
+    // MARK: - Atomic read-modify (for change broadcasting)
+
+    /// Atomically read the prior value, write the new one, and return the old — so a caller can
+    /// broadcast a value-change event whose `old` is EXACTLY the value it replaced, even when two
+    /// frames/tabs of the same script write the same key concurrently (no read-then-write race).
+    @discardableResult
+    func setValueReturningOld(scriptID: UUID, key: String, jsonValue: String) -> String? {
+        var values = map(for: scriptID)
+        let old = values[key]
+        values[key] = jsonValue
+        commit(values, for: scriptID)
+        return old
+    }
+
+    @discardableResult
+    func deleteValueReturningOld(scriptID: UUID, key: String) -> String? {
+        var values = map(for: scriptID)
+        let old = values.removeValue(forKey: key)
+        commit(values, for: scriptID)
+        return old
+    }
+
+    /// Atomic batch set; returns each key with the value it replaced (nil = was unset).
+    @discardableResult
+    func setValuesReturningOld(scriptID: UUID, entries: [String: String]) -> [(key: String, old: String?)] {
+        var values = map(for: scriptID)
+        var olds: [(key: String, old: String?)] = []
+        for (key, json) in entries {
+            olds.append((key, values[key]))
+            values[key] = json
+        }
+        commit(values, for: scriptID)
+        return olds
+    }
+
+    @discardableResult
+    func deleteValuesReturningOld(scriptID: UUID, keys: [String]) -> [(key: String, old: String?)] {
+        var values = map(for: scriptID)
+        var olds: [(key: String, old: String?)] = []
+        for key in keys { olds.append((key, values.removeValue(forKey: key))) }
+        commit(values, for: scriptID)
+        return olds
+    }
+
     // MARK: - Batch
 
     func setValues(scriptID: UUID, entries: [String: String]) {

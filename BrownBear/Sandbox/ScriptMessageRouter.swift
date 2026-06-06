@@ -39,6 +39,10 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         let connects: [String]
         /// URLs the script declared via @require / @resource — the only URLs fetchResource serves.
         var assetURLs: Set<String> = []
+        /// The web view + frame this injection lives in, so native can push GM value changes made by
+        /// the SAME script in another frame/tab into this one's content world (weak: don't pin a tab).
+        weak var webView: WKWebView?
+        var frameInfo: WKFrameInfo?
     }
 
     private let scriptStore: ScriptStore
@@ -100,7 +104,8 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         }
         let payload = body["payload"] as? [String: Any] ?? [:]
         let token = body["token"] as? String
-        let frameURL = message.frameInfo.request.url
+        let frameInfo = message.frameInfo
+        let frameURL = frameInfo.request.url
         let webView = message.webView
 
         Task { @MainActor in
@@ -109,6 +114,7 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
                                                   payload: payload,
                                                   token: token,
                                                   frameURL: frameURL,
+                                                  frameInfo: frameInfo,
                                                   webView: webView)
                 replyHandler(result, nil)
             } catch let error as BrownBearError {
@@ -125,10 +131,11 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
                        payload: [String: Any],
                        token: String?,
                        frameURL: URL?,
+                       frameInfo: WKFrameInfo?,
                        webView: WKWebView?) async throws -> Any? {
         // getScripts is the loader's privilege; it needs no token and mints them.
         if api == "getScripts" {
-            return try await handleGetScripts(payload: payload)
+            return try await handleGetScripts(payload: payload, webView: webView, frameInfo: frameInfo)
         }
         // GM_abortRequest only cancels the caller's own request by id — safe without a grant.
         if api == "GM_abortRequest" {
@@ -149,12 +156,14 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
             guard let key = payload["key"] as? String, let json = payload["value"] as? String else {
                 throw BrownBearError.bridgeRejected("missing key/value")
             }
-            await valueStore.setValue(scriptID: session.id, key: key, jsonValue: json)
+            let old = await valueStore.setValueReturningOld(scriptID: session.id, key: key, jsonValue: json)
+            broadcastValueChanges(scriptID: session.id, originToken: token, changes: [(key, old, json)])
             return NSNull()
 
         case "GM_deleteValue":
             guard let key = payload["key"] as? String else { throw BrownBearError.bridgeRejected("missing key") }
-            await valueStore.deleteValue(scriptID: session.id, key: key)
+            let old = await valueStore.deleteValueReturningOld(scriptID: session.id, key: key)
+            broadcastValueChanges(scriptID: session.id, originToken: token, changes: [(key, old, nil)])
             return NSNull()
 
         case "GM_listValues":
@@ -164,12 +173,16 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
             guard let entries = payload["values"] as? [String: String] else {
                 throw BrownBearError.bridgeRejected("missing values")
             }
-            await valueStore.setValues(scriptID: session.id, entries: entries)
+            let olds = await valueStore.setValuesReturningOld(scriptID: session.id, entries: entries)
+            let changes = olds.map { (key: $0.key, old: $0.old, new: entries[$0.key]) }
+            broadcastValueChanges(scriptID: session.id, originToken: token, changes: changes)
             return NSNull()
 
         case "GM_deleteValues":
             guard let keys = payload["keys"] as? [String] else { throw BrownBearError.bridgeRejected("missing keys") }
-            await valueStore.deleteValues(scriptID: session.id, keys: keys)
+            let olds = await valueStore.deleteValuesReturningOld(scriptID: session.id, keys: keys)
+            let changes = olds.map { (key: $0.key, old: $0.old, new: String?.none) }
+            broadcastValueChanges(scriptID: session.id, originToken: token, changes: changes)
             return NSNull()
 
         case "GM_setClipboard":
@@ -246,14 +259,74 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         return session
     }
 
-    /// Insert a session, evicting the oldest token once the map exceeds `maxSessions`.
+    /// Insert a session, evicting once the map exceeds `maxSessions`. Prefer dropping a DEAD session
+    /// (its web view deallocated) over a live one, so the cap can't sever an in-use script's
+    /// identity/grants mid-run.
     private func registerSession(token: String, session: ScriptSession) {
         sessions[token] = session
         tokenOrder.append(token)
-        if tokenOrder.count > Self.maxSessions {
+        guard tokenOrder.count > Self.maxSessions else { return }
+        if let deadIndex = tokenOrder.firstIndex(where: { sessions[$0]?.webView == nil }) {
+            let evicted = tokenOrder.remove(at: deadIndex)
+            sessions.removeValue(forKey: evicted)
+        } else {
             let evicted = tokenOrder.removeFirst()
             sessions.removeValue(forKey: evicted)
         }
+    }
+
+    /// Drop every session for a web view — called when its main frame (re)loads, so stale tokens
+    /// from the prior page (and their now-defunct frames) don't linger or receive value broadcasts.
+    private func purgeSessions(for webView: WKWebView) {
+        let stale = Set(sessions.compactMap { $0.value.webView === webView ? $0.key : nil })
+        guard !stale.isEmpty else { return }
+        for token in stale { sessions.removeValue(forKey: token) }
+        tokenOrder.removeAll { stale.contains($0) }
+    }
+
+    // MARK: - GM value propagation (cross-frame + cross-tab, ScriptCat parity)
+
+    /// Push value changes into every OTHER live injection of the same script — its instances in
+    /// other frames (iframes) and other tabs — so GM_getValue and GM_addValueChangeListener stay in
+    /// sync in real time, with `remote = true` on the far side. `old`/`new` are JSON-encoded value
+    /// strings; `new == nil` means the key was deleted.
+    private func broadcastValueChanges(scriptID: UUID,
+                                       originToken: String?,
+                                       changes: [(key: String, old: String?, new: String?)]) {
+        guard !changes.isEmpty else { return }
+        for (token, target) in sessions where target.id == scriptID && token != originToken {
+            guard let webView = target.webView else { continue }
+            for change in changes {
+                var payload: [String: Any] = ["token": token, "key": change.key]
+                payload["old"] = change.old ?? NSNull()
+                payload["new"] = change.new ?? NSNull()
+                guard let data = try? JSONSerialization.data(withJSONObject: payload),
+                      let json = String(data: data, encoding: .utf8) else { continue }
+                let js = "window.__brownbear&&window.__brownbear.applyValueChange('\(Self.escapeForJSStringLiteral(json))');"
+                // Via the ObjC shim, into the EXACT frame this injection runs in (iframe-aware).
+                BBEvaluateJavaScriptInFrame(webView, js, target.frameInfo, contentWorld)
+            }
+        }
+    }
+
+    /// Escape a string for embedding inside a single-quoted JS string literal. JSON uses double
+    /// quotes, but a value may contain `'`, `\`, or the U+2028/U+2029 line terminators that are
+    /// legal in JSON yet break a JS literal.
+    static func escapeForJSStringLiteral(_ string: String) -> String {
+        var out = ""
+        out.reserveCapacity(string.count + 8)
+        for scalar in string.unicodeScalars {
+            switch scalar {
+            case "\\": out += "\\\\"
+            case "'": out += "\\'"
+            case "\n": out += "\\n"
+            case "\r": out += "\\r"
+            case "\u{2028}": out += "\\u2028"
+            case "\u{2029}": out += "\\u2029"
+            default: out.unicodeScalars.append(scalar)
+            }
+        }
+        return out
     }
 
     private func ensureGranted(api: String, session: ScriptSession) throws {
@@ -265,11 +338,16 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
 
     // MARK: - getScripts
 
-    private func handleGetScripts(payload: [String: Any]) async throws -> [[String: Any]] {
+    private func handleGetScripts(payload: [String: Any],
+                                  webView: WKWebView?,
+                                  frameInfo: WKFrameInfo?) async throws -> [[String: Any]] {
         guard let urlString = payload["url"] as? String else {
             throw BrownBearError.bridgeRejected("missing url")
         }
         let isSubframe = (payload["isSubframe"] as? Bool) ?? false
+        // The main frame loading means a new page (or a reload) — reap the web view's prior tokens so
+        // they don't accumulate or get targeted by value broadcasts after their frames are gone.
+        if !isSubframe, let webView { purgeSessions(for: webView) }
         let scripts = await scriptStore.enabledScripts()
         var result: [[String: Any]] = []
         for script in scripts {
@@ -286,7 +364,9 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
                                                    name: meta.displayName,
                                                    grants: Set(meta.effectiveGrants),
                                                    connects: meta.connects,
-                                                   assetURLs: assetURLs))
+                                                   assetURLs: assetURLs,
+                                                   webView: webView,
+                                                   frameInfo: frameInfo))
             let values = await valueStore.snapshot(scriptID: script.id)
             result.append(Self.scriptPayload(script, token: token, values: values))
         }
