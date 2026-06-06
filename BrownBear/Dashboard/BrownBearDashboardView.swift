@@ -17,7 +17,6 @@ struct BrownBearDashboardView: View {
     @State private var addingScript = false
     @State private var urlPrompt = false
     @State private var urlText = ""
-    @State private var installFromURL: IdentifiableURL?
 
     init(onClose: @escaping () -> Void = {}) {
         self.onClose = onClose
@@ -107,12 +106,6 @@ struct BrownBearDashboardView: View {
             } message: {
                 Text("Paste a link to a userscript (a .user.js file). You'll see what it does before installing.")
             }
-            .sheet(item: $installFromURL) { item in
-                ScriptInstallView(url: item.url, onClose: {
-                    installFromURL = nil
-                    Task { await model.load() }
-                })
-            }
         }
     }
 
@@ -124,7 +117,9 @@ struct BrownBearDashboardView: View {
             model.errorMessage = "That doesn't look like a valid http(s) URL."
             return
         }
-        installFromURL = IdentifiableURL(url: url)
+        // Present the programmatic-UIKit install card; reload the list when it finishes.
+        let installer = ScriptInstallViewController(url: url, onFinished: { Task { @MainActor in await model.load() } })
+        TopViewControllerPresenter.present(installer.wrappedForPresentation())
     }
 
     private func importFromClipboard() {
