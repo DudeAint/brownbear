@@ -70,9 +70,12 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.brownbear.app
         INFOPLIST_KEY_UIStatusBarStyle: UIStatusBarStyleLightContent
         TARGETED_DEVICE_FAMILY: "1,2"
-        # Include /usr/lib/swift so the back-deployed Swift overlays for system frameworks
-        # (e.g. libswiftWebKit.dylib, pulled in by WKContentWorld/WKScriptMessageHandlerWithReply)
-        # resolve at launch on the deployment target.
+        # The Swift WebKit overlay (libswiftWebKit.dylib, pulled in by the Swift-refined
+        # WKContentWorld/evaluateJavaScript APIs) is not present in the iOS 18 sim runtime, so for
+        # a 16.4 deployment target it must be EMBEDDED into the app's Frameworks/ via
+        # swift-stdlib-tool. Without this the host app aborts at launch with DYLD 'Library not
+        # loaded: /usr/lib/swift/libswiftWebKit.dylib' (diagnosed from the crash report).
+        ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: "YES"
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks /usr/lib/swift"
     dependencies:
       - package: Runestone
