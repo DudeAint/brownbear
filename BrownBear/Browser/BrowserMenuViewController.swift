@@ -19,6 +19,7 @@ enum BrowserMenuAction {
     case findOnPage
     case toggleDesktopSite
     case userscripts
+    case extensions
     case installUserscript
 }
 
@@ -144,6 +145,7 @@ final class BrowserMenuViewController: UIViewController {
             rows.append(makeRow(icon: "arrow.down.doc", title: "Install this userscript", action: .installUserscript))
         }
         rows.append(makeRow(icon: "scroll", title: "Userscripts", action: .userscripts))
+        rows.append(makeRow(icon: "puzzlepiece.extension", title: "Extensions", action: .extensions))
 
         let stack = UIStackView(arrangedSubviews: interleaveSeparators(rows))
         stack.axis = .vertical

@@ -319,8 +319,8 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
         present(share, animated: true)
     }
 
-    private func presentDashboard() {
-        present(BrownBearDashboardView.makeHostingController(), animated: true)
+    private func presentDashboard(initialTab: BrownBearDashboardView.DashboardTab = .scripts) {
+        present(BrownBearDashboardView.makeHostingController(initialTab: initialTab), animated: true)
     }
 
     private func presentError(_ error: Error) {
@@ -491,7 +491,9 @@ extension BrownBearBrowserViewController: BrowserMenuDelegate {
         case .toggleDesktopSite:
             toggleDesktopSite()
         case .userscripts:
-            presentDashboard()
+            presentDashboard(initialTab: .scripts)
+        case .extensions:
+            presentDashboard(initialTab: .extensions)
         case .installUserscript:
             if let url = tabManager.activeTab?.state.url { presentScriptInstall(for: url) }
         }
