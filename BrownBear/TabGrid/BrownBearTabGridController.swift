@@ -28,6 +28,10 @@ final class BrownBearTabGridController: UIViewController {
     private let doneButton = UIButton(type: .system)
     private let closeAllButton = UIButton(type: .system)
     private let newTabButton = UIButton(type: .system)
+    private let searchBar = UISearchBar()
+
+    /// Live tab-search text; filters the visible cards by title + host.
+    private var searchText = ""
 
     /// Which set the grid is showing. Private mode is only reachable once a private tab exists or the
     /// user explicitly switches to it; it persists while the grid is open.
@@ -164,11 +168,24 @@ final class BrownBearTabGridController: UIViewController {
         newTabButton.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(newTabButton)
 
+        // Tab search (Safari/Firefox tab-tray search): filters the grid by title + host as you type.
+        searchBar.delegate = self
+        searchBar.placeholder = "Search tabs"
+        searchBar.searchBarStyle = .minimal
+        searchBar.autocapitalizationType = .none
+        searchBar.autocorrectionType = .no
+        searchBar.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(searchBar)
+
         let guide = view.safeAreaLayoutGuide
         NSLayoutConstraint.activate([
+            searchBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
+            searchBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
+            searchBar.topAnchor.constraint(equalTo: header.bottomAnchor),
+
             collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            collectionView.topAnchor.constraint(equalTo: header.bottomAnchor),
+            collectionView.topAnchor.constraint(equalTo: searchBar.bottomAnchor),
             collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
             newTabButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
@@ -210,10 +227,20 @@ final class BrownBearTabGridController: UIViewController {
         }
     }
 
+    /// The tabs actually shown: the current mode's tabs, narrowed by the search text (title + host).
+    private var visibleTabs: [Tab] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return displayedTabs }
+        return displayedTabs.filter { tab in
+            tab.state.displayTitle.lowercased().contains(query)
+                || (tab.state.url?.host?.lowercased().contains(query) ?? false)
+        }
+    }
+
     private func applySnapshot(animatingDifferences: Bool) {
         var snapshot = NSDiffableDataSourceSnapshot<Int, UUID>()
         snapshot.appendSections([0])
-        snapshot.appendItems(displayedTabs.map(\.id), toSection: 0)
+        snapshot.appendItems(visibleTabs.map(\.id), toSection: 0)
         dataSource.apply(snapshot, animatingDifferences: animatingDifferences)
     }
 
@@ -343,5 +370,18 @@ extension BrownBearTabGridController: UICollectionViewDelegate {
             activity.popoverPresentationController?.sourceRect = cell.bounds
         }
         present(activity, animated: true)
+    }
+}
+
+// MARK: - UISearchBarDelegate
+
+extension BrownBearTabGridController: UISearchBarDelegate {
+    func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) {
+        self.searchText = searchText
+        applySnapshot(animatingDifferences: true)
+    }
+
+    func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
+        searchBar.resignFirstResponder()
     }
 }
