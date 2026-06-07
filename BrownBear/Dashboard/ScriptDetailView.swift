@@ -17,9 +17,15 @@ struct ScriptDetailView: View {
     @State private var logs: [LogEntry] = []
     @State private var editing = false
     @State private var confirmingDelete = false
+    @State private var storedValues: [(key: String, value: String)] = []
+    @State private var editingKey: String?
+    @State private var editingText = ""
+    @State private var valueError: String?
 
     private var meta: ScriptMetadata { script.metadata }
     private var current: UserScript { model.scripts.first { $0.id == script.id } ?? script }
+
+    private var valueStore: GMValueStore { BrownBearServices.shared.valueStore }
 
     var body: some View {
         ScrollView {
@@ -27,6 +33,7 @@ struct ScriptDetailView: View {
                 headerCard
                 if meta.runsInBackground { scheduleCard }
                 directivesCard
+                storedValuesCard
                 logsCard
                 deleteButton
             }
@@ -43,7 +50,30 @@ struct ScriptDetailView: View {
         .sheet(isPresented: $editing) {
             ScriptEditorScreen(model: model, existing: current)
         }
-        .task { logs = await model.logs(for: script.id) }
+        .alert("Edit value", isPresented: Binding(
+            get: { editingKey != nil },
+            set: { if !$0 { editingKey = nil } }
+        )) {
+            TextField("JSON value", text: $editingText)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            Button("Save") { saveEditedValue() }
+            Button("Cancel", role: .cancel) { editingKey = nil }
+        } message: {
+            Text(editingKey.map(editMessage) ?? "")
+        }
+        .alert("Invalid JSON", isPresented: Binding(
+            get: { valueError != nil },
+            set: { if !$0 { valueError = nil } }
+        )) {
+            Button("OK") { valueError = nil }
+        } message: {
+            Text(valueError ?? "")
+        }
+        .task {
+            logs = await model.logs(for: script.id)
+            await reloadStoredValues()
+        }
     }
 
     private var headerCard: some View {
@@ -117,6 +147,93 @@ struct ScriptDetailView: View {
                 ForEach(values, id: \.self) { BBPill($0) }
             }
         }
+    }
+
+    /// GM_setValue storage inspector — view/edit/delete the script's namespaced values, the
+    /// Tampermonkey "Storage" tab that's indispensable for debugging a script whose state is wrong.
+    private var storedValuesCard: some View {
+        BBCard {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Label("Stored values", systemImage: "externaldrive")
+                        .font(.subheadline.weight(.semibold)).foregroundStyle(BBTheme.Color.textPrimary)
+                    Spacer()
+                    if !storedValues.isEmpty {
+                        Text("\(storedValues.count)")
+                            .font(.caption).foregroundStyle(BBTheme.Color.textSecondary)
+                    }
+                }
+                if storedValues.isEmpty {
+                    Text("This script hasn't stored any values with GM_setValue.")
+                        .font(.caption).foregroundStyle(BBTheme.Color.textSecondary)
+                } else {
+                    ForEach(storedValues, id: \.key) { entry in
+                        storedValueRow(key: entry.key, value: entry.value)
+                        if entry.key != storedValues.last?.key {
+                            Divider().overlay(BBTheme.Color.separator.opacity(0.5))
+                        }
+                    }
+                    Button(role: .destructive) {
+                        Task { await valueStore.clear(scriptID: script.id); await reloadStoredValues() }
+                    } label: {
+                        Label("Clear all values", systemImage: "trash").font(.caption.weight(.semibold))
+                    }
+                    .tint(BBTheme.Color.destructive)
+                    .padding(.top, 2)
+                }
+            }
+        }
+    }
+
+    private func storedValueRow(key: String, value: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(key).font(.caption.weight(.semibold)).foregroundStyle(BBTheme.Color.textPrimary)
+                Text(value).font(.caption2.monospaced()).foregroundStyle(BBTheme.Color.textSecondary)
+                    .lineLimit(3).textSelection(.enabled)
+            }
+            Spacer(minLength: 8)
+            Menu {
+                Button { beginEditing(key: key, value: value) } label: { Label("Edit", systemImage: "pencil") }
+                Button(role: .destructive) {
+                    Task { await valueStore.deleteValue(scriptID: script.id, key: key); await reloadStoredValues() }
+                } label: { Label("Delete", systemImage: "trash") }
+            } label: {
+                Image(systemName: "ellipsis").foregroundStyle(BBTheme.Color.textSecondary).padding(.vertical, 2)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func beginEditing(key: String, value: String) {
+        editingText = value
+        editingKey = key
+    }
+
+    private func editMessage(for key: String) -> String {
+        "Stored under “\(key)”. Enter a valid JSON value — a quoted string, number, boolean, or object."
+    }
+
+    /// Validate the edited text as JSON (fragments allowed, matching how GM_setValue serializes) and
+    /// persist it. Reject invalid JSON so the store never holds a value the sandbox can't parse back.
+    private func saveEditedValue() {
+        guard let key = editingKey else { return }
+        editingKey = nil
+        let trimmed = editingText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = trimmed.data(using: .utf8),
+              (try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])) != nil else {
+            valueError = "“\(trimmed)” isn't valid JSON. Wrap strings in quotes, e.g. \"hello\"."
+            return
+        }
+        Task {
+            await valueStore.setValue(scriptID: script.id, key: key, jsonValue: trimmed)
+            await reloadStoredValues()
+        }
+    }
+
+    private func reloadStoredValues() async {
+        let snapshot = await valueStore.snapshot(scriptID: script.id)
+        storedValues = snapshot.sorted { $0.key < $1.key }.map { (key: $0.key, value: $0.value) }
     }
 
     private var logsCard: some View {
