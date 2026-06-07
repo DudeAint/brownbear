@@ -137,6 +137,12 @@ final class BrownBearTabGridController: UIViewController {
         collectionView.backgroundColor = .clear
         collectionView.alwaysBounceVertical = true
         collectionView.delegate = self
+        // Drag-to-reorder (Safari/Files style). Drag & drop coexists with the cells' long-press
+        // context menu — UIKit disambiguates hold-still (menu) from lift-and-move (drag) — whereas an
+        // interactive-movement long-press recognizer would fight the menu's gesture.
+        collectionView.dragInteractionEnabled = true
+        collectionView.dragDelegate = self
+        collectionView.dropDelegate = self
         collectionView.register(TabGridCell.self, forCellWithReuseIdentifier: TabGridCell.reuseID)
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(collectionView)
@@ -404,5 +410,52 @@ extension BrownBearTabGridController: UISearchBarDelegate {
 
     func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
         searchBar.resignFirstResponder()
+    }
+}
+
+// MARK: - Drag & drop reorder
+
+extension BrownBearTabGridController: UICollectionViewDragDelegate, UICollectionViewDropDelegate {
+
+    func collectionView(_ collectionView: UICollectionView,
+                        itemsForBeginning session: UIDragSession,
+                        at indexPath: IndexPath) -> [UIDragItem] {
+        // Reordering a filtered subset is ambiguous, so drags are disabled while a search is active.
+        guard searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let id = dataSource.itemIdentifier(for: indexPath) else { return [] }
+        let item = UIDragItem(itemProvider: NSItemProvider(object: id.uuidString as NSString))
+        item.localObject = id
+        return [item]
+    }
+
+    func collectionView(_ collectionView: UICollectionView,
+                        dropSessionDidUpdate session: UIDropSession,
+                        withDestinationIndexPath destinationIndexPath: IndexPath?)
+    -> UICollectionViewDropProposal {
+        // Only our own in-grid reorder; reject anything dragged in from outside the app.
+        guard session.localDragSession != nil else {
+            return UICollectionViewDropProposal(operation: .forbidden)
+        }
+        return UICollectionViewDropProposal(operation: .move, intent: .insertAtDestinationIndexPath)
+    }
+
+    func collectionView(_ collectionView: UICollectionView,
+                        performDropWith coordinator: UICollectionViewDropCoordinator) {
+        guard coordinator.proposal.operation == .move,
+              let item = coordinator.items.first,
+              let sourceID = item.dragItem.localObject as? UUID else { return }
+
+        var ids = dataSource.snapshot().itemIdentifiers(inSection: 0)
+        guard let from = ids.firstIndex(of: sourceID) else { return }
+        let destination = coordinator.destinationIndexPath?.item ?? ids.count
+        ids.remove(at: from)
+        ids.insert(sourceID, at: min(max(0, destination), ids.count))
+
+        // Commit the new order to the model, then rebuild the grid from that single source of truth.
+        tabManager.reorderTabs(toMatch: ids)
+        applySnapshot(animatingDifferences: true)
+
+        let landedIndex = ids.firstIndex(of: sourceID) ?? destination
+        coordinator.drop(item.dragItem, toItemAt: IndexPath(item: landedIndex, section: 0))
     }
 }
