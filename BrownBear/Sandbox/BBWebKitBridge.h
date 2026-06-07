@@ -24,4 +24,11 @@ void BBEvaluateJavaScript(WKWebView *webView, NSString *script, WKContentWorld *
 void BBEvaluateJavaScriptInFrame(WKWebView *webView, NSString *script,
                                  WKFrameInfo *_Nullable frame, WKContentWorld *world);
 
+/// Evaluate `script` in the main frame and return its result (or error) via `completion`, called on
+/// the main thread. Used by Reader mode to pull the extracted-article object back from the page.
+/// Still routed through the Objective-C method, so no Swift WebKit overlay is linked.
+void BBEvaluateJavaScriptForResult(WKWebView *webView, NSString *script, WKContentWorld *world,
+                                   void (^_Nullable completion)(id _Nullable result,
+                                                                NSError *_Nullable error));
+
 NS_ASSUME_NONNULL_END

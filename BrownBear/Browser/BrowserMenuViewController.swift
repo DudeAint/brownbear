@@ -25,6 +25,7 @@ enum BrowserMenuAction {
     case history
     case downloads
     case settings
+    case reader
 }
 
 /// A snapshot of the active tab the menu renders against.
@@ -176,6 +177,7 @@ final class BrowserMenuViewController: UIViewController {
                                 title: state.isBookmarked ? "Remove Bookmark" : "Add Bookmark",
                                 action: .toggleBookmark))
             rows.append(makeRow(icon: "link", title: "Copy Link", action: .copyLink))
+            rows.append(makeRow(icon: "doc.plaintext", title: "Reader", action: .reader))
         }
         if state.canInstallUserscript {
             rows.append(makeRow(icon: "arrow.down.doc", title: "Install this userscript", action: .installUserscript))
