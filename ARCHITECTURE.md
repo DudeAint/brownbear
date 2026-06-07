@@ -92,7 +92,11 @@ per-script settings.
 - One `WKScriptMessageHandler` named `brownbear` receives `{id, api, payload}` envelopes and
   replies by evaluating a resolver keyed on `id` (request/response correlation).
 - Native GM handlers:
-  - `GM_xmlhttpRequest` → `URLSession` (CORS-free), enforcing the script's `@connect` allowlist.
+  - `GM_xmlhttpRequest` → `URLSession` (CORS-free), enforcing the script's `@connect` allowlist. A
+    request to an **undeclared** host raises a ScriptCat-style prompt ("«script» wants to connect to
+    «host»"); Allow persists an always-allow for that script (`ConnectGrantStore`), Block denies and
+    logs. Redirects to an undeclared+ungranted host are blocked mid-flight (never prompted). Declared
+    hosts proceed silently; grants are revocable per host in Script detail. Fail-closed by default.
   - `GM_setValue/getValue/deleteValue/listValues` → `GMValueStore`, namespaced by script UUID.
   - `GM_addStyle`, `GM_setClipboard`, `GM_openInTab`, `GM_notification`, `GM_log`.
 - Every inbound message is validated (shape, types, bounds) before any native effect.

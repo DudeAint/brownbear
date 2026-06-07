@@ -50,7 +50,13 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
     private let network: GMNetworkService
     private let logStore: LogStore
     private let contentWorld: WKContentWorld
+    /// Per-script user grants for hosts not in `@connect` (ScriptCat-style allow-always).
+    private let grantStore: ConnectGrantStore
     weak var host: ScriptBridgeHost?
+
+    /// In-flight @connect prompts keyed by "scriptID|host", so a script firing many requests to the
+    /// same undeclared host shows ONE alert and the rest await its decision instead of stacking.
+    private var pendingGrantDecisions: [String: Task<Bool, Never>] = [:]
 
     /// Cap a single forwarded log line so a runaway script can't bloat the on-disk log.
     private static let maxLogMessageLength = 8192
@@ -81,12 +87,14 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
          valueStore: GMValueStore,
          network: GMNetworkService,
          logStore: LogStore,
-         contentWorld: WKContentWorld) {
+         contentWorld: WKContentWorld,
+         grantStore: ConnectGrantStore = BrownBearServices.shared.connectGrantStore) {
         self.scriptStore = scriptStore
         self.valueStore = valueStore
         self.network = network
         self.logStore = logStore
         self.contentWorld = contentWorld
+        self.grantStore = grantStore
     }
 
     // MARK: - WKScriptMessageHandlerWithReply
@@ -215,7 +223,7 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
             return NSNull()
 
         case "GM_xmlhttpRequest":
-            try handleXHR(payload: payload, session: session, frameURL: frameURL, webView: webView)
+            try await handleXHR(payload: payload, session: session, frameURL: frameURL, webView: webView)
             return NSNull()
 
         case "fetchResource":
@@ -415,17 +423,17 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
     private func handleXHR(payload: [String: Any],
                            session: ScriptSession,
                            frameURL: URL?,
-                           webView: WKWebView?) throws {
+                           webView: WKWebView?) async throws {
         guard let requestID = payload["requestId"] as? String,
               let request = payload["request"] as? [String: Any] else {
             throw BrownBearError.bridgeRejected("malformed xhr")
         }
-        let connects = session.connects
+        let declared = session.connects
         let pageHost = frameURL?.host
         let world = contentWorld
         weak var weakWebView = webView
 
-        network.start(requestID: requestID, payload: request, connects: connects, pageHost: pageHost) { eventType, eventPayload in
+        let emit: (String, [String: Any]) -> Void = { eventType, eventPayload in
             // Network events arrive on a background queue; deliver to JS on main IN ORDER.
             let args: [Any] = [requestID, eventType, eventPayload]
             guard let data = try? JSONSerialization.data(withJSONObject: args),
@@ -437,5 +445,56 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
                 if let webView = weakWebView { BBEvaluateJavaScript(webView, js, world) }
             }
         }
+
+        // Resolve the @connect gate. Declared (or self/page) hosts proceed silently. An undeclared
+        // host is allowed only if the user previously granted it, or grants it now at the prompt;
+        // otherwise it is blocked and logged. The granted host is appended to the allowlist passed to
+        // the network layer so the SAME-host redirect path validates too (redirects to OTHER
+        // undeclared hosts are still blocked mid-flight — we never prompt for a redirect).
+        var effectiveConnects = declared
+        let targetHost = (request["url"] as? String).flatMap { URL(string: $0)?.host }
+        if let host = targetHost,
+           !GMNetworkService.isConnectAllowed(host: host, connects: declared, pageHost: pageHost) {
+            let allowed = await resolveConnectDecision(scriptID: session.id,
+                                                       scriptName: session.name,
+                                                       host: host)
+            guard allowed else {
+                await logStore.append(LogEntry(scriptID: session.id,
+                                               scriptName: session.name,
+                                               level: .warn,
+                                               message: "@connect blocked request to \(host)",
+                                               context: .foreground))
+                emit("error", ["error": "@connect blocked request to \(host)", "readyState": 4])
+                emit("loadend", ["readyState": 4])
+                return
+            }
+            effectiveConnects = declared + [host]
+        }
+
+        network.start(requestID: requestID, payload: request,
+                      connects: effectiveConnects, pageHost: pageHost, emit: emit)
+    }
+
+    /// Decide whether `host` may be connected to for this script: a prior user grant proceeds
+    /// silently; otherwise prompt once (concurrent requests to the same script+host share that one
+    /// prompt) and persist an always-allow on Allow. Fails closed.
+    private func resolveConnectDecision(scriptID: UUID, scriptName: String, host: String) async -> Bool {
+        if await grantStore.isAllowed(scriptID: scriptID, host: host) { return true }
+
+        let key = "\(scriptID.uuidString)|\(host.lowercased())"
+        if let inFlight = pendingGrantDecisions[key] { return await inFlight.value }
+
+        let grantStore = self.grantStore
+        let task = Task { @MainActor () -> Bool in
+            // Re-check inside the task in case a concurrent prompt already resolved+persisted.
+            if await grantStore.isAllowed(scriptID: scriptID, host: host) { return true }
+            let allow = await ConnectGrantPrompt.request(scriptName: scriptName, host: host)
+            if allow { await grantStore.allow(scriptID: scriptID, host: host) }
+            return allow
+        }
+        pendingGrantDecisions[key] = task
+        let result = await task.value
+        pendingGrantDecisions[key] = nil
+        return result
     }
 }

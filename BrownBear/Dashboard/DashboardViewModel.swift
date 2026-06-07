@@ -136,6 +136,7 @@ final class DashboardViewModel: ObservableObject {
     func delete(_ script: UserScript) async {
         await scriptStore.remove(id: script.id)
         await BrownBearServices.shared.valueStore.clear(scriptID: script.id)
+        await BrownBearServices.shared.connectGrantStore.clear(scriptID: script.id)
         await scheduleStore.remove(scriptID: script.id)
         await logStore.clear(scriptID: script.id)
         await load()
