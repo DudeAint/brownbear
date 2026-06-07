@@ -131,8 +131,10 @@
 
     // The store client-renders a red "Item currently unavailable / check the troubleshooting guide"
     // notice for some clients (our spoofed desktop-Chrome-on-iOS hits it), even though BrownBear can
-    // install the item fine. It's not in the SSR, so match it by visible text at runtime and hide its
-    // banner container — climbing only while the container stays small so we never nuke real content.
+    // install the item fine. It's not in the SSR, so match it by visible text at runtime and HIDE it —
+    // but with visibility:hidden, not display:none: the store's layout reserves that band, so removing
+    // it outright shoves the extension title up off-screen. Keeping the (now-blank) space preserves the
+    // layout. Climb only while the container stays small so we never blank real content.
     function hideUnavailableNotice() {
         if (!document.body) { return; }
         try {
@@ -147,7 +149,10 @@
                        && (el.parentElement.textContent || "").length < 240) {
                     el = el.parentElement;
                 }
-                if (el) { el.style.display = "none"; }
+                if (el) {
+                    el.style.visibility = "hidden";   // keep the reserved space, just blank the red banner
+                    el.style.backgroundColor = "transparent";
+                }
                 return;
             }
         } catch (e) { /* best-effort */ }
