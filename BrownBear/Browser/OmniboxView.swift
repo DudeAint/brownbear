@@ -327,13 +327,22 @@ final class OmniboxView: UIView {
     private func enterEditMode() {
         guard !isEditingURL else { return }
         textField.text = fullURLString ?? ""
-        urlLabel.isHidden = true
+        textField.alpha = 0
         textField.isHidden = false
         // If focus is refused (e.g. not yet in a window), revert the swap so the bar isn't stranded
         // showing an empty field with no keyboard.
         if !textField.becomeFirstResponder() {
             textField.isHidden = true
-            urlLabel.isHidden = false
+            textField.alpha = 1
+            return
+        }
+        // Crossfade the display label out and the editable field in — a soft swap rather than a cut.
+        UIView.animate(withDuration: 0.2, delay: 0, options: [.beginFromCurrentState]) {
+            self.urlLabel.alpha = 0
+            self.textField.alpha = 1
+        } completion: { _ in
+            self.urlLabel.isHidden = true
+            self.urlLabel.alpha = 1
         }
     }
 
