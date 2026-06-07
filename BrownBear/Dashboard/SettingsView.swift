@@ -15,6 +15,7 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Key.searchEngine) private var searchEngineRaw = SearchEngine.google.rawValue
     @State private var isClearing = false
     @State private var didClear = false
+    @State private var confirmingClear = false
 
     var body: some View {
         Form {
@@ -27,7 +28,7 @@ struct SettingsView: View {
             }
 
             Section("Privacy") {
-                Button(role: .destructive, action: clearBrowsingData) {
+                Button(role: .destructive) { confirmingClear = true } label: {
                     HStack {
                         Label("Clear browsing data", systemImage: "trash")
                         Spacer()
@@ -36,7 +37,7 @@ struct SettingsView: View {
                 }
                 .disabled(isClearing)
                 if didClear {
-                    Text("Cleared cookies, cache, and website data.")
+                    Text("Cleared cookies, cache, website data, and history.")
                         .font(.caption)
                         .foregroundStyle(BBTheme.Color.textSecondary)
                 }
@@ -52,6 +53,13 @@ struct SettingsView: View {
         .tint(BBTheme.Color.accent)
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
+        .confirmationDialog("Clear browsing data?", isPresented: $confirmingClear, titleVisibility: .visible) {
+            Button("Clear", role: .destructive) { clearBrowsingData() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This clears cookies, cache, website data, and browsing history. Bookmarks and "
+                + "downloaded files are kept.")
+        }
     }
 
     private func clearBrowsingData() {
@@ -61,6 +69,7 @@ struct SettingsView: View {
             await WKWebsiteDataStore.default().removeData(
                 ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(),
                 modifiedSince: .distantPast)
+            await BrownBearServices.shared.historyStore.clear()
             isClearing = false
             didClear = true
         }
