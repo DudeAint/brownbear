@@ -19,6 +19,17 @@ protocol OmniboxViewDelegate: AnyObject {
     func omnibox(_ omnibox: OmniboxView, didSubmit text: String)
     func omniboxDidTapReloadStop(_ omnibox: OmniboxView)
     func omniboxDidBeginEditing(_ omnibox: OmniboxView)
+    /// The edit text changed (each keystroke), so suggestions can be refreshed live.
+    func omnibox(_ omnibox: OmniboxView, didChangeText text: String)
+    /// Editing ended (the field resigned first responder), so suggestions can be dismissed.
+    func omniboxDidEndEditing(_ omnibox: OmniboxView)
+}
+
+// Default no-ops so the two suggestion hooks are effectively optional for conformers that don't
+// surface a suggestions UI.
+extension OmniboxViewDelegate {
+    func omnibox(_ omnibox: OmniboxView, didChangeText text: String) {}
+    func omniboxDidEndEditing(_ omnibox: OmniboxView) {}
 }
 
 /// The rounded address bar — @MainActor-isolated. Owns the display↔edit transition, the two-tone
@@ -178,6 +189,7 @@ final class OmniboxView: UIView {
         textField.clearButtonMode = .whileEditing
         textField.placeholder = "Search or enter address"
         textField.delegate = self
+        textField.addTarget(self, action: #selector(textFieldEditingChanged), for: .editingChanged)
         textField.isHidden = true
         textField.translatesAutoresizingMaskIntoConstraints = false
 
@@ -333,6 +345,10 @@ final class OmniboxView: UIView {
         delegate?.omniboxDidTapReloadStop(self)
     }
 
+    @objc private func textFieldEditingChanged() {
+        delegate?.omnibox(self, didChangeText: textField.text ?? "")
+    }
+
     // MARK: - Elevation (light shadow / dark border)
 
     override func layoutSubviews() {
@@ -427,5 +443,6 @@ extension OmniboxView: UITextFieldDelegate {
         applyIconState(editing: false, animated: true)
         applyDisplayURL(currentState)
         updateActionButton()
+        delegate?.omniboxDidEndEditing(self)
     }
 }

@@ -27,7 +27,8 @@ final class BrownBearBrowserViewController: UIViewController {
     // MARK: - Chrome
 
     private let topChrome = UIView()
-    private let omnibox = OmniboxView()
+    // Not `private`: the omnibox delegate logic lives in BrownBearBrowserViewController+Omnibox.swift.
+    let omnibox = OmniboxView()
     private let progressBar = ProgressBar()
     private let contentContainer = UIView()
     // Not `private`: the +Zoom extension (separate file) anchors the zoom HUD above this toolbar.
@@ -38,6 +39,12 @@ final class BrownBearBrowserViewController: UIViewController {
 
     /// `*.user.js` URLs the user chose to view as raw source instead of installing — let through once.
     private var viewSourceAllowOnce: Set<URL> = []
+
+    /// Live address-bar autocomplete shown while editing the omnibox (history + the typed action).
+    /// Not `private`: the omnibox delegate logic lives in BrownBearBrowserViewController+Omnibox.swift.
+    let omniboxSuggestions = OmniboxSuggestionsView()
+    /// In-flight suggestion fetch, cancelled on each keystroke so stale results never overwrite newer.
+    var suggestionTask: Task<Void, Never>?
 
     /// The transient page-zoom control and its live percentage label. Not `private`: driven by the
     /// +Zoom extension in a separate file (stored properties can't move to an extension).
@@ -100,6 +107,11 @@ final class BrownBearBrowserViewController: UIViewController {
         toolbar.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(toolbar)
 
+        // Suggestions overlay the page between the bar and the toolbar; added last so it sits on top.
+        omniboxSuggestions.delegate = self
+        omniboxSuggestions.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(omniboxSuggestions)
+
         let inset = BrownBearTheme.Metrics.chromeHorizontalInset
         let guide = view.safeAreaLayoutGuide
 
@@ -128,7 +140,12 @@ final class BrownBearBrowserViewController: UIViewController {
             toolbar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             toolbar.bottomAnchor.constraint(equalTo: guide.bottomAnchor),
             toolbar.topAnchor.constraint(equalTo: guide.bottomAnchor,
-                                         constant: -BrownBearTheme.Metrics.toolbarHeight)
+                                         constant: -BrownBearTheme.Metrics.toolbarHeight),
+
+            omniboxSuggestions.topAnchor.constraint(equalTo: progressBar.bottomAnchor),
+            omniboxSuggestions.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            omniboxSuggestions.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            omniboxSuggestions.bottomAnchor.constraint(equalTo: toolbar.topAnchor)
         ])
     }
 
@@ -371,31 +388,6 @@ extension BrownBearBrowserViewController: TabDelegate {
     }
 }
 
-// MARK: - OmniboxViewDelegate
-
-extension BrownBearBrowserViewController: OmniboxViewDelegate {
-    func omnibox(_ omnibox: OmniboxView, didSubmit text: String) {
-        do {
-            let classifier = OmniboxInputClassifier(searchTemplate: AppSettings.searchEngine.template)
-            let destination = try classifier.destination(for: text)
-            let tab = tabManager.activeTab ?? tabManager.createTab()
-            tab.delegate = self
-            tab.load(destination.resolvedURL)
-        } catch {
-            presentError(error)
-        }
-    }
-
-    func omniboxDidTapReloadStop(_ omnibox: OmniboxView) {
-        guard let tab = tabManager.activeTab else { return }
-        if tab.state.isLoading { tab.stopLoading() } else { tab.reload() }
-    }
-
-    func omniboxDidBeginEditing(_ omnibox: OmniboxView) {
-        // Reserved for future omnibox suggestions UI.
-    }
-}
-
 // MARK: - BrowserToolbarDelegate
 
 extension BrownBearBrowserViewController: BrowserToolbarDelegate {
@@ -557,7 +549,8 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
         refreshChrome()
     }
 
-    private func presentError(_ error: Error) {
+    // Not `private`: also called from the omnibox delegate in BrownBearBrowserViewController+Omnibox.
+    func presentError(_ error: Error) {
         let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         let alert = UIAlertController(title: "Couldn’t open", message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "OK", style: .default))
