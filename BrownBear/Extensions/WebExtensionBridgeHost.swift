@@ -37,6 +37,13 @@ protocol WebExtensionBridgeHost: AnyObject {
     func webExtInsertCSS(extTabId: Int?, css: String)
     /// chrome.scripting.removeCSS — remove CSS previously inserted (matched by its exact text).
     func webExtRemoveCSS(extTabId: Int?, css: String)
+
+    /// chrome.tabs.sendMessage — deliver `message` to the content scripts of `extensionID` running in
+    /// the tab `extTabId` (`nil` = the active tab), resolving with the first listener's response (or
+    /// `nil` if no tab/listener answered). `frameId` `nil` = all frames; iOS delivers to the tab's main
+    /// frame. Routed through the shared content runtime, which owns the per-tab content sessions — so a
+    /// popup or background worker (each with its own router) still reaches the page's content scripts.
+    func webExtSendMessageToTab(extensionID: String, extTabId: Int?, message: Any, frameId: Int?) async -> Any?
 }
 
 /// Stable bidirectional `UUID (Tab.id) ↔ Int (chrome tab id)` map. chrome.tabs ids must be integers

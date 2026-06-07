@@ -7,8 +7,9 @@
 // surface (storage, runtime, i18n, extension) namespaced to its extension.
 //
 // Supported here: content_scripts injection (js + css) at @run-at, chrome.storage.{local,sync,
-// session}, chrome.runtime (id/getManifest/getURL/sendMessage stub/onMessage stub), chrome.i18n
-// (preloaded default-locale messages), chrome.extension.getURL. See docs/WEB_EXTENSIONS.md.
+// session} with a live onChanged, chrome.runtime (id/getManifest/getURL/sendMessage to the worker +
+// onMessage receiving tabs.sendMessage), chrome.tabs.sendMessage, chrome.i18n (preloaded
+// default-locale messages), chrome.extension.getURL. See docs/WEB_EXTENSIONS.md.
 
 (function () {
   "use strict";
@@ -89,6 +90,19 @@
 
     var noopEvent = { addListener: function () {}, removeListener: function () {}, hasListener: function () { return false; } };
 
+    // Real, per-content-script event lists. runtime.onMessage receives chrome.tabs.sendMessage pushes
+    // from the background/popup/other content scripts; storage.onChanged receives chrome.storage
+    // changes. Both are driven by native via window.__bbExtContent[token] (registered below).
+    var messageListeners = [];
+    var storageListeners = [];
+    function makeEvent(list) {
+      return {
+        addListener: function (fn) { if (typeof fn === "function" && list.indexOf(fn) < 0) { list.push(fn); } },
+        removeListener: function (fn) { var i = list.indexOf(fn); if (i >= 0) { list.splice(i, 1); } },
+        hasListener: function (fn) { return list.indexOf(fn) >= 0; }
+      };
+    }
+
     function tabsApi() {
       function query(queryInfo, callback) {
         return settle(bridge("tabs.query", { query: queryInfo || {} }, token), callback);
@@ -119,10 +133,15 @@
         return settle(bridge("tabs.reload", { tabId: tabId, bypassCache: !!props.bypassCache }, token).then(function () { return undefined; }), callback);
       }
       function sendMessage() {
-        // Background↔content messaging (Phase 3) isn't wired yet; resolve undefined rather than hang.
+        // chrome.tabs.sendMessage(tabId, message, options?, callback?) — content scripts can message
+        // another tab's content scripts. Native delivers to that tab and resolves with the response.
         var args = _Array.prototype.slice.call(arguments);
         var cb = (args.length && typeof args[args.length - 1] === "function") ? args.pop() : null;
-        return settle(_Promise.resolve(undefined), cb);
+        var tabId = args[0];
+        var message = args[1];
+        var promise = bridge("tabs.sendMessage",
+          { tabId: tabId, message: (message === undefined ? null : message) }, token);
+        return settle(promise, cb);
       }
       function executeScript(tabId, details, callback) {
         if (tabId !== null && typeof tabId === "object") { callback = details; details = tabId; tabId = undefined; }
@@ -170,7 +189,7 @@
         local: storageArea("local"),
         sync: storageArea("sync"),
         session: storageArea("session"),
-        onChanged: noopEvent
+        onChanged: makeEvent(storageListeners)
       },
       runtime: {
         id: data.extensionId,
@@ -186,7 +205,7 @@
             .then(function (resp) { return resp ? resp.value : undefined; });
           return settle(promise, cb);
         },
-        onMessage: noopEvent,
+        onMessage: makeEvent(messageListeners),
         onConnect: noopEvent,
         onInstalled: noopEvent,
         connect: function () { return { name: "", onMessage: noopEvent, onDisconnect: noopEvent, postMessage: function () {}, disconnect: function () {} }; },
@@ -203,6 +222,49 @@
       extension: {
         getURL: getURL,
         inIncognitoContext: false
+      }
+    };
+
+    // Native → this content script push surface, keyed by the injection token. The runtime evaluates
+    // into this isolated world to deliver chrome.tabs.sendMessage payloads (onMessage) and
+    // chrome.storage changes (onStorageChanged). Kept off `chrome` so the page can't see or spoof it.
+    var registry = W.__bbExtContent || (W.__bbExtContent = {});
+    registry[token] = {
+      onMessage: function (message, sender, responseId) {
+        var responded = false;
+        var willRespondAsync = false;
+        function sendResponse(value) {
+          if (responded) { return; }
+          responded = true;
+          bridge("runtime.messageResponse",
+            { responseId: responseId, value: (value === undefined ? null : value) }, token).catch(function () {});
+        }
+        for (var i = 0; i < messageListeners.length; i++) {
+          var returned;
+          try { returned = messageListeners[i](message, sender, sendResponse); }
+          catch (e) { if (_console.error) { _console.error("[BrownBear ext] onMessage listener:", e); } continue; }
+          if (returned === true) { willRespondAsync = true; }
+          else if (returned && typeof returned.then === "function") {
+            willRespondAsync = true;
+            returned.then(function (v) { sendResponse(v); }, function () { sendResponse(undefined); });
+          }
+          if (responded) { break; }
+        }
+        // No synchronous answer and no listener kept the channel open: release the sender now.
+        if (!responded && !willRespondAsync) { sendResponse(undefined); }
+      },
+      onStorageChanged: function (rawChanges, areaName) {
+        var changes = {};
+        _Object.keys(rawChanges || {}).forEach(function (k) {
+          var entry = {};
+          if (rawChanges[k].oldValue != null) { try { entry.oldValue = _JSON.parse(rawChanges[k].oldValue); } catch (e) {} }
+          if (rawChanges[k].newValue != null) { try { entry.newValue = _JSON.parse(rawChanges[k].newValue); } catch (e) {} }
+          changes[k] = entry;
+        });
+        for (var i = 0; i < storageListeners.length; i++) {
+          try { storageListeners[i](changes, areaName); }
+          catch (e) { if (_console.error) { _console.error("[BrownBear ext] onChanged listener:", e); } }
+        }
       }
     };
     return chrome;

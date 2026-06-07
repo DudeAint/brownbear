@@ -6,8 +6,9 @@
 //  MV3 service workers), running headless in a JavaScriptCore JSContext — there is no DOM, no
 //  `window`, no `fetch` beyond what we expose. Native blocks (installed before this file runs by
 //  WebExtensionBackgroundContext) back the async parts: __bb_storage_*, __bb_alarm_*, __bb_log,
-//  __bb_send_message, __bb_message_response. This file wires the idiomatic chrome shape around them
-//  and exposes a single dispatch object (__bbBg) the native side calls to deliver events.
+//  __bb_send_message, __bb_message_response, __bb_tabs, __bb_tabs_send_message, __bb_scripting. This
+//  file wires the idiomatic chrome shape around them and exposes a single dispatch object (__bbBg) the
+//  native side calls to deliver events.
 //
 //  Isolation: this runs in its own JSContext per extension, so one extension's globals, listeners,
 //  and storage namespace never touch another's.
@@ -242,9 +243,18 @@
       return settleBg(tabsCall('reload', { tabId: id, bypassCache: !!props.bypassCache }).then(function () { return undefined; }), cb);
     },
     sendMessage: function () {
+      // chrome.tabs.sendMessage(tabId, message, options?, callback?) — worker → a tab's content
+      // scripts, via native, resolving with the first content listener's response.
       var a = Array.prototype.slice.call(arguments);
       var cb = (a.length && typeof a[a.length - 1] === 'function') ? a.pop() : null;
-      return settleBg(Promise.resolve(undefined), cb);   // bg→content delivery: Phase 3
+      var tabId = a[0];
+      var message = a[1];
+      return settleBg(new Promise(function (resolve) {
+        __bb_tabs_send_message(JSON.stringify({ tabId: tabId, message: (message === undefined ? null : message) }), function (resJSON) {
+          var r = parseJSON(resJSON);
+          resolve(r ? r.value : undefined);
+        });
+      }), cb);
     },
     executeScript: function (id, details, cb) {
       if (id !== null && typeof id === 'object') { cb = details; details = id; id = undefined; }

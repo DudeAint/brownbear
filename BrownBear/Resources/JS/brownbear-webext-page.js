@@ -123,10 +123,19 @@
       details = details || {};
       return settle(bridge("tabs.insertCSS", { tabId: tabId, code: details.code, file: details.file }).then(function () { return undefined; }), callback);
     }
+    function sendMessage() {
+      // chrome.tabs.sendMessage(tabId, message, options?, callback?) — a popup messaging a tab's
+      // content scripts. Native delivers to that tab and resolves with the content listener's response.
+      var args = _Array.prototype.slice.call(arguments);
+      var cb = (args.length && typeof args[args.length - 1] === "function") ? args.pop() : null;
+      var tabId = args[0];
+      var message = args[1];
+      return settle(bridge("tabs.sendMessage", { tabId: tabId, message: (message === undefined ? null : message) }), cb);
+    }
     var noop = { addListener: function () {}, removeListener: function () {}, hasListener: function () { return false; } };
     return {
       query: query, get: get, getCurrent: getCurrent, create: create, update: update, remove: remove, reload: reload,
-      executeScript: executeScript, insertCSS: insertCSS,
+      executeScript: executeScript, insertCSS: insertCSS, sendMessage: sendMessage,
       onUpdated: noop, onActivated: noop, onCreated: noop, onRemoved: noop
     };
   }
