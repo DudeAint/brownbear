@@ -7,10 +7,10 @@
 //  the controller stays under the SwiftLint length limit and so the scroll-hide machinery
 //  (+ScrollChrome) has a clear, named set of constraints to animate.
 //
-//  The omnibox is pinned to `topChrome` (not directly to the view's safe area) so the whole bar slides
-//  away as a single unit when the page is scrolled. At rest — topChromeTopConstraint.constant == 0 —
-//  the layout is identical to a directly-safe-area-pinned bar, so nothing about the resting appearance
-//  changes.
+//  The omnibox is pinned inside `topChrome` (not directly to the view's safe area), and topChrome is
+//  anchored to the very top with an animatable HEIGHT. Scroll-hide collapses that height to the
+//  safe-area strip so the bar rolls away while the status-bar / Dynamic Island region keeps its chrome
+//  backing. At rest the height equals omnibox.bottom + 8, so the resting layout is unchanged.
 //
 
 import UIKit
@@ -20,6 +20,8 @@ extension BrownBearBrowserViewController {
     /// Compose the chrome subviews and activate their constraints. Called once from viewDidLoad.
     func buildHierarchy() {
         topChrome.backgroundColor = BrownBearTheme.Palette.chrome
+        // Clip so the omnibox is hidden when the bar collapses to the safe-area strip on scroll.
+        topChrome.clipsToBounds = true
         topChrome.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(topChrome)
 
@@ -45,18 +47,22 @@ extension BrownBearBrowserViewController {
         let inset = BrownBearTheme.Metrics.chromeHorizontalInset
         let guide = view.safeAreaLayoutGuide
 
-        // The two constraints the scroll-hide animation owns.
-        let topConstraint = topChrome.topAnchor.constraint(equalTo: view.topAnchor)
+        // The top chrome stays pinned to the very top (covering the status bar / Dynamic Island); the
+        // scroll-hide animation drives its HEIGHT — full when shown, just the safe-area strip when
+        // hidden — and the omnibox (pinned inside, clipped) rolls away with it. At rest the height equals
+        // omnibox.bottom + 8, so the resting layout is unchanged.
         let omniboxTop = omnibox.topAnchor.constraint(equalTo: topChrome.topAnchor,
                                                       constant: view.safeAreaInsets.top + 8)
-        topChromeTopConstraint = topConstraint
+        let fullHeight = view.safeAreaInsets.top + BrownBearTheme.Metrics.omniboxHeight + 16
+        let heightConstraint = topChrome.heightAnchor.constraint(equalToConstant: fullHeight)
+        topChromeHeightConstraint = heightConstraint
         omniboxTopConstraint = omniboxTop
 
         NSLayoutConstraint.activate([
             topChrome.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             topChrome.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            topConstraint,
-            topChrome.bottomAnchor.constraint(equalTo: omnibox.bottomAnchor, constant: 8),
+            topChrome.topAnchor.constraint(equalTo: view.topAnchor),
+            heightConstraint,
 
             omnibox.leadingAnchor.constraint(equalTo: guide.leadingAnchor, constant: inset),
             omnibox.trailingAnchor.constraint(equalTo: guide.trailingAnchor, constant: -inset),

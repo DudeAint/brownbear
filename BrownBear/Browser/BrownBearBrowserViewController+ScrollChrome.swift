@@ -7,9 +7,10 @@
 //  switching tabs) brings it back. The Safari/Chrome immersive-reading behaviour, gated by the
 //  AppSettings.hideBarsOnScroll preference (default on).
 //
-//  We drive topChromeTopConstraint.constant (owned by +Layout) and animate layout — because the
-//  omnibox is pinned inside topChrome, and the progress bar + content container are pinned below it,
-//  the single constant cleanly slides the bar away and grows the page area in one animation.
+//  We drive topChromeHeightConstraint (owned by +Layout) and animate layout — collapsing the bar's
+//  height to the safe-area strip rolls the omnibox away (clipped, faded) while the progress bar +
+//  content container, pinned below, follow and grow the page area, all in one animation. The status-bar
+//  / Dynamic Island region keeps its chrome backing, so the page never slides up under it.
 //
 
 import UIKit
@@ -78,13 +79,20 @@ extension BrownBearBrowserViewController: UIScrollViewDelegate {
         applyChromeHidden(false, animated: animated)
     }
 
-    /// Slide the top chrome off the top (hidden) or back to rest (shown) by driving its top constraint.
-    /// Hidden slides up by the bar's full height so the page fills the freed space (the status bar then
-    /// overlays the page, as in Safari/Chrome). Shown restores constant 0 — the unchanged resting layout.
+    /// Collapse the top chrome to just the safe-area strip (hidden) or expand it to full (shown) by
+    /// driving its height constraint. The bar stays anchored at the very top so the status-bar /
+    /// Dynamic Island region keeps its chrome backing and the page never slides up under it; the omnibox
+    /// (clipped by topChrome) fades as it rolls away. The progress bar + content area, pinned below,
+    /// follow and the page grows to fill. Shown restores the full height — the unchanged resting layout.
     func applyChromeHidden(_ hidden: Bool, animated: Bool) {
-        guard let topConstraint = topChromeTopConstraint else { return }
-        topConstraint.constant = hidden ? -topChrome.bounds.height : 0
-        let apply = { self.view.layoutIfNeeded() }
+        guard let heightConstraint = topChromeHeightConstraint else { return }
+        let safeTop = view.safeAreaInsets.top
+        let fullHeight = safeTop + BrownBearTheme.Metrics.omniboxHeight + 16
+        heightConstraint.constant = hidden ? safeTop : fullHeight
+        let apply = {
+            self.omnibox.alpha = hidden ? 0 : 1
+            self.view.layoutIfNeeded()
+        }
         if animated {
             // A quick, lightly-damped spring — snappy on the way out, still refined rather than abrupt.
             UIView.animate(withDuration: 0.22, delay: 0, usingSpringWithDamping: 0.9, initialSpringVelocity: 0.6,
