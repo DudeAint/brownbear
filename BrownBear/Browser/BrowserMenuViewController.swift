@@ -41,6 +41,7 @@ struct BrowserMenuState {
     var zoomPercent: Int = 100      // active tab's page-zoom level, for the zoom stepper
     var matchedScripts: [MenuScript] = []  // userscripts whose @match/@include matched this page
     var extensionActions: [MenuExtensionAction] = []  // enabled extensions' chrome.action entries
+    var scriptCommands: [MenuScriptCommand] = []  // GM_registerMenuCommand entries for the active tab
 }
 
 /// A userscript matching the active page, rendered in the menu's "On this page" section.
@@ -61,11 +62,23 @@ struct MenuExtensionAction {
     let iconPath: String?   // resolved relative to the extension package; nil = generic glyph
 }
 
+/// A GM_registerMenuCommand entry for a userscript matching the active tab, rendered in the menu's
+/// "Script commands" section. `token`/`commandID` are the opaque native handle used to fire it back.
+struct MenuScriptCommand {
+    let token: String
+    let commandID: String
+    let title: String
+    let scriptName: String
+    let accessKey: String?
+    let autoClose: Bool
+}
+
 @MainActor
 protocol BrowserMenuDelegate: AnyObject {
     func browserMenu(_ menu: BrowserMenuViewController, didSelect action: BrowserMenuAction)
     func browserMenu(_ menu: BrowserMenuViewController, didToggleScript id: UUID, enabled: Bool)
     func browserMenu(_ menu: BrowserMenuViewController, didTapExtensionAction extensionID: String)
+    func browserMenu(_ menu: BrowserMenuViewController, didTapScriptCommand command: MenuScriptCommand)
 }
 
 @MainActor
@@ -136,6 +149,9 @@ final class BrowserMenuViewController: UIViewController {
         }
         if !state.matchedScripts.isEmpty {
             root.addArrangedSubview(makeScriptsSection())
+        }
+        if !state.scriptCommands.isEmpty {
+            root.addArrangedSubview(makeScriptCommandsSection())
         }
         if !state.extensionActions.isEmpty {
             root.addArrangedSubview(makeExtensionsSection())
@@ -344,6 +360,105 @@ final class BrowserMenuViewController: UIViewController {
         row.isLayoutMarginsRelativeArrangement = true
         row.layoutMargins = UIEdgeInsets(top: 10, left: 16, bottom: 10, right: 16)
         return row
+    }
+
+
+    // MARK: - Script commands (GM_registerMenuCommand)
+
+    /// "Script commands": each GM_registerMenuCommand a matching userscript registered for this tab.
+    /// Tapping fires the script's callback back into its own frame/world; autoClose controls dismissal.
+    private func makeScriptCommandsSection() -> UIView {
+        let header = UILabel()
+        header.text = "Script commands"
+        header.font = .systemFont(ofSize: 13, weight: .semibold)
+        header.textColor = BrownBearTheme.Palette.textSecondary
+
+        let card = UIView()
+        card.backgroundColor = BrownBearTheme.Palette.cell
+        card.layer.cornerRadius = BrownBearTheme.Metrics.cellCornerRadius
+        card.layer.cornerCurve = .continuous
+
+        let rows = state.scriptCommands.map { makeScriptCommandRow($0) }
+        let stack = UIStackView(arrangedSubviews: interleaveSeparators(rows))
+        stack.axis = .vertical
+        stack.spacing = 0
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        card.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: card.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: card.bottomAnchor),
+            stack.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: card.trailingAnchor)
+        ])
+
+        let section = UIStackView(arrangedSubviews: [header, card])
+        section.axis = .vertical
+        section.spacing = 8
+        return section
+    }
+
+    private func makeScriptCommandRow(_ command: MenuScriptCommand) -> UIView {
+        let icon = UIImageView(image: UIImage(systemName: "terminal"))
+        icon.tintColor = BrownBearTheme.Palette.accent
+        icon.contentMode = .scaleAspectFit
+        icon.backgroundColor = BrownBearTheme.Palette.accent.withAlphaComponent(0.14)
+        icon.layer.cornerRadius = 7
+        icon.layer.cornerCurve = .continuous
+        icon.clipsToBounds = true
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([icon.widthAnchor.constraint(equalToConstant: 28),
+                                     icon.heightAnchor.constraint(equalToConstant: 28)])
+
+        let title = UILabel()
+        title.text = command.title
+        title.font = .systemFont(ofSize: 15)
+        title.textColor = BrownBearTheme.Palette.textPrimary
+        title.numberOfLines = 1
+
+        // The accessKey is shown as a trailing hint — iOS menus have no keyboard accelerators, so it's
+        // informational (parity with desktop GM, where it's the underlined mnemonic).
+        var arranged: [UIView] = [icon, title]
+        if let key = command.accessKey, !key.isEmpty {
+            let hint = UILabel()
+            hint.text = key.uppercased()
+            hint.font = .systemFont(ofSize: 13, weight: .semibold)
+            hint.textColor = BrownBearTheme.Palette.textSecondary
+            hint.setContentHuggingPriority(.required, for: .horizontal)
+            arranged.append(hint)
+        }
+
+        let row = UIStackView(arrangedSubviews: arranged)
+        row.axis = .horizontal
+        row.spacing = 12
+        row.alignment = .center
+        row.isLayoutMarginsRelativeArrangement = true
+        row.layoutMargins = UIEdgeInsets(top: 10, left: 16, bottom: 10, right: 16)
+        row.isUserInteractionEnabled = true
+
+        let button = UIButton(type: .system)
+        button.addAction(UIAction { [weak self] _ in self?.tapScriptCommand(command) }, for: .touchUpInside)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        row.addSubview(button)
+        NSLayoutConstraint.activate([
+            button.topAnchor.constraint(equalTo: row.topAnchor),
+            button.bottomAnchor.constraint(equalTo: row.bottomAnchor),
+            button.leadingAnchor.constraint(equalTo: row.leadingAnchor),
+            button.trailingAnchor.constraint(equalTo: row.trailingAnchor)
+        ])
+        return row
+    }
+
+    /// Fire a script command. autoClose=false keeps the menu open (a command that toggles UI state),
+    /// matching desktop GM; otherwise dismiss first, then deliver.
+    private func tapScriptCommand(_ command: MenuScriptCommand) {
+        if command.autoClose {
+            dismiss(animated: true) { [weak self] in
+                guard let self else { return }
+                self.delegate?.browserMenu(self, didTapScriptCommand: command)
+            }
+        } else {
+            delegate?.browserMenu(self, didTapScriptCommand: command)
+        }
     }
 
     // MARK: - Extensions (chrome.action)
