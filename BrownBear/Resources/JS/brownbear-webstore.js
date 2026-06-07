@@ -129,7 +129,32 @@
         });
     }
 
+    // The store client-renders a red "Item currently unavailable / check the troubleshooting guide"
+    // notice for some clients (our spoofed desktop-Chrome-on-iOS hits it), even though BrownBear can
+    // install the item fine. It's not in the SSR, so match it by visible text at runtime and hide its
+    // banner container — climbing only while the container stays small so we never nuke real content.
+    function hideUnavailableNotice() {
+        if (!document.body) { return; }
+        try {
+            var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+            var node;
+            while ((node = walker.nextNode())) {
+                var text = (node.nodeValue || "").toLowerCase();
+                if (text.indexOf("currently unavailable") < 0
+                    && !(text.indexOf("troubleshooting") >= 0 && text.indexOf("guide") >= 0)) { continue; }
+                var el = node.parentElement;
+                while (el && el.parentElement && el.parentElement !== document.body
+                       && (el.parentElement.textContent || "").length < 240) {
+                    el = el.parentElement;
+                }
+                if (el) { el.style.display = "none"; }
+                return;
+            }
+        } catch (e) { /* best-effort */ }
+    }
+
     function rewire() {
+        hideUnavailableNotice();
         var id = extensionId();
         if (!id) { return; }
         var button = findButton();

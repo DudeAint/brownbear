@@ -14,16 +14,31 @@ import UIKit
 
 extension BrownBearBrowserViewController {
 
-    /// Show or hide the install banner based on whether `url` is a Chrome Web Store *detail* page.
-    /// Called on every active-tab navigation tick (full loads and the store's in-page SPA nav).
+    /// Show, hide, or restyle the install banner based on whether `url` is a Chrome Web Store *detail*
+    /// page and whether that extension is already installed. Called on every active-tab navigation tick
+    /// (full loads and the store's in-page SPA nav) and after the banner's own Add/Remove completes.
     func updateExtensionInstallBanner(url: URL?) {
         guard let url, let extensionID = Self.chromeWebStoreExtensionID(for: url) else {
             dismissExtensionInstallBanner()
             return
         }
-        // Already showing this exact extension — leave it in place (no rebuild, no flicker).
-        if extensionInstallBanner?.accessibilityIdentifier == extensionID { return }
-        presentExtensionInstallBanner(extensionID: extensionID, name: Self.chromeWebStoreName(from: url))
+        let name = Self.chromeWebStoreName(from: url)
+        Task { @MainActor in
+            let installed = await BrownBearServices.shared.webExtensionStore.installed(forStoreID: extensionID) != nil
+            // Bail if the active tab navigated off this store page while we awaited the store.
+            let activeID = tabManager.activeTab?.state.url.flatMap(Self.chromeWebStoreExtensionID)
+            guard activeID == extensionID else { return }
+            // Key on id + state so a state change (installed via the in-page button) restyles the pill,
+            // but the same id+state is left in place (no flicker on every loading tick).
+            let key = "\(extensionID)|\(installed)"
+            if extensionInstallBanner?.accessibilityIdentifier == key { return }
+            presentExtensionInstallBanner(extensionID: extensionID, name: name, installed: installed)
+        }
+    }
+
+    /// Re-evaluate the banner for the active tab (after the banner's own Add/Remove changes state).
+    private func refreshExtensionInstallBanner() {
+        updateExtensionInstallBanner(url: tabManager.activeTab?.state.url)
     }
 
     /// True for ANY Chrome Web Store page (detail, search, category…), used to force a desktop Chrome
@@ -75,11 +90,11 @@ extension BrownBearBrowserViewController {
         }
     }
 
-    private func presentExtensionInstallBanner(extensionID: String, name: String) {
-        extensionInstallBanner?.removeFromSuperview()   // replace a banner for a different extension
+    private func presentExtensionInstallBanner(extensionID: String, name: String, installed: Bool) {
+        extensionInstallBanner?.removeFromSuperview()   // replace a banner for a different ext/state
 
         let banner = UIView()
-        banner.accessibilityIdentifier = extensionID
+        banner.accessibilityIdentifier = "\(extensionID)|\(installed)"
         banner.backgroundColor = BrownBearTheme.Palette.chrome
         banner.layer.cornerRadius = 16
         banner.layer.cornerCurve = .continuous
@@ -92,20 +107,21 @@ extension BrownBearBrowserViewController {
         banner.alpha = 0
         banner.translatesAutoresizingMaskIntoConstraints = false
 
-        let icon = UIImageView(image: UIImage(systemName: "puzzlepiece.extension.fill"))
+        let iconName = installed ? "checkmark.seal.fill" : "puzzlepiece.extension.fill"
+        let icon = UIImageView(image: UIImage(systemName: iconName))
         icon.tintColor = BrownBearTheme.Palette.accent
         icon.contentMode = .scaleAspectFit
         icon.setContentHuggingPriority(.required, for: .horizontal)
 
         let label = UILabel()
-        label.text = "Add “\(name)” to BrownBear"
+        label.text = installed ? "“\(name)” is added to BrownBear" : "Add “\(name)” to BrownBear"
         label.font = .systemFont(ofSize: 14, weight: .semibold)
         label.textColor = BrownBearTheme.Palette.textPrimary
         label.numberOfLines = 2
 
         var addConfig = UIButton.Configuration.filled()
-        addConfig.title = "Add"
-        addConfig.baseBackgroundColor = BrownBearTheme.Palette.accent
+        addConfig.title = installed ? "Remove" : "Add"
+        addConfig.baseBackgroundColor = installed ? BrownBearTheme.Palette.destructive : BrownBearTheme.Palette.accent
         addConfig.baseForegroundColor = .white
         addConfig.cornerStyle = .capsule
         addConfig.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16)
@@ -113,7 +129,11 @@ extension BrownBearBrowserViewController {
         addButton.setContentHuggingPriority(.required, for: .horizontal)
         addButton.addAction(UIAction { [weak self, weak addButton] _ in
             guard let self, let addButton else { return }
-            self.performExtensionInstall(extensionID: extensionID, button: addButton)
+            if installed {
+                self.performExtensionRemove(extensionID: extensionID, name: name, button: addButton)
+            } else {
+                self.performExtensionInstall(extensionID: extensionID, name: name, button: addButton)
+            }
         }, for: .touchUpInside)
 
         let close = UIButton(type: .system, primaryAction: UIAction { [weak self] _ in
@@ -147,17 +167,16 @@ extension BrownBearBrowserViewController {
         UIView.animate(withDuration: 0.25) { banner.alpha = 1 }
     }
 
-    private func performExtensionInstall(extensionID: String, button: UIButton) {
+    private func performExtensionInstall(extensionID: String, name: String, button: UIButton) {
         button.isEnabled = false
         button.configuration?.showsActivityIndicator = true
         Task { @MainActor in
             do {
                 let data = try await ChromeWebStore.downloadCRX(forInput: extensionID)
-                let installed = try await BrownBearServices.shared.webExtensionStore.install(archive: data,
-                                                                                             storeID: extensionID)
+                _ = try await BrownBearServices.shared.webExtensionStore.install(archive: data, storeID: extensionID)
                 NotificationCenter.default.post(name: .brownBearExtensionsDidChange, object: nil)
-                dismissExtensionInstallBanner()
-                presentExtensionInstalledToast(name: installed.displayName)
+                presentExtensionToast(message: "Added “\(name)” to BrownBear")
+                refreshExtensionInstallBanner()   // flip the pill to the "Remove" state
             } catch {
                 button.isEnabled = true
                 button.configuration?.showsActivityIndicator = false
@@ -166,7 +185,21 @@ extension BrownBearBrowserViewController {
         }
     }
 
-    private func presentExtensionInstalledToast(name: String) {
+    private func performExtensionRemove(extensionID: String, name: String, button: UIButton) {
+        button.isEnabled = false
+        button.configuration?.showsActivityIndicator = true
+        Task { @MainActor in
+            let store = BrownBearServices.shared.webExtensionStore
+            if let ext = await store.installed(forStoreID: extensionID) {
+                await store.remove(id: ext.id)
+                NotificationCenter.default.post(name: .brownBearExtensionsDidChange, object: nil)
+            }
+            presentExtensionToast(message: "Removed “\(name)” from BrownBear")
+            refreshExtensionInstallBanner()   // flip the pill back to the "Add" state
+        }
+    }
+
+    private func presentExtensionToast(message: String) {
         let container = UIView()
         container.backgroundColor = BrownBearTheme.Palette.accent
         container.layer.cornerRadius = 18
@@ -175,7 +208,7 @@ extension BrownBearBrowserViewController {
         container.translatesAutoresizingMaskIntoConstraints = false
 
         let label = UILabel()
-        label.text = "Added “\(name)” to BrownBear"
+        label.text = message
         label.font = .systemFont(ofSize: 13, weight: .semibold)
         label.textColor = .white
         label.translatesAutoresizingMaskIntoConstraints = false
