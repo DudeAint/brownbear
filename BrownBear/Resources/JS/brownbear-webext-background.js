@@ -278,6 +278,16 @@
       __bb_tabs(method, JSON.stringify(args || {}), function (resJSON) { resolve(parseJSON(resJSON)); });
     });
   }
+  // Named, reachable listener lists so __bbBg.dispatchExtEvent can route a browser-pushed event to
+  // the right chrome.tabs.* / chrome.webNavigation.* listeners.
+  var tabEventLists = {
+    'tabs.onCreated': [], 'tabs.onUpdated': [], 'tabs.onActivated': [], 'tabs.onRemoved': []
+  };
+  var webNavLists = {
+    'webNavigation.onBeforeNavigate': [], 'webNavigation.onCommitted': [],
+    'webNavigation.onDOMContentLoaded': [], 'webNavigation.onCompleted': [],
+    'webNavigation.onHistoryStateUpdated': [], 'webNavigation.onErrorOccurred': []
+  };
   var tabs = {
     query: function (q, cb) { return settleBg(tabsCall('query', { query: q || {} }), cb); },
     get: function (id, cb) { return settleBg(tabsCall('get', { tabId: id }), cb); },
@@ -322,7 +332,23 @@
       details = details || {};
       return settleBg(scriptingCall('insertCSS', { tabId: id, css: details.code, files: details.file ? [details.file] : undefined }).then(function () { return undefined; }), cb);
     },
-    onUpdated: makeEvent([]), onActivated: makeEvent([]), onCreated: makeEvent([]), onRemoved: makeEvent([])
+    onCreated: makeEvent(tabEventLists['tabs.onCreated']),
+    onUpdated: makeEvent(tabEventLists['tabs.onUpdated']),
+    onActivated: makeEvent(tabEventLists['tabs.onActivated']),
+    onRemoved: makeEvent(tabEventLists['tabs.onRemoved']),
+    onReplaced: makeEvent([])
+  };
+
+  // ---------------------------------------------------------------- chrome.webNavigation
+  var webNavigation = {
+    onBeforeNavigate: makeEvent(webNavLists['webNavigation.onBeforeNavigate']),
+    onCommitted: makeEvent(webNavLists['webNavigation.onCommitted']),
+    onDOMContentLoaded: makeEvent(webNavLists['webNavigation.onDOMContentLoaded']),
+    onCompleted: makeEvent(webNavLists['webNavigation.onCompleted']),
+    onHistoryStateUpdated: makeEvent(webNavLists['webNavigation.onHistoryStateUpdated']),
+    onErrorOccurred: makeEvent(webNavLists['webNavigation.onErrorOccurred']),
+    getFrame: function (details, cb) { if (typeof cb === 'function') { cb(null); } return Promise.resolve(null); },
+    getAllFrames: function (details, cb) { if (typeof cb === 'function') { cb([]); } return Promise.resolve([]); }
   };
 
   // ---------------------------------------------------------------- chrome.scripting
@@ -541,6 +567,7 @@
     permissions: permissions,
     declarativeNetRequest: declarativeNetRequest,
     userScripts: userScripts,
+    webNavigation: webNavigation,
     alarms: alarms,
     commands: commands,
     action: action,
@@ -648,6 +675,17 @@
       for (var i = 0; i < actionClickedListeners.length; i++) {
         try { actionClickedListeners[i](tab); }
         catch (e) { __bb_log('error', 'action.onClicked listener threw: ' + (e && e.message ? e.message : e)); }
+      }
+    },
+
+    dispatchExtEvent: function (name, argsJSON) {
+      var args = parseJSON(argsJSON);
+      if (!Array.isArray(args)) { args = []; }
+      var list = tabEventLists[name] || webNavLists[name];
+      if (!list) { return; }
+      for (var i = 0; i < list.length; i++) {
+        try { list[i].apply(null, args); }
+        catch (e) { __bb_log('error', name + ' listener threw: ' + (e && e.message ? e.message : e)); }
       }
     },
 
