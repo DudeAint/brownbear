@@ -28,7 +28,8 @@ final class WebStoreInstallHandler: NSObject, WKScriptMessageHandlerWithReply {
     }
 
     /// True for a Chrome Web Store frame — the only origin allowed to drive install/remove.
-    private static func isStoreHost(_ host: String) -> Bool {
+    /// `nonisolated` because it's pure and called from the non-isolated message handler.
+    nonisolated private static func isStoreHost(_ host: String) -> Bool {
         let host = host.lowercased()
         return host == "chromewebstore.google.com" || host == "chrome.google.com"
     }
