@@ -148,6 +148,19 @@ final class BrownBearTabGridController: UIViewController {
         newTabButton.layer.shadowRadius = 10
         newTabButton.layer.shadowOffset = CGSize(width: 0, height: 4)
         newTabButton.addTarget(self, action: #selector(tapNewTab), for: .touchUpInside)
+        // Tap = new tab in the current mode; long-press = pick New Tab / New Private Tab explicitly,
+        // so private mode is reachable straight from the + even with no private tabs yet.
+        newTabButton.menu = UIMenu(children: [
+            UIAction(title: "New Tab", image: UIImage(systemName: "plus.square")) { [weak self] _ in
+                guard let self else { return }
+                self.gridDelegate?.tabGrid(self, didRequestNewTabPrivate: false)
+            },
+            UIAction(title: "New Private Tab", image: UIImage(systemName: "eyeglasses")) { [weak self] _ in
+                guard let self else { return }
+                self.gridDelegate?.tabGrid(self, didRequestNewTabPrivate: true)
+            }
+        ])
+        newTabButton.showsMenuAsPrimaryAction = false
         newTabButton.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(newTabButton)
 
@@ -205,24 +218,23 @@ final class BrownBearTabGridController: UIViewController {
     }
 
     private func updateTitle() {
-        // Show the Normal/Private switcher only once a private tab exists; otherwise a plain count.
-        let hasPrivate = tabManager.hasPrivateTabs
-        modeControl.isHidden = !hasPrivate
-        titleLabel.isHidden = hasPrivate
-        let count = displayedTabs.count
-        let noun = showingPrivate ? "Private" : "Tab"
-        titleLabel.text = count == 1 ? "1 \(noun)" : "\(count) \(noun)s"
+        // Always show the Normal/Private switcher so entering private mode is discoverable even before
+        // any private tab exists (the count is evident from the grid itself).
+        modeControl.isHidden = false
+        titleLabel.isHidden = true
         closeAllButton.isHidden = displayedTabs.isEmpty
         applyPrivateAppearance()
     }
 
     /// Tint the grid a distinct dark shade in private mode so it's unmistakable which mode you're in.
+    /// Forcing dark appearance keeps the header controls (switcher, Done, Close All) readable on it.
     private func applyPrivateAppearance() {
         let background = showingPrivate
             ? UIColor(red: 0.11, green: 0.09, blue: 0.16, alpha: 1)
             : BrownBearTheme.Palette.background
         view.backgroundColor = background
         header.backgroundColor = background
+        view.overrideUserInterfaceStyle = showingPrivate ? .dark : .unspecified
     }
 
     // MARK: - Mutations
