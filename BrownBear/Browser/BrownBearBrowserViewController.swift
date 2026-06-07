@@ -365,6 +365,37 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
         presentMenu()
     }
 
+    func toolbarDidLongPressBack(_ toolbar: BrowserToolbar) { presentBackForwardList(forward: false) }
+    func toolbarDidLongPressForward(_ toolbar: BrowserToolbar) { presentBackForwardList(forward: true) }
+
+    func toolbarDidLongPressNewTab(_ toolbar: BrowserToolbar) {
+        let tab = tabManager.createTab(isPrivate: true)
+        loadNewTabPage(in: tab)
+        refreshChrome()
+        omnibox.beginEditing()
+    }
+
+    /// Present the active tab's back/forward history as a list (the Chrome/Safari long-press menu),
+    /// so a user 8 pages deep can jump straight to page 2 instead of tapping back six times.
+    private func presentBackForwardList(forward: Bool) {
+        guard let tab = tabManager.activeTab else { return }
+        let items = forward
+            ? tab.webView.backForwardList.forwardList
+            : Array(tab.webView.backForwardList.backList.reversed())
+        guard !items.isEmpty else { return }
+        let sheet = UIAlertController(title: forward ? "Forward" : "Back", message: nil, preferredStyle: .actionSheet)
+        for item in items.prefix(12) {
+            let title = (item.title?.isEmpty == false ? item.title : nil) ?? item.url.host ?? item.url.absoluteString
+            sheet.addAction(UIAlertAction(title: title, style: .default) { [weak tab] _ in
+                tab?.webView.go(to: item)
+            })
+        }
+        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        sheet.popoverPresentationController?.sourceView = toolbar
+        sheet.popoverPresentationController?.sourceRect = toolbar.bounds
+        present(sheet, animated: true)
+    }
+
     private func presentTabGrid() {
         let grid = BrownBearTabGridController(tabManager: tabManager,
                                              showingPrivate: tabManager.activeTab?.isPrivate ?? false)
@@ -740,4 +771,41 @@ extension BrownBearBrowserViewController: BrowserMenuDelegate {
         // matches the engine's existing behavior.
         Task { await BrownBearServices.shared.scriptStore.setEnabled(id: id, enabled) }
     }
+}
+
+// MARK: - Hardware keyboard shortcuts (iPad / Magic Keyboard)
+
+extension BrownBearBrowserViewController {
+
+    override var canBecomeFirstResponder: Bool { true }
+
+    /// The standard browser shortcut set, so BrownBear is usable as an iPad daily driver. Mapped to
+    /// the same actions the chrome buttons invoke.
+    override var keyCommands: [UIKeyCommand]? {
+        let commands = [
+            UIKeyCommand(title: "New Tab", action: #selector(keyNewTab), input: "t", modifierFlags: .command),
+            UIKeyCommand(title: "New Private Tab", action: #selector(keyNewPrivateTab),
+                         input: "n", modifierFlags: [.command, .shift]),
+            UIKeyCommand(title: "Close Tab", action: #selector(keyCloseTab), input: "w", modifierFlags: .command),
+            UIKeyCommand(title: "Focus Address Bar", action: #selector(keyFocusOmnibox),
+                         input: "l", modifierFlags: .command),
+            UIKeyCommand(title: "Reload", action: #selector(keyReload), input: "r", modifierFlags: .command),
+            UIKeyCommand(title: "Find on Page", action: #selector(keyFind), input: "f", modifierFlags: .command),
+            UIKeyCommand(title: "Show Tabs", action: #selector(keyShowTabs), input: "\\", modifierFlags: [.command, .shift]),
+            UIKeyCommand(title: "Back", action: #selector(keyBack), input: "[", modifierFlags: .command),
+            UIKeyCommand(title: "Forward", action: #selector(keyForward), input: "]", modifierFlags: .command)
+        ]
+        commands.forEach { $0.wantsPriorityOverSystemBehavior = true }
+        return commands
+    }
+
+    @objc private func keyNewTab() { toolbarDidTapNewTab(toolbar) }
+    @objc private func keyNewPrivateTab() { toolbarDidLongPressNewTab(toolbar) }
+    @objc private func keyCloseTab() { if let id = tabManager.activeTabID { tabManager.closeTab(id: id) } }
+    @objc private func keyFocusOmnibox() { omnibox.beginEditing() }
+    @objc private func keyReload() { tabManager.activeTab?.reload() }
+    @objc private func keyFind() { presentFindOnPage() }
+    @objc private func keyShowTabs() { toolbarDidTapTabs(toolbar) }
+    @objc private func keyBack() { tabManager.activeTab?.goBack() }
+    @objc private func keyForward() { tabManager.activeTab?.goForward() }
 }
