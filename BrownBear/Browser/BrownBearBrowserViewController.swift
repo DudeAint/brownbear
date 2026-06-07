@@ -18,7 +18,9 @@ final class BrownBearBrowserViewController: UIViewController {
     /// Owns the shared userscript runtime (Modules 2–3) plumbed into every tab's configuration.
     let injection = InjectionOrchestrator()
     private lazy var configurationFactory = WebViewConfigurationFactory(injection: injection)
-    private lazy var tabManager = TabManager(configurationFactory: configurationFactory)
+    // Not `private`: the page-zoom logic lives in BrownBearBrowserViewController+Zoom.swift, and a
+    // Swift extension in another file can only reach internal (or higher) members.
+    lazy var tabManager = TabManager(configurationFactory: configurationFactory)
     // Built per submit from the user's chosen search engine (AppSettings), so changing it in
     // Settings takes effect immediately.
 
@@ -28,13 +30,19 @@ final class BrownBearBrowserViewController: UIViewController {
     private let omnibox = OmniboxView()
     private let progressBar = ProgressBar()
     private let contentContainer = UIView()
-    private let toolbar = BrowserToolbar()
+    // Not `private`: the +Zoom extension (separate file) anchors the zoom HUD above this toolbar.
+    let toolbar = BrowserToolbar()
 
     /// The web view currently installed in the content container.
     private weak var installedWebView: WKWebView?
 
     /// `*.user.js` URLs the user chose to view as raw source instead of installing — let through once.
     private var viewSourceAllowOnce: Set<URL> = []
+
+    /// The transient page-zoom control and its live percentage label. Not `private`: driven by the
+    /// +Zoom extension in a separate file (stored properties can't move to an extension).
+    weak var zoomHUD: UIView?
+    weak var zoomLabel: UILabel?
 
     // MARK: - Lifecycle
 
@@ -480,6 +488,7 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
                 canInteractWithPage: url != nil,
                 canInstallUserscript: url.map { UserScriptInstaller.isUserScriptURL($0) } ?? false,
                 isBookmarked: isBookmarked,
+                zoomPercent: Int(((tab?.webView.pageZoom ?? 1.0) * 100).rounded()),
                 matchedScripts: matchedScripts)
             // The actor hop above defers this present to a later turn; don't stack a second menu if
             // a rapid double-tap already presented one.
@@ -590,6 +599,7 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         // The page's main document has started rendering — refresh the security indicator.
         if webView == installedWebView { refreshChrome() }
+        applyStoredZoom(for: webView)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -848,6 +858,8 @@ extension BrownBearBrowserViewController: BrowserMenuDelegate {
             presentDashboard(initialTab: .settings)
         case .reader:
             presentReader()
+        case .zoom:
+            presentZoomHUD()
         }
     }
 
