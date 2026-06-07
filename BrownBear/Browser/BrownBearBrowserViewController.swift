@@ -38,9 +38,11 @@ final class BrownBearBrowserViewController: UIViewController {
     // Not `private`: the +Zoom extension (separate file) anchors the zoom HUD above this toolbar.
     let toolbar = BrowserToolbar()
 
-    /// The top-chrome's `top == view.top` constraint, whose constant the scroll-hide animation drives
-    /// (0 shown, negative to slide the omnibox off the top). Built in +Layout, animated in +ScrollChrome.
-    var topChromeTopConstraint: NSLayoutConstraint?
+    /// The top-chrome's HEIGHT constraint, whose constant the scroll-hide animation drives: full
+    /// (safe-area + omnibox) when shown, collapsed to just the safe-area inset when hidden — so the bar
+    /// rolls up but the status-bar / Dynamic Island strip stays chrome-coloured and the page never
+    /// slides under it. Built in +Layout, animated in +ScrollChrome.
+    var topChromeHeightConstraint: NSLayoutConstraint?
     /// The omnibox's `top == topChrome.top + (safe-area-top + 8)` constraint. The omnibox is pinned to
     /// topChrome (not the view's safe area) so the whole bar slides as one unit; this constant tracks the
     /// safe-area inset (updated in viewSafeAreaInsetsDidChange).
@@ -115,7 +117,9 @@ final class BrownBearBrowserViewController: UIViewController {
         let target = view.safeAreaInsets.top + 8
         if omniboxTopConstraint.constant != target {
             omniboxTopConstraint.constant = target
-            if chromeHidden { applyChromeHidden(true, animated: false) }   // re-resolve hide distance
+            // Both the omnibox offset and the bar's full/collapsed heights depend on the inset; re-apply
+            // the current shown/hidden state so they track rotation / Dynamic-Island changes.
+            applyChromeHidden(chromeHidden, animated: false)
         }
     }
 
