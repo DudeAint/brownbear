@@ -93,8 +93,7 @@ final class BrowserToolbar: UIView {
         configure(newTabButton, symbol: "plus", label: "New Tab", action: #selector(tapNewTab))
         configure(menuButton, symbol: "ellipsis", label: "More", action: #selector(tapMenu))
 
-        // Wire the long-press affordances ToolbarButton already supports (back/forward history list,
-        // new-tab options) — previously defined but never assigned.
+        // Back/forward long-press shows the per-tab history list (ToolbarButton's built-in handler).
         backButton.longPressHandler = { [weak self] in
             guard let self else { return }
             self.delegate?.toolbarDidLongPressBack(self)
@@ -103,10 +102,24 @@ final class BrowserToolbar: UIView {
             guard let self else { return }
             self.delegate?.toolbarDidLongPressForward(self)
         }
-        newTabButton.longPressHandler = { [weak self] in
-            guard let self else { return }
-            self.delegate?.toolbarDidLongPressNewTab(self)
-        }
+        // New-tab button: a TAP opens a regular tab; a LONG-PRESS pops a small menu attached to the
+        // button offering New Tab / New Private Tab — so private mode is a visible choice rather than a
+        // blind "hold = private". Remove ToolbarButton's own long-press recognizer first so it doesn't
+        // fight UIButton's menu interaction.
+        newTabButton.gestureRecognizers?
+            .filter { $0 is UILongPressGestureRecognizer }
+            .forEach { newTabButton.removeGestureRecognizer($0) }
+        newTabButton.menu = UIMenu(children: [
+            UIAction(title: "New Tab", image: UIImage(systemName: "plus.square")) { [weak self] _ in
+                guard let self else { return }
+                self.delegate?.toolbarDidTapNewTab(self)
+            },
+            UIAction(title: "New Private Tab", image: UIImage(systemName: "eyeglasses")) { [weak self] _ in
+                guard let self else { return }
+                self.delegate?.toolbarDidLongPressNewTab(self)
+            }
+        ])
+        newTabButton.showsMenuAsPrimaryAction = false
 
         buildTabsButton()
 
