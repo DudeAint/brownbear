@@ -945,6 +945,17 @@
     });
   }
   var declarativeNetRequest = {
+    // Chrome exposes these enums + limits as constants on chrome.declarativeNetRequest; extensions read
+    // them directly (e.g. ResourceType.MAIN_FRAME). Their absence throws "undefined is not an object".
+    ResourceType: { MAIN_FRAME: 'main_frame', SUB_FRAME: 'sub_frame', STYLESHEET: 'stylesheet', SCRIPT: 'script', IMAGE: 'image', FONT: 'font', OBJECT: 'object', XMLHTTPREQUEST: 'xmlhttprequest', PING: 'ping', CSP_REPORT: 'csp_report', MEDIA: 'media', WEBSOCKET: 'websocket', WEBTRANSPORT: 'webtransport', WEBBUNDLE: 'webbundle', OTHER: 'other' },
+    RuleActionType: { BLOCK: 'block', REDIRECT: 'redirect', ALLOW: 'allow', UPGRADE_SCHEME: 'upgradeScheme', MODIFY_HEADERS: 'modifyHeaders', ALLOW_ALL_REQUESTS: 'allowAllRequests' },
+    HeaderOperation: { APPEND: 'append', SET: 'set', REMOVE: 'remove' },
+    DomainType: { FIRST_PARTY: 'firstParty', THIRD_PARTY: 'thirdParty' },
+    UnsupportedRegexReason: { SYNTAX_ERROR: 'syntaxError', MEMORY_LIMIT_EXCEEDED: 'memoryLimitExceeded' },
+    DYNAMIC_RULESET_ID: '_dynamic', SESSION_RULESET_ID: '_session',
+    MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES: 30000, MAX_NUMBER_OF_REGEX_RULES: 1000,
+    MAX_NUMBER_OF_STATIC_RULESETS: 100, MAX_NUMBER_OF_ENABLED_STATIC_RULESETS: 50,
+    GETMATCHEDRULES_QUOTA_INTERVAL: 600, MAX_GETMATCHEDRULES_CALLS_PER_INTERVAL: 20,
     updateDynamicRules: function (options, cb) { return settleBg(dnrCall('updateDynamicRules', options || {}).then(function () { return undefined; }), cb); },
     getDynamicRules: function (filter, cb) {
       if (typeof filter === 'function') { cb = filter; filter = null; }
