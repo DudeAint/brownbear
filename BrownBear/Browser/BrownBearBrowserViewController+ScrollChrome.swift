@@ -58,9 +58,9 @@ extension BrownBearBrowserViewController: UIScrollViewDelegate {
         if abs(delta) < Self.scrollDeadzone { return }
 
         if delta > 0 {
-            // Scrolling down — hide, but only once past one bar-height of travel from the top so a tiny
-            // nudge at the top doesn't collapse it.
-            if !chromeHidden, offsetY > minOffset + topChrome.bounds.height {
+            // Scrolling down — hide as soon as you've left the very top (snappy, no dead band). The
+            // "at the top → show" check above keeps a small bounce zone from collapsing the bar.
+            if !chromeHidden, offsetY > minOffset + 2 {
                 chromeHidden = true
                 applyChromeHidden(true, animated: true)
             }
@@ -86,8 +86,8 @@ extension BrownBearBrowserViewController: UIScrollViewDelegate {
         topConstraint.constant = hidden ? -topChrome.bounds.height : 0
         let apply = { self.view.layoutIfNeeded() }
         if animated {
-            // A lightly-damped spring reads as a swift, refined slide rather than a flat translate.
-            UIView.animate(withDuration: 0.32, delay: 0, usingSpringWithDamping: 0.86, initialSpringVelocity: 0.4,
+            // A quick, lightly-damped spring — snappy on the way out, still refined rather than abrupt.
+            UIView.animate(withDuration: 0.22, delay: 0, usingSpringWithDamping: 0.9, initialSpringVelocity: 0.6,
                            options: [.beginFromCurrentState, .allowUserInteraction]) { apply() }
         } else {
             apply()
