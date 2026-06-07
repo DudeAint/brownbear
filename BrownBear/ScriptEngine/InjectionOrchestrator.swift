@@ -155,6 +155,27 @@ final class InjectionOrchestrator {
                                                   frameId: frameId)
     }
 
+    // MARK: - Userscript menu commands & per-tab GM tab objects (GM_registerMenuCommand / GM_getTab)
+
+    /// The active tab's userscript menu commands (registration order) — the browser builds the menu's
+    /// "Script commands" section from these. Resolved off the active tab's web view so a command a
+    /// script registered in any frame of that tab appears.
+    func userScriptMenuCommands(in webView: WKWebView) -> [UserScriptMenuCommand] {
+        router.menuCommands(in: webView)
+    }
+
+    /// Fire a tapped menu command back into the exact frame/world its script runs in. Returns false if
+    /// the command no longer exists (so the browser can drop a stale row silently).
+    @discardableResult
+    func fireUserScriptMenuCommand(token: String, commandID: String) -> Bool {
+        router.fireMenuCommand(token: token, commandID: commandID)
+    }
+
+    /// Drop a closed tab's per-tab GM tab objects (GM_getTab/GM_saveTab), so they don't outlive it.
+    func forgetUserScriptTabObjects(tabID: Int) {
+        router.forgetTabObjects(tabID: tabID)
+    }
+
     /// Recompile and reinstall every enabled extension's content-blocking rules. Fire-and-forget;
     /// the next navigation picks up the new rule lists.
     func refreshExtensionContentBlockers() {

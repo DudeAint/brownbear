@@ -543,6 +543,19 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
                     badgeColor: Self.actionBadgeColor(actionState.badgeColorBytes(extensionID: ext.id, tabId: actionTabId)),
                     iconPath: resolved.iconPath))
             }
+            // GM_registerMenuCommand entries the matching userscripts registered for THIS tab's web
+            // view (iframe registrations included). Built from the active tab's live injections.
+            var scriptCommands: [MenuScriptCommand] = []
+            if let activeWebView = tabManager.activeTab?.webView {
+                scriptCommands = injection.userScriptMenuCommands(in: activeWebView).map {
+                    MenuScriptCommand(token: $0.token,
+                                      commandID: $0.commandID,
+                                      title: $0.title,
+                                      scriptName: $0.scriptName,
+                                      accessKey: $0.accessKey,
+                                      autoClose: $0.autoClose)
+                }
+            }
             let menuState = BrowserMenuState(
                 title: state.title,
                 host: state.displayHost,
@@ -553,7 +566,8 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
                 isBookmarked: isBookmarked,
                 zoomPercent: Int(((tab?.webView.pageZoom ?? 1.0) * 100).rounded()),
                 matchedScripts: matchedScripts,
-                extensionActions: extensionActions)
+                extensionActions: extensionActions,
+                scriptCommands: scriptCommands)
             // The actor hop above defers this present to a later turn; don't stack a second menu if
             // a rapid double-tap already presented one.
             guard presentedViewController == nil else { return }
@@ -856,6 +870,20 @@ extension BrownBearBrowserViewController: ScriptBridgeHost {
         tab.loadPendingURLIfNeeded()
         if active { refreshChrome() }
     }
+
+    func bridgeTabId(for webView: WKWebView) -> Int? {
+        // Resolve off the SAME registry chrome.tabs uses, so a userscript's GM_getTab and an extension's
+        // chrome.tabs.get agree on this tab's id. nil when no tab owns the web view (headless/closing).
+        tabManager.tabs.first { $0.webView === webView }.map { webExtTabRegistry.id(for: $0.id) }
+    }
+
+    func bridgeMenuCommandsDidChange(in webView: WKWebView) {
+        // If the "•••" menu is open on the active tab, rebuild it so a just-(un)registered command shows
+        // up / disappears live. Otherwise nothing to do — the menu reads commands fresh on next present.
+        guard webView === tabManager.activeTab?.webView,
+              let menu = presentedViewController as? BrowserMenuViewController else { return }
+        rebuildOpenMenu(replacing: menu)
+    }
 }
 
 // MARK: - BrowserMenuDelegate (the rich "•••" menu)
@@ -906,6 +934,22 @@ extension BrownBearBrowserViewController: BrowserMenuDelegate {
     func browserMenu(_ menu: BrowserMenuViewController, didTapExtensionAction extensionID: String) {
         // The menu already dismissed itself; open the extension's popup or fire chrome.action.onClicked.
         webExtTriggerAction(extensionID: extensionID)
+    }
+
+    func browserMenu(_ menu: BrowserMenuViewController, didTapScriptCommand command: MenuScriptCommand) {
+        // The menu either already dismissed (autoClose) or stayed open; fire the script's callback back
+        // into its own frame/world. Stale rows (the script unregistered or navigated) fire nothing.
+        injection.fireUserScriptMenuCommand(token: command.token, commandID: command.commandID)
+    }
+}
+
+extension BrownBearBrowserViewController {
+    /// Dismiss an open "•••" menu and re-present it so a live GM_registerMenuCommand change is reflected.
+    /// presentMenu() guards against double-presenting, so the re-present is safe after dismissal.
+    fileprivate func rebuildOpenMenu(replacing menu: BrowserMenuViewController) {
+        menu.dismiss(animated: false) { [weak self] in
+            self?.presentMenu()
+        }
     }
 }
 

@@ -37,6 +37,16 @@ protocol ScriptBridgeHost: AnyObject {
     /// GM_download — write `data` into the Downloads list under a unique destination; optionally
     /// present a share/save sheet (`presentSheet`). Returns the on-disk URL, or nil on write failure.
     func bridgeSaveDownload(data: Data, suggestedName: String, presentSheet: Bool) async -> URL?
+
+    /// The chrome-style integer tab id of the tab backing `webView`, or nil if no tab owns it. Used by
+    /// GM_getTab/GM_saveTab/GM_listTabs to key the per-tab object the same way chrome.tabs does — so a
+    /// userscript and an extension agree on what "this tab" means. Resolved off the SAME registry.
+    func bridgeTabId(for webView: WKWebView) -> Int?
+
+    /// A script (re)registered or unregistered a GM menu command for `webView`. If that web view is the
+    /// active tab and the "•••" menu is currently open, the browser rebuilds it so the command appears /
+    /// disappears live. A no-op when no menu is showing.
+    func bridgeMenuCommandsDidChange(in webView: WKWebView)
 }
 
 @MainActor
@@ -46,7 +56,9 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
     static let handlerName = "brownbear"
 
     /// The native-bound identity behind a token. Created in getScripts, looked up on every call.
-    private struct ScriptSession {
+    /// `fileprivate` (not `private`) so the same-file GM-handler extension can name it in the signatures
+    /// of its `fileprivate` handlers (a `fileprivate` method may not take a `private`-typed parameter).
+    fileprivate struct ScriptSession {
         let id: UUID
         /// The script's display name, for attributing log lines.
         let name: String
@@ -75,6 +87,11 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
     /// Per-script user grants for hosts not in `@connect` (ScriptCat-style allow-always).
     private let grantStore: ConnectGrantStore
     weak var host: ScriptBridgeHost?
+
+    /// Backs GM_registerMenuCommand/GM_unregisterMenuCommand and GM_getTab/GM_saveTab/GM_listTabs.
+    /// App-lifetime; entries are reaped alongside this router's sessions on (re)load (see
+    /// purgeSessions) and when a tab closes (forgetTabObjects, called by the browser VC).
+    let menuStore = UserScriptMenuCommandStore()
 
     /// In-flight @connect prompts keyed by "scriptID|host", so a script firing many requests to the
     /// same undeclared host shows ONE alert and the rest await its decision instead of stacking.
@@ -105,7 +122,18 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         "GM_xmlhttpRequest": ["GM_xmlhttpRequest", "GM.xmlHttpRequest"],
         "GM_notification": ["GM_notification", "GM.notification"],
         "GM_cookie": ["GM_cookie", "GM.cookie", "GM.cookie.list", "GM.cookie.set", "GM.cookie.delete"],
-        "GM_download": ["GM_download", "GM.download"]
+        "GM_download": ["GM_download", "GM.download"],
+        "GM_registerMenuCommand": ["GM_registerMenuCommand", "GM.registerMenuCommand"],
+        "GM_unregisterMenuCommand": ["GM_unregisterMenuCommand", "GM.unregisterMenuCommand"],
+        "GM_getTab": ["GM_getTab", "GM.getTab"],
+        "GM_saveTab": ["GM_saveTab", "GM.saveTab"],
+        "GM_listTabs": ["GM_listTabs", "GM.listTabs"]
+    ]
+
+    /// The menu/tab APIs, dispatched as a group in route() (before the main switch) so the switch's
+    /// cyclomatic complexity doesn't grow with each one. Keep in sync with routeMenuOrTab.
+    private static let menuTabAPIs: Set<String> = [
+        "GM_registerMenuCommand", "GM_unregisterMenuCommand", "GM_getTab", "GM_saveTab", "GM_listTabs"
     ]
 
     init(scriptStore: ScriptStore,
@@ -179,6 +207,12 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         // Everything else requires a native-bound session and a grant.
         let session = try resolveSession(token)
         try ensureGranted(api: api, session: session)
+
+        // The menu/tab APIs are dispatched here, before the main switch, so route() stays within its
+        // cyclomatic-complexity budget as the GM surface grows (they all share one sub-dispatch).
+        if Self.menuTabAPIs.contains(api) {
+            return try routeMenuOrTab(api: api, payload: payload, token: token, session: session, webView: webView)
+        }
 
         switch api {
         case "GM_getValue":
@@ -325,6 +359,11 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
     /// Drop every session for a web view — called when its main frame (re)loads, so stale tokens
     /// from the prior page (and their now-defunct frames) don't linger or receive value broadcasts.
     private func purgeSessions(for webView: WKWebView) {
+        // Menu commands are bound to the same injections; reap them with the sessions so a stale
+        // "Script commands" entry can't survive a navigation/reload of this web view. Done first and
+        // unconditionally — a main-frame (re)load means the registering page is gone even if its
+        // sessions were already evicted by the FIFO cap.
+        menuStore.purge(webView: webView)
         let stale = Set(sessions.compactMap { $0.value.webView === webView ? $0.key : nil })
         guard !stale.isEmpty else { return }
         for token in stale { sessions.removeValue(forKey: token) }
@@ -667,5 +706,130 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
     /// host gate.
     func resolvePrivilegedConnectDecision(scriptID: UUID, scriptName: String, host: String) async -> Bool {
         await resolveConnectDecision(scriptID: scriptID, scriptName: scriptName, host: host)
+    }
+}
+
+// MARK: - GM_registerMenuCommand / GM_getTab / GM_saveTab / GM_listTabs handlers
+//
+// Kept in a same-file extension so they can reach the router's private store/contentWorld while not
+// inflating the main type body. Every payload field is validated; missing/oversized input fails closed.
+extension ScriptMessageRouter {
+
+    /// Sub-dispatch for the five menu/tab APIs, collapsed under one `route()` case to keep that
+    /// function's cyclomatic complexity within the SwiftLint budget. All five have already passed
+    /// resolveSession + ensureGranted in route().
+    fileprivate func routeMenuOrTab(api: String, payload: [String: Any], token: String?,
+                                    session: ScriptSession, webView: WKWebView?) throws -> Any? {
+        switch api {
+        case "GM_registerMenuCommand":
+            return try handleRegisterMenuCommand(payload: payload, token: token, session: session, webView: webView)
+        case "GM_unregisterMenuCommand":
+            return handleUnregisterMenuCommand(payload: payload, token: token, session: session, webView: webView)
+        case "GM_getTab":
+            return try handleGetTab(session: session, webView: webView)
+        case "GM_saveTab":
+            return try handleSaveTab(payload: payload, session: session, webView: webView)
+        case "GM_listTabs":
+            return handleListTabs(session: session)
+        default:
+            return NSNull()
+        }
+    }
+
+    fileprivate func handleRegisterMenuCommand(payload: [String: Any],
+                                               token: String?,
+                                               session: ScriptSession,
+                                               webView: WKWebView?) throws -> Any? {
+        guard let token, let webView else {
+            throw BrownBearError.bridgeRejected("menu command needs a live injection")
+        }
+        guard let commandID = payload["commandId"] as? String, !commandID.isEmpty,
+              let title = payload["title"] as? String, !title.isEmpty else {
+            throw BrownBearError.bridgeRejected("missing menu command id/title")
+        }
+        // Clamp the caption so a malicious script can't blow up the menu layout.
+        let clampedTitle = title.count > 200 ? String(title.prefix(200)) + "\u{2026}" : title
+        var accessKey = payload["accessKey"] as? String
+        if let key = accessKey, key.count > 1 { accessKey = String(key.prefix(1)) }
+        let autoClose = (payload["autoClose"] as? Bool) ?? true
+        menuStore.registerCommand(UserScriptMenuCommand(scriptID: session.id,
+                                                        scriptName: session.name,
+                                                        token: token,
+                                                        commandID: commandID,
+                                                        title: clampedTitle,
+                                                        accessKey: accessKey,
+                                                        autoClose: autoClose,
+                                                        webView: webView,
+                                                        frameInfo: session.frameInfo))
+        host?.bridgeMenuCommandsDidChange(in: webView)
+        // GM_registerMenuCommand returns the (possibly script-supplied) id, so the script can later
+        // GM_unregisterMenuCommand it (Tampermonkey parity).
+        return commandID
+    }
+
+    fileprivate func handleUnregisterMenuCommand(payload: [String: Any],
+                                                 token: String?,
+                                                 session: ScriptSession,
+                                                 webView: WKWebView?) -> Any? {
+        guard let token, let commandID = payload["commandId"] as? String else { return NSNull() }
+        menuStore.unregisterCommand(token: token, commandID: commandID)
+        if let webView { host?.bridgeMenuCommandsDidChange(in: webView) }
+        return NSNull()
+    }
+
+    fileprivate func handleGetTab(session: ScriptSession, webView: WKWebView?) throws -> Any? {
+        guard let webView, let tabID = host?.bridgeTabId(for: webView) else {
+            // No resolvable tab (headless / closing) — hand back an empty object, never fail the script.
+            return NSNull()
+        }
+        // Return the raw JSON string; the runtime parses it (it's the script's own serialized object).
+        return menuStore.tabObject(tabID: tabID, scriptID: session.id) ?? NSNull()
+    }
+
+    fileprivate func handleSaveTab(payload: [String: Any],
+                                   session: ScriptSession,
+                                   webView: WKWebView?) throws -> Any? {
+        guard let json = payload["value"] as? String else {
+            throw BrownBearError.bridgeRejected("missing tab object")
+        }
+        guard let webView, let tabID = host?.bridgeTabId(for: webView) else { return NSNull() }
+        guard menuStore.saveTabObject(tabID: tabID, scriptID: session.id, json: json) else {
+            throw BrownBearError.bridgeRejected("tab object too large")
+        }
+        return NSNull()
+    }
+
+    fileprivate func handleListTabs(session: ScriptSession) -> Any? {
+        // chrome tab id (as a string key, since JS object keys are strings) → the script's saved JSON.
+        let objects = menuStore.tabObjects(forScript: session.id)
+        var out: [String: String] = [:]
+        for (tabID, json) in objects { out[String(tabID)] = json }
+        return out
+    }
+
+    /// Called by the browser when a tab closes, so its per-tab GM objects don't outlive it (and a
+    /// reused chrome id can't surface another tab's data). Routed via InjectionOrchestrator.
+    func forgetTabObjects(tabID: Int) {
+        menuStore.forgetTab(tabID: tabID)
+    }
+
+    /// Fire a registered menu command's callback back into the EXACT frame/world the registering script
+    /// runs in. Called by the browser when the user taps the command in the menu. No-op if the command
+    /// was unregistered or its web view died (fail closed). Returns true if a live command was fired.
+    @discardableResult
+    func fireMenuCommand(token: String, commandID: String) -> Bool {
+        guard let command = menuStore.command(token: token, commandID: commandID),
+              let webView = command.webView else { return false }
+        let tokenLiteral = Self.escapeForJSStringLiteral(token)
+        let idLiteral = Self.escapeForJSStringLiteral(commandID)
+        let js = "window.__brownbear&&window.__brownbear.fireMenuCommand('\(tokenLiteral)','\(idLiteral)');"
+        BBEvaluateJavaScriptInFrame(webView, js, command.frameInfo, contentWorld)
+        return true
+    }
+
+    /// The active tab's live menu commands (registration order), for the browser to build the menu's
+    /// "Script commands" section. Resolved off the calling web view so iframe registrations show too.
+    func menuCommands(in webView: WKWebView) -> [UserScriptMenuCommand] {
+        menuStore.commands(in: webView)
     }
 }

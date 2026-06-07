@@ -55,6 +55,11 @@
   // --- GM_xmlhttpRequest streaming ------------------------------------------------------------
   var xhrCallbacks = _Object.create(null);
 
+  // token -> { commandId -> callbackFn } for GM_registerMenuCommand. Native (which minted the tokens)
+  // calls window.__brownbear.fireMenuCommand(token, commandId) to invoke a tapped command's callback
+  // in this exact frame/world. A page cannot reach this (isolated world) nor name another's token.
+  var menuCommandsByToken = _Object.create(null);
+
   // --- GM_notification onclick/onclose routing -----------------------------------------------
   // token -> { byId: { notifId -> { onclick, ondone, onclose } } } so a tap native pushes back can
   // find the right script's callbacks. Keyed by token so one script can't see another's callbacks.
@@ -99,6 +104,54 @@
     if (kind === "reject" && entry.reject) { entry.reject(payload); }
     entry.resolve = null; entry.reject = null;
   }
+
+  // --- window.onurlchange (SPA URL tracking) --------------------------------------------------
+  // Installed ONCE per page (the IIFE's __brownbear guard ensures single install). Userscripts run
+  // with `window` bound to the real page window, so we patch the page's own history + listen for
+  // popstate/hashchange, then fire a CustomEvent('urlchange', {detail:{url}}) AND call any
+  // window.onurlchange handler a script assigned. Tampermonkey parity: a script must @grant
+  // window.onurlchange (advisory in our model) before relying on the page-window surface.
+  var _history = W.history;
+  var _location = W.location;
+  var _lastHref = (_location && _location.href) || "";
+  var _CustomEvent = W.CustomEvent;
+  function emitUrlChange() {
+    var href = "";
+    try { href = (_location && _location.href) || ""; } catch (e) { href = ""; }
+    if (href === _lastHref) { return; }
+    _lastHref = href;
+    // The standard Tampermonkey surface: a 'urlchange' event on window with {url} in detail. A
+    // script may also have set window.onurlchange; the event path covers addEventListener users.
+    try {
+      if (typeof _CustomEvent === "function") {
+        W.dispatchEvent(new _CustomEvent("urlchange", { detail: { url: href } }));
+      }
+    } catch (e) { /* dispatch failed (rare) — the onurlchange handler below still runs */ }
+    try {
+      var h = W.onurlchange;
+      if (typeof h === "function") { h.call(W, { url: href }); }
+    } catch (e) { safeCall(_console.error, e); }
+  }
+  function installUrlChangeTracking() {
+    if (!_history) { return; }
+    function wrap(name) {
+      var orig = _history[name];
+      if (typeof orig !== "function" || orig.__brownbearWrapped) { return; }
+      var wrapped = function () {
+        var r = orig.apply(this, arguments);
+        // Defer one microtask so location.href reflects the new URL before we read it.
+        _Promise.resolve().then(emitUrlChange);
+        return r;
+      };
+      wrapped.__brownbearWrapped = true;
+      try { _history[name] = wrapped; } catch (e) { /* non-configurable — fall back to events */ }
+    }
+    wrap("pushState");
+    wrap("replaceState");
+    try { W.addEventListener("popstate", function () { _Promise.resolve().then(emitUrlChange); }, true); } catch (e) {}
+    try { W.addEventListener("hashchange", function () { _Promise.resolve().then(emitUrlChange); }, true); } catch (e) {}
+  }
+  installUrlChangeTracking();
 
   function safeCall(fn, arg) {
     if (typeof fn !== "function") { return; }
@@ -387,6 +440,68 @@
     }
     function GM_xmlhttpRequest(details) { return startXHR(details, token); }
 
+    // --- GM_registerMenuCommand (Tampermonkey/ScriptCat parity) -------------------------------
+    // Commands are surfaced natively in the browser's "•••" menu; native fires the callback back via
+    // fireMenuCommand(token, commandId). The id is stable so GM_unregisterMenuCommand can target it.
+    var menuReg = menuCommandsByToken[token] || (menuCommandsByToken[token] = _Object.create(null));
+    var menuCounter = 0;
+    function GM_registerMenuCommand(title, callback, optionsOrAccessKey) {
+      if (typeof callback !== "function") { return null; }
+      var accessKey = null;
+      var autoClose = true;
+      if (typeof optionsOrAccessKey === "string") {
+        accessKey = optionsOrAccessKey;
+      } else if (optionsOrAccessKey && typeof optionsOrAccessKey === "object") {
+        if (typeof optionsOrAccessKey.accessKey === "string") { accessKey = optionsOrAccessKey.accessKey; }
+        if (optionsOrAccessKey.autoClose === false) { autoClose = false; }
+      }
+      var commandId = (optionsOrAccessKey && optionsOrAccessKey.id != null)
+        ? String(optionsOrAccessKey.id)
+        : (menuCounter += 1, "cmd_" + menuCounter);
+      menuReg[commandId] = callback;
+      call("GM_registerMenuCommand", {
+        commandId: commandId,
+        title: String(title == null ? "" : title),
+        accessKey: accessKey,
+        autoClose: autoClose
+      });
+      return commandId;
+    }
+    function GM_unregisterMenuCommand(commandId) {
+      var id = String(commandId);
+      delete menuReg[id];
+      call("GM_unregisterMenuCommand", { commandId: id });
+    }
+
+    // --- GM_getTab / GM_saveTab / GM_listTabs (per-tab, per-script object) ---------------------
+    // Native namespaces by this script's UUID and keys by the chrome-style tab id of the calling
+    // web view, so the object is private to the script and scoped to the tab for its lifetime.
+    function GM_getTab(callback) {
+      call("GM_getTab", {}).then(function (json) {
+        var obj = (typeof json === "string") ? (safeParse(json) || {}) : {};
+        safeCall(callback, obj);
+      }).catch(function () { safeCall(callback, {}); });
+    }
+    function GM_saveTab(obj, callback) {
+      var json;
+      try { json = _JSON.stringify(obj == null ? {} : obj); } catch (e) { json = "{}"; }
+      call("GM_saveTab", { value: json })
+        .then(function () { safeCall(callback, undefined); })
+        .catch(function () { safeCall(callback, undefined); });
+    }
+    function GM_listTabs(callback) {
+      call("GM_listTabs", {}).then(function (map) {
+        var out = _Object.create(null);
+        if (map && typeof map === "object") {
+          _Object.keys(map).forEach(function (k) {
+            var parsed = (typeof map[k] === "string") ? safeParse(map[k]) : map[k];
+            out[k] = parsed || {};
+          });
+        }
+        safeCall(callback, out);
+      }).catch(function () { safeCall(callback, _Object.create(null)); });
+    }
+
     // --- GM_notification (TM/VM: details OR (text, title, image, onclick)) ---------------------
     var notifEnv = { byId: _Object.create(null) };
     notifEnvByToken[token] = notifEnv;
@@ -530,7 +645,12 @@
         });
         GM_download(d);
         return promise;
-      }
+      },
+      registerMenuCommand: function (t, cb, o) { return GM_registerMenuCommand(t, cb, o); },
+      unregisterMenuCommand: function (id) { GM_unregisterMenuCommand(id); },
+      getTab: function () { return new _Promise(function (resolve) { GM_getTab(resolve); }); },
+      saveTab: function (obj) { return new _Promise(function (resolve) { GM_saveTab(obj, function () { resolve(); }); }); },
+      listTabs: function () { return new _Promise(function (resolve) { GM_listTabs(resolve); }); }
     };
 
     return {
@@ -543,7 +663,10 @@
         GM_addValueChangeListener: GM_addValueChangeListener,
         GM_removeValueChangeListener: GM_removeValueChangeListener,
         GM_xmlhttpRequest: GM_xmlhttpRequest,
-        GM_notification: GM_notification, GM_cookie: GM_cookie, GM_download: GM_download
+        GM_notification: GM_notification, GM_cookie: GM_cookie, GM_download: GM_download,
+        GM_registerMenuCommand: GM_registerMenuCommand,
+        GM_unregisterMenuCommand: GM_unregisterMenuCommand,
+        GM_getTab: GM_getTab, GM_saveTab: GM_saveTab, GM_listTabs: GM_listTabs
       },
       GM: GM,
       GM_info: GM_info
@@ -644,13 +767,24 @@
     }
   }
 
+  // Native (which minted the token) invokes a tapped GM_registerMenuCommand callback in THIS frame/
+  // world. A page can't reach this object (isolated world) and can't name another script's token.
+  function fireMenuCommand(token, commandId) {
+    var reg = menuCommandsByToken[token];
+    if (!reg) { return; }
+    var cb = reg[commandId];
+    if (typeof cb !== "function") { return; }
+    try { cb(); } catch (e) { _console.error("[BrownBear] menu command error:", e); }
+  }
+
   // Only these are exposed; bridge/getScripts/run remain private to this closure. applyValueChange
   // is reachable from native (in this isolated world) to deliver cross-frame/tab value changes.
   W.__brownbear = {
     dispatchXHR: dispatchXHR,
     applyValueChange: applyRemoteValueChange,
     dispatchNotification: dispatchNotification,
-    dispatchDownload: dispatchDownload
+    dispatchDownload: dispatchDownload,
+    fireMenuCommand: fireMenuCommand
   };
 
   loadAndRun();
