@@ -294,9 +294,30 @@
     removeCSS: function (injection, cb) { return settleBg(scriptingCall('removeCSS', cssInjection(injection)).then(function () { return undefined; }), cb); }
   };
 
+  // ---------------------------------------------------------------- chrome.cookies
+
+  function cookiesCall(method, args) {
+    return new Promise(function (resolve) {
+      __bb_cookies(method, JSON.stringify(args || {}), function (resJSON) { resolve(parseJSON(resJSON)); });
+    });
+  }
+  var cookieChangedListeners = [];
+  var cookies = {
+    get: function (details, cb) { return settleBg(cookiesCall('get', { details: details || {} }), cb); },
+    getAll: function (details, cb) {
+      if (typeof details === 'function') { cb = details; details = {}; }
+      return settleBg(cookiesCall('getAll', { details: details || {} }), cb);
+    },
+    set: function (details, cb) { return settleBg(cookiesCall('set', { details: details || {} }), cb); },
+    remove: function (details, cb) { return settleBg(cookiesCall('remove', { details: details || {} }), cb); },
+    getAllCookieStores: function (cb) { return settleBg(cookiesCall('getAllCookieStores', {}), cb); },
+    onChanged: makeEvent(cookieChangedListeners)
+  };
+
   var chrome = {
     runtime: runtime,
     storage: storage,
+    cookies: cookies,
     alarms: alarms,
     commands: commands,
     action: action,
@@ -368,6 +389,15 @@
       }
       for (var i = 0; i < storageChangedListeners.length; i++) {
         try { storageChangedListeners[i](changes, areaName); } catch (e) { __bb_log('error', 'storage.onChanged listener threw: ' + (e && e.message ? e.message : e)); }
+      }
+    },
+
+    dispatchCookieChanged: function (changeJSON) {
+      var change = parseJSON(changeJSON);
+      if (!change) { return; }
+      for (var i = 0; i < cookieChangedListeners.length; i++) {
+        try { cookieChangedListeners[i](change); }
+        catch (e) { __bb_log('error', 'cookies.onChanged listener threw: ' + (e && e.message ? e.message : e)); }
       }
     },
 

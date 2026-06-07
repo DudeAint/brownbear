@@ -29,6 +29,10 @@ final class WebExtensionRuntime {
     weak var host: WebExtensionBridgeHost? {
         didSet { for context in contexts.values { context.host = host } }
     }
+    /// chrome.cookies bridge to the browser; pushed to every background context, same lifecycle as host.
+    weak var cookieHost: WebExtensionCookieBridgeHost? {
+        didSet { for context in contexts.values { context.cookieHost = cookieHost } }
+    }
     private var didStart = false
     // Single-flight reconciliation: reload() is async and suspends at every actor await, so two
     // overlapping calls (the initial start() one and a change-notification one) could otherwise
@@ -60,6 +64,10 @@ final class WebExtensionRuntime {
         observers.append(NotificationCenter.default.addObserver(
             forName: .brownBearExtensionStorageDidChange, object: nil, queue: .main) { [weak self] note in
             Task { @MainActor in self?.handleStorageChange(note) }
+        })
+        observers.append(NotificationCenter.default.addObserver(
+            forName: .brownBearExtensionCookieDidChange, object: nil, queue: .main) { [weak self] note in
+            Task { @MainActor in self?.handleCookieChange(note) }
         })
 
         Task { await reload() }
@@ -140,6 +148,7 @@ final class WebExtensionRuntime {
             return
         }
         context.host = host   // chrome.tabs bridge (may be nil until the browser VC loads)
+        context.cookieHost = cookieHost   // chrome.cookies bridge (same lifecycle as host)
         contexts[ext.id] = context
         context.boot(runtimeJS: Self.backgroundRuntimeJS,
                      backgroundSource: source,
@@ -169,6 +178,14 @@ final class WebExtensionRuntime {
               let changes = info["changes"] as? [String: [String: String]],
               let context = contexts[extensionID] else { return }
         context.dispatchStorageChanged(area: area, changes: changes)
+    }
+
+    /// Fan a cookie change (one record) out to every background worker's chrome.cookies.onChanged.
+    /// iOS has a single cookie store, so the change is global; a worker without the cookies permission
+    /// simply has no listeners, so broadcasting to all is safe.
+    private func handleCookieChange(_ note: Notification) {
+        guard let change = note.userInfo?["change"] as? [String: Any] else { return }
+        for context in contexts.values { context.dispatchCookieChanged(change: change) }
     }
 
     // MARK: - i18n messages

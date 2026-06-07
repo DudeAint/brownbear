@@ -184,6 +184,33 @@
       };
     }
 
+    // --- chrome.cookies ------------------------------------------------------------------------
+    function cookiesApi() {
+      function get(details, callback) {
+        return settle(bridge("cookies.get", { details: details || {} }, token), callback);
+      }
+      function getAll(details, callback) {
+        if (typeof details === "function") { callback = details; details = {}; }
+        return settle(bridge("cookies.getAll", { details: details || {} }, token), callback);
+      }
+      function set(details, callback) {
+        return settle(bridge("cookies.set", { details: details || {} }, token), callback);
+      }
+      function remove(details, callback) {
+        return settle(bridge("cookies.remove", { details: details || {} }, token), callback);
+      }
+      function getAllCookieStores(callback) {
+        return settle(bridge("cookies.getAllCookieStores", {}, token), callback);
+      }
+      // onChanged isn't pushed into content scripts (no per-frame native push channel here); it's a
+      // no-op so a content script that subscribes doesn't throw. Background workers + pages get live
+      // onChanged. (Content-script cookie listeners are rare; the read/write APIs are the point.)
+      return {
+        get: get, getAll: getAll, set: set, remove: remove,
+        getAllCookieStores: getAllCookieStores, onChanged: noopEvent
+      };
+    }
+
     var chrome = {
       storage: {
         local: storageArea("local"),
@@ -191,6 +218,7 @@
         session: storageArea("session"),
         onChanged: makeEvent(storageListeners)
       },
+      cookies: cookiesApi(),
       runtime: {
         id: data.extensionId,
         getManifest: function () { return manifest; },

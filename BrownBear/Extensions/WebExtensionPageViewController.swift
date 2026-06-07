@@ -39,6 +39,7 @@ final class WebExtensionPageViewController: UIViewController {
 
     private var webView: WKWebView?
     private var storageObserver: NSObjectProtocol?
+    private var cookieObserver: NSObjectProtocol?
 
     init(ext: WebExtension,
          kind: Kind,
@@ -54,15 +55,17 @@ final class WebExtensionPageViewController: UIViewController {
                                                 contentWorld: contentWorld)
         self.schemeHandler = WebExtensionSchemeHandler(extensionID: ext.id, store: store)
         super.init(nibName: nil, bundle: nil)
-        // The popup runs its own router instance, so give it the same chrome.tabs bridge the runtime
-        // holds (set when the browser VC loaded), or popups couldn't open/query tabs.
+        // The popup runs its own router instance, so give it the same chrome.tabs + chrome.cookies
+        // bridges the runtime holds (set when the browser VC loaded), or popups couldn't reach them.
         self.router.host = runtime.host
+        self.router.cookieHost = runtime.cookieHost
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
     deinit {
         if let storageObserver { NotificationCenter.default.removeObserver(storageObserver) }
+        if let cookieObserver { NotificationCenter.default.removeObserver(cookieObserver) }
     }
 
     // MARK: - The page path
@@ -158,6 +161,19 @@ final class WebExtensionPageViewController: UIViewController {
             forName: .brownBearExtensionStorageDidChange, object: nil, queue: .main) { [weak self] note in
             Task { @MainActor in self?.handleStorageChange(note) }
         }
+        cookieObserver = NotificationCenter.default.addObserver(
+            forName: .brownBearExtensionCookieDidChange, object: nil, queue: .main) { [weak self] note in
+            Task { @MainActor in self?.handleCookieChange(note) }
+        }
+    }
+
+    /// Push a cookie change into an open popup/options page's chrome.cookies.onChanged. Double-encoded
+    /// (a JSON string the page JS will _JSON.parse), matching dispatchStorageChanged.
+    private func handleCookieChange(_ note: Notification) {
+        guard let change = note.userInfo?["change"] as? [String: Any], let webView else { return }
+        let js = "window.__brownbearExtPage && window.__brownbearExtPage.dispatchCookieChanged("
+            + "\(Self.jsonString(Self.jsonString(change))));"
+        BBEvaluateJavaScript(webView, js, contentWorld)
     }
 
     private func handleStorageChange(_ note: Notification) {

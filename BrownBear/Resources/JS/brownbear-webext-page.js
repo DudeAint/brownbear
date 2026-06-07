@@ -164,6 +164,23 @@
   var storageListeners = [];
   var messageListeners = [];
 
+  // --- chrome.cookies (live onChanged via the native push surface below) -----------------------
+  var cookieChangedListeners = [];
+  function cookiesApi() {
+    function get(details, callback) { return settle(bridge("cookies.get", { details: details || {} }), callback); }
+    function getAll(details, callback) {
+      if (typeof details === "function") { callback = details; details = {}; }
+      return settle(bridge("cookies.getAll", { details: details || {} }), callback);
+    }
+    function set(details, callback) { return settle(bridge("cookies.set", { details: details || {} }), callback); }
+    function remove(details, callback) { return settle(bridge("cookies.remove", { details: details || {} }), callback); }
+    function getAllCookieStores(callback) { return settle(bridge("cookies.getAllCookieStores", {}), callback); }
+    return {
+      get: get, getAll: getAll, set: set, remove: remove,
+      getAllCookieStores: getAllCookieStores, onChanged: makeEvent(cookieChangedListeners)
+    };
+  }
+
   var chrome = {
     storage: {
       local: storageArea("local"),
@@ -171,6 +188,7 @@
       session: storageArea("session"),
       onChanged: makeEvent(storageListeners)
     },
+    cookies: cookiesApi(),
     runtime: {
       id: data.extensionId,
       getManifest: function () { return manifest; },
@@ -217,6 +235,13 @@
       });
       for (var i = 0; i < storageListeners.length; i++) {
         try { storageListeners[i](changes, areaName); } catch (e) {}
+      }
+    },
+    dispatchCookieChanged: function (changeJSON) {
+      var change;
+      try { change = _JSON.parse(changeJSON); } catch (e) { return; }
+      for (var i = 0; i < cookieChangedListeners.length; i++) {
+        try { cookieChangedListeners[i](change); } catch (e) {}
       }
     }
   };

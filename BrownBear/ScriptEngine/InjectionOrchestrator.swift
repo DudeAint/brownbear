@@ -51,6 +51,19 @@ final class InjectionOrchestrator {
         }
     }
 
+    /// Forwarded to the content/popup router AND the background runtime so chrome.cookies can reach the
+    /// browser's WKHTTPCookieStore from every surface (the browser VC implements this).
+    weak var webExtensionCookieHost: WebExtensionCookieBridgeHost? {
+        didSet {
+            webExtensionRouter.cookieHost = webExtensionCookieHost
+            BrownBearServices.shared.webExtensionRuntime.cookieHost = webExtensionCookieHost
+        }
+    }
+
+    /// Watches the default cookie jar and fans chrome.cookies.onChanged out to workers/pages. Owned
+    /// here (app-lifetime) and started in configure(), alongside the background runtime.
+    private let cookieObserver = WebExtensionCookieObserver(store: WKWebsiteDataStore.default().httpCookieStore)
+
     init(scriptStore: ScriptStore = BrownBearServices.shared.scriptStore,
          valueStore: GMValueStore = BrownBearServices.shared.valueStore,
          logStore: LogStore = BrownBearServices.shared.logStore,
@@ -118,6 +131,10 @@ final class InjectionOrchestrator {
         // Boot background service workers + the content↔background message bus (self-observes
         // extension changes thereafter).
         BrownBearServices.shared.webExtensionRuntime.start()
+
+        // Start watching the cookie jar so chrome.cookies.onChanged fires for ordinary browsing and
+        // for extension-initiated set/remove.
+        cookieObserver.start()
 
         // Compile declarativeNetRequest rulesets now, and recompile whenever extensions change.
         refreshExtensionContentBlockers()

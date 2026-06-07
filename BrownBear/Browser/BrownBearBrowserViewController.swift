@@ -17,7 +17,9 @@ final class BrownBearBrowserViewController: UIViewController {
 
     /// Owns the shared userscript runtime (Modules 2–3) plumbed into every tab's configuration.
     let injection = InjectionOrchestrator()
-    private lazy var configurationFactory = WebViewConfigurationFactory(injection: injection)
+    // Not `private`: the chrome.cookies host logic lives in BrownBearBrowserViewController+Cookies.swift,
+    // and a Swift extension in another file can only reach internal (or higher) members.
+    lazy var configurationFactory = WebViewConfigurationFactory(injection: injection)
     // Not `private`: the page-zoom logic lives in BrownBearBrowserViewController+Zoom.swift, and a
     // Swift extension in another file can only reach internal (or higher) members.
     lazy var tabManager = TabManager(configurationFactory: configurationFactory)
@@ -74,6 +76,7 @@ final class BrownBearBrowserViewController: UIViewController {
         toolbar.delegate = self
         injection.bridgeHost = self
         injection.webExtensionBridgeHost = self   // chrome.tabs → TabManager
+        injection.webExtensionCookieHost = self   // chrome.cookies → WKHTTPCookieStore
         DownloadManager.shared.onDownloadStarted = { [weak self] in self?.presentDownloadStartedToast() }
         buildHierarchy()
     }
