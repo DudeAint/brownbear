@@ -116,6 +116,23 @@ final class DashboardViewModel: ObservableObject {
         await scriptStore.setEnabled(id: script.id, enabled)
     }
 
+    /// Apply per-script overrides (injection timing/context, auto-update opt-out). Optimistically
+    /// updates the local row so the picker reflects the change immediately, then persists.
+    func setOverrides(_ script: UserScript, _ overrides: ScriptOverrides) async {
+        if let index = scripts.firstIndex(where: { $0.id == script.id }) {
+            scripts[index].overrides = overrides.isEmpty ? nil : overrides
+        }
+        _ = await scriptStore.setOverrides(id: script.id, overrides)
+    }
+
+    /// Manually check a single script for an update. Reloads the library if it was updated so the
+    /// detail view shows the new version, and returns the outcome for the caller to surface.
+    func checkForUpdate(_ script: UserScript) async -> ScriptUpdateService.UpdateOutcome {
+        let outcome = await ScriptUpdateService().checkForUpdate(script)
+        if case .updated = outcome { await load() }
+        return outcome
+    }
+
     func delete(_ script: UserScript) async {
         await scriptStore.remove(id: script.id)
         await BrownBearServices.shared.valueStore.clear(scriptID: script.id)
@@ -167,7 +184,8 @@ final class DashboardViewModel: ObservableObject {
         isCheckingUpdates = true
         defer { isCheckingUpdates = false }
         AppSettings.lastScriptUpdateCheck = Date()
-        let updated = await ScriptUpdateService().checkForUpdates()
+        // The automatic pass respects per-script opt-out; a manual "check all" checks everything.
+        let updated = await ScriptUpdateService().checkForUpdates(respectOptOut: auto)
         if !updated.isEmpty {
             await load()
             updateMessage = updated.count == 1 ? "Updated “\(updated[0])”." : "Updated \(updated.count) scripts."

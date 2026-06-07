@@ -73,8 +73,14 @@ The app is built in five sequenced modules. Each is shippable and verifiable on 
   scripts to inject (respecting `@run-at` and `@weight`).
 - `WKUserContentController` wiring installs `WKUserScript`s at `.atDocumentStart` and
   `.atDocumentEnd`; `document-idle` is simulated via a post-load dispatch.
+- **Per-script overrides** (`ScriptOverrides` on `UserScript`) layer user choices over the parsed
+  metadata without editing source: `@run-at`, `@inject-into`, and auto-update participation. The
+  runtime gates on `UserScript.effectiveRunAt`/`effectiveInjectInto` (override ?? metadata), edited
+  from the dashboard's `ScriptSettingsCard`. The field is optional and pruned to `nil` when empty so
+  old records decode unchanged.
 
-**Reference:** quoid/userscripts metadata + WKUserScript injection timing.
+**Reference:** quoid/userscripts metadata + WKUserScript injection timing; Tampermonkey/ScriptCat
+per-script settings.
 
 ### Module 3 — Sandbox & GM API Bridge
 **Goal:** a hostile-page-resistant runtime exposing native-backed GM APIs.

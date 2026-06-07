@@ -12,6 +12,18 @@ import Foundation
 
 final class ScriptUpdateService {
 
+    /// Outcome of a single manual update check, for user-facing feedback.
+    enum UpdateOutcome: Equatable {
+        /// Re-installed; the associated value is the new @version string.
+        case updated(String)
+        /// The remote @version is not newer than the installed one.
+        case upToDate
+        /// The script declares no @updateURL/@downloadURL to check (e.g. pasted source).
+        case noURL
+        /// Network or parse failure — left the installed script untouched (fail closed).
+        case failed
+    }
+
     private let scriptStore: ScriptStore
     private let parser = ScriptMetadataParser()
     private let session: URLSession = {
@@ -27,17 +39,40 @@ final class ScriptUpdateService {
 
     /// Check every updatable script and re-install those with a newer remote @version. Returns the
     /// display names that were updated (for a user-facing summary).
+    ///
+    /// - Parameter respectOptOut: when `true` (the automatic pass), skip scripts the user has
+    ///   individually excluded via `overrides.autoUpdate == false`. A manual "check all" passes
+    ///   `false` to check everything regardless of per-script opt-out.
     @discardableResult
-    func checkForUpdates() async -> [String] {
+    func checkForUpdates(respectOptOut: Bool = true) async -> [String] {
         let scripts = await scriptStore.all()
         var updated: [String] = []
         for script in scripts {
+            if respectOptOut && script.overrides?.autoUpdate == false { continue }
             guard let source = await fetchNewerSource(for: script) else { continue }
             if (try? await scriptStore.updateSource(id: script.id, source: source)) != nil {
                 updated.append(script.displayName)
             }
         }
         return updated
+    }
+
+    /// Manually check one script and apply an update if a newer @version exists. Always runs,
+    /// ignoring the per-script auto-update opt-out (that flag governs only the automatic pass).
+    /// Returns a precise outcome so the caller can tell the user *why* nothing changed.
+    func checkForUpdate(_ script: UserScript) async -> UpdateOutcome {
+        guard let urlString = script.metadata.downloadURL ?? script.metadata.updateURL,
+              let url = URL(string: urlString),
+              ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return .noURL }
+        guard let (data, response) = try? await session.data(from: url),
+              let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+              let remoteSource = String(data: data, encoding: .utf8),
+              let remoteMeta = try? parser.parse(remoteSource) else { return .failed }
+        guard Self.isVersion(remoteMeta.version, newerThan: script.metadata.version) else { return .upToDate }
+        guard (try? await scriptStore.updateSource(id: script.id, source: remoteSource)) != nil else {
+            return .failed
+        }
+        return .updated(remoteMeta.version ?? "?")
     }
 
     /// Fetch the remote source for `script` if its @version is newer than the installed one; else nil.
