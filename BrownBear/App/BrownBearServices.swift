@@ -21,6 +21,7 @@ final class BrownBearServices {
     let scheduleStore = ScheduleStateStore()
     let bookmarkStore = BookmarkStore()
     let historyStore = HistoryStore()
+    let siteSettingsStore = SiteSettingsStore()
     let backgroundScheduler: BrownBearBackgroundScheduler
 
     // Module 6 — browser extensions.

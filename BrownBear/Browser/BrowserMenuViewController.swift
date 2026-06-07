@@ -25,6 +25,7 @@ enum BrowserMenuAction {
     case history
     case downloads
     case settings
+    case zoom
 }
 
 /// A snapshot of the active tab the menu renders against.
@@ -36,6 +37,7 @@ struct BrowserMenuState {
     var canInteractWithPage: Bool   // a real page is loaded (share/copy/find/desktop apply)
     var canInstallUserscript: Bool  // the current URL is a *.user.js
     var isBookmarked: Bool = false  // the current URL is already bookmarked
+    var zoomPercent: Int = 100      // active tab's page-zoom level, for the zoom stepper
     var matchedScripts: [MenuScript] = []  // userscripts whose @match/@include matched this page
 }
 
@@ -176,6 +178,7 @@ final class BrowserMenuViewController: UIViewController {
                                 title: state.isBookmarked ? "Remove Bookmark" : "Add Bookmark",
                                 action: .toggleBookmark))
             rows.append(makeRow(icon: "link", title: "Copy Link", action: .copyLink))
+            rows.append(makeRow(icon: "textformat.size", title: "Zoom (\(state.zoomPercent)%)", action: .zoom))
         }
         if state.canInstallUserscript {
             rows.append(makeRow(icon: "arrow.down.doc", title: "Install this userscript", action: .installUserscript))
