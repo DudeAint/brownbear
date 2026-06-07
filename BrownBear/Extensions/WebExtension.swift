@@ -19,6 +19,11 @@ extension Notification.Name {
     /// userInfo: `extensionID: String`, `area: String`, `changes: [String: [String: String]]`
     /// where each change is `["oldValue": json]` / `["newValue": json]` (omitted key = absent).
     static let brownBearExtensionStorageDidChange = Notification.Name("brownBearExtensionStorageDidChange")
+
+    /// Posted (main thread) when a chrome.notifications event (clicked/closed/buttonClicked) occurs.
+    /// userInfo: `extensionID: String`, `kind: String` ("clicked"|"closed"|"buttonClicked"),
+    /// `notificationID: String`, and either `byUser: Bool` (closed) or `buttonIndex: Int` (buttonClicked).
+    static let brownBearExtensionNotificationEvent = Notification.Name("brownBearExtensionNotificationEvent")
 }
 
 struct WebExtension: Codable, Identifiable, Equatable {

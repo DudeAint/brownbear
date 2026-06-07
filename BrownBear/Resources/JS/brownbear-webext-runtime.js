@@ -211,6 +211,37 @@
       };
     }
 
+    // --- chrome.notifications ------------------------------------------------------------------
+    // Content scripts may create/update/clear/getAll, but in Chrome the notification EVENTS fire in
+    // the background/event page, not the content script — so the on* listeners here are no-ops.
+    function notificationsApi() {
+      function create(notificationId, options, callback) {
+        if (notificationId !== null && typeof notificationId === "object") { callback = options; options = notificationId; notificationId = undefined; }
+        if (typeof options === "function") { callback = options; options = {}; }
+        options = options || {};
+        return settle(bridge("notifications.create", { notificationId: notificationId || null, options: options }, token), callback);
+      }
+      function update(notificationId, options, callback) {
+        if (typeof options === "function") { callback = options; options = {}; }
+        options = options || {};
+        return settle(bridge("notifications.update", { notificationId: notificationId, options: options }, token), callback);
+      }
+      function clear(notificationId, callback) {
+        return settle(bridge("notifications.clear", { notificationId: notificationId }, token), callback);
+      }
+      function getAll(callback) { return settle(bridge("notifications.getAll", {}, token), callback); }
+      function getPermissionLevel(callback) {
+        var level = "granted";
+        if (typeof callback === "function") { callback(level); return undefined; }
+        return _Promise.resolve(level);
+      }
+      return {
+        create: create, update: update, clear: clear, getAll: getAll, getPermissionLevel: getPermissionLevel,
+        onClicked: noopEvent, onClosed: noopEvent, onButtonClicked: noopEvent,
+        onShowSettings: noopEvent, onPermissionLevelChanged: noopEvent
+      };
+    }
+
     var chrome = {
       storage: {
         local: storageArea("local"),
@@ -219,6 +250,7 @@
         onChanged: makeEvent(storageListeners)
       },
       cookies: cookiesApi(),
+      notifications: notificationsApi(),
       runtime: {
         id: data.extensionId,
         getManifest: function () { return manifest; },

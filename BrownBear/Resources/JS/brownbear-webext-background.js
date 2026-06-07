@@ -314,10 +314,43 @@
     onChanged: makeEvent(cookieChangedListeners)
   };
 
+  // ---------------------------------------------------------------- chrome.notifications
+
+  var notificationClickedListeners = [];
+  var notificationClosedListeners = [];
+  var notificationButtonListeners = [];
+  function notificationsCall(method, args) {
+    return new Promise(function (resolve) {
+      __bb_notifications(method, JSON.stringify(args || {}), function (resJSON) { resolve(parseJSON(resJSON)); });
+    });
+  }
+  var notifications = {
+    create: function (notificationId, options, cb) {
+      if (notificationId !== null && typeof notificationId === 'object') { cb = options; options = notificationId; notificationId = undefined; }
+      if (typeof options === 'function') { cb = options; options = {}; }
+      options = options || {};
+      return settleBg(notificationsCall('create', { notificationId: notificationId || null, options: options }), cb);
+    },
+    update: function (notificationId, options, cb) {
+      if (typeof options === 'function') { cb = options; options = {}; }
+      options = options || {};
+      return settleBg(notificationsCall('update', { notificationId: notificationId, options: options }), cb);
+    },
+    clear: function (notificationId, cb) { return settleBg(notificationsCall('clear', { notificationId: notificationId }), cb); },
+    getAll: function (cb) { return settleBg(notificationsCall('getAll', {}), cb); },
+    getPermissionLevel: function (cb) { var level = 'granted'; if (typeof cb === 'function') { cb(level); return undefined; } return Promise.resolve(level); },
+    onClicked: makeEvent(notificationClickedListeners),
+    onClosed: makeEvent(notificationClosedListeners),
+    onButtonClicked: makeEvent(notificationButtonListeners),
+    onShowSettings: makeEvent([]),
+    onPermissionLevelChanged: makeEvent([])
+  };
+
   var chrome = {
     runtime: runtime,
     storage: storage,
     cookies: cookies,
+    notifications: notifications,
     alarms: alarms,
     commands: commands,
     action: action,
@@ -398,6 +431,25 @@
       for (var i = 0; i < cookieChangedListeners.length; i++) {
         try { cookieChangedListeners[i](change); }
         catch (e) { __bb_log('error', 'cookies.onChanged listener threw: ' + (e && e.message ? e.message : e)); }
+      }
+    },
+
+    dispatchNotificationClicked: function (notificationId) {
+      for (var i = 0; i < notificationClickedListeners.length; i++) {
+        try { notificationClickedListeners[i](notificationId); }
+        catch (e) { __bb_log('error', 'notifications.onClicked listener threw: ' + (e && e.message ? e.message : e)); }
+      }
+    },
+    dispatchNotificationClosed: function (notificationId, byUser) {
+      for (var i = 0; i < notificationClosedListeners.length; i++) {
+        try { notificationClosedListeners[i](notificationId, !!byUser); }
+        catch (e) { __bb_log('error', 'notifications.onClosed listener threw: ' + (e && e.message ? e.message : e)); }
+      }
+    },
+    dispatchNotificationButtonClicked: function (notificationId, buttonIndex) {
+      for (var i = 0; i < notificationButtonListeners.length; i++) {
+        try { notificationButtonListeners[i](notificationId, buttonIndex | 0); }
+        catch (e) { __bb_log('error', 'notifications.onButtonClicked listener threw: ' + (e && e.message ? e.message : e)); }
       }
     },
 

@@ -181,6 +181,40 @@
     };
   }
 
+  // --- chrome.notifications (live on* events via the native push surface below) ----------------
+  var notificationClickedListeners = [];
+  var notificationClosedListeners = [];
+  var notificationButtonListeners = [];
+  function notificationsApi() {
+    function create(notificationId, options, callback) {
+      if (notificationId !== null && typeof notificationId === "object") { callback = options; options = notificationId; notificationId = undefined; }
+      if (typeof options === "function") { callback = options; options = {}; }
+      options = options || {};
+      return settle(bridge("notifications.create", { notificationId: notificationId || null, options: options }), callback);
+    }
+    function update(notificationId, options, callback) {
+      if (typeof options === "function") { callback = options; options = {}; }
+      options = options || {};
+      return settle(bridge("notifications.update", { notificationId: notificationId, options: options }), callback);
+    }
+    function clear(notificationId, callback) {
+      return settle(bridge("notifications.clear", { notificationId: notificationId }), callback);
+    }
+    function getAll(callback) { return settle(bridge("notifications.getAll", {}), callback); }
+    function getPermissionLevel(callback) {
+      var level = "granted";
+      if (typeof callback === "function") { callback(level); return undefined; }
+      return _Promise.resolve(level);
+    }
+    return {
+      create: create, update: update, clear: clear, getAll: getAll, getPermissionLevel: getPermissionLevel,
+      onClicked: makeEvent(notificationClickedListeners),
+      onClosed: makeEvent(notificationClosedListeners),
+      onButtonClicked: makeEvent(notificationButtonListeners),
+      onShowSettings: makeEvent([]), onPermissionLevelChanged: makeEvent([])
+    };
+  }
+
   var chrome = {
     storage: {
       local: storageArea("local"),
@@ -189,6 +223,7 @@
       onChanged: makeEvent(storageListeners)
     },
     cookies: cookiesApi(),
+    notifications: notificationsApi(),
     runtime: {
       id: data.extensionId,
       getManifest: function () { return manifest; },
@@ -242,6 +277,21 @@
       try { change = _JSON.parse(changeJSON); } catch (e) { return; }
       for (var i = 0; i < cookieChangedListeners.length; i++) {
         try { cookieChangedListeners[i](change); } catch (e) {}
+      }
+    },
+    dispatchNotificationClicked: function (notificationId) {
+      for (var i = 0; i < notificationClickedListeners.length; i++) {
+        try { notificationClickedListeners[i](notificationId); } catch (e) {}
+      }
+    },
+    dispatchNotificationClosed: function (notificationId, byUser) {
+      for (var i = 0; i < notificationClosedListeners.length; i++) {
+        try { notificationClosedListeners[i](notificationId, !!byUser); } catch (e) {}
+      }
+    },
+    dispatchNotificationButtonClicked: function (notificationId, buttonIndex) {
+      for (var i = 0; i < notificationButtonListeners.length; i++) {
+        try { notificationButtonListeners[i](notificationId, buttonIndex | 0); } catch (e) {}
       }
     }
   };
