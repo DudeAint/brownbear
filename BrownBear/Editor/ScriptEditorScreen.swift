@@ -18,16 +18,23 @@ struct ScriptEditorScreen: View {
     @Environment(\.dismiss) private var dismiss
     @State private var source: String
     @State private var saveError: String?
+    @State private var confirmingDiscard = false
 
     private let parser = ScriptMetadataParser()
+    private let originalSource: String
 
     init(model: DashboardViewModel, existing: UserScript?) {
         self.model = model
         self.existing = existing
-        _source = State(initialValue: existing?.source ?? Self.template)
+        let initial = existing?.source ?? Self.template
+        self.originalSource = initial
+        _source = State(initialValue: initial)
     }
 
     private var parsedMetadata: ScriptMetadata? { try? parser.parse(source) }
+
+    /// Whether the user has edited the source since opening — gates the discard guard.
+    private var isDirty: Bool { source != originalSource }
 
     var body: some View {
         NavigationStack {
@@ -41,7 +48,7 @@ struct ScriptEditorScreen: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel") { attemptCancel() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { save() }
@@ -49,12 +56,25 @@ struct ScriptEditorScreen: View {
                         .disabled(parsedMetadata == nil)
                 }
             }
+            .interactiveDismissDisabled(isDirty)
             .alert("Couldn’t save", isPresented: .constant(saveError != nil)) {
                 Button("OK") { saveError = nil }
             } message: {
                 Text(saveError ?? "")
             }
+            .confirmationDialog("Discard changes?", isPresented: $confirmingDiscard,
+                                titleVisibility: .visible) {
+                Button("Discard", role: .destructive) { dismiss() }
+                Button("Keep editing", role: .cancel) { }
+            } message: {
+                Text("Your edits to this script haven't been saved.")
+            }
         }
+    }
+
+    /// Cancel, but guard against silently losing unsaved edits.
+    private func attemptCancel() {
+        if isDirty { confirmingDiscard = true } else { dismiss() }
     }
 
     private var metadataHeader: some View {
