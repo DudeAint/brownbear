@@ -488,6 +488,38 @@
         getEntriesByType: function () { return []; }
       };
     }
+
+    // navigator — a (reduced) navigator exists in real service workers; extensions read
+    // userAgent/language/onLine/hardwareConcurrency. JSC provides none, so a bare reference throws
+    // "Can't find variable: navigator". Honest values come from native (__bbUserAgent/__bbLanguage)
+    // with a static Mobile-Safari fallback.
+    if (typeof globalThis.navigator === 'undefined') {
+      var _ua = (typeof globalThis.__bbUserAgent === 'string' && globalThis.__bbUserAgent)
+        ? globalThis.__bbUserAgent
+        : 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 '
+          + '(KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+      var _lang = (typeof globalThis.__bbLanguage === 'string' && globalThis.__bbLanguage)
+        ? globalThis.__bbLanguage : 'en-US';
+      var _platform = _ua.indexOf('iPad') >= 0 ? 'iPad' : (_ua.indexOf('iPhone') >= 0 ? 'iPhone' : 'MacIntel');
+      var _langs = [_lang];
+      var _langBase = _lang.split('-')[0];
+      if (_langBase && _langBase !== _lang) { _langs.push(_langBase); }
+      globalThis.navigator = {
+        userAgent: _ua,
+        appVersion: _ua.replace(/^Mozilla\//, ''),
+        appName: 'Netscape', appCodeName: 'Mozilla',
+        product: 'Gecko', productSub: '20030107',
+        vendor: 'Apple Computer, Inc.', vendorSub: '',
+        platform: _platform,
+        language: _lang, languages: _langs,
+        onLine: true, cookieEnabled: true,
+        doNotTrack: null, webdriver: false,
+        hardwareConcurrency: 4, maxTouchPoints: 5,
+        pdfViewerEnabled: false,
+        sendBeacon: function () { return false; },
+        javaEnabled: function () { return false; }
+      };
+    }
   })();
 
   function makeEvent(list) {

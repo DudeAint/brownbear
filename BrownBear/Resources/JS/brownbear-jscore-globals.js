@@ -120,4 +120,70 @@
       getEntriesByType: function () { return []; }
     };
   }
+
+  // navigator — userscripts (Violentmonkey/ScriptCat sign-in helpers) routinely read
+  // navigator.userAgent/.language/.platform to branch behaviour. JSC has no DOM, so a bare reference
+  // throws "Can't find variable: navigator". Honest values come from native (__bbUserAgent /
+  // __bbLanguage, device-derived) with a static Mobile-Safari fallback so this is never undefined.
+  if (typeof g.navigator === 'undefined') {
+    var ua = (typeof g.__bbUserAgent === 'string' && g.__bbUserAgent)
+      ? g.__bbUserAgent
+      : 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 '
+        + '(KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+    var lang = (typeof g.__bbLanguage === 'string' && g.__bbLanguage) ? g.__bbLanguage : 'en-US';
+    var platform = ua.indexOf('iPad') >= 0 ? 'iPad' : (ua.indexOf('iPhone') >= 0 ? 'iPhone' : 'MacIntel');
+    var langs = [lang];
+    var langBase = lang.split('-')[0];
+    if (langBase && langBase !== lang) { langs.push(langBase); }
+    g.navigator = {
+      userAgent: ua,
+      appVersion: ua.replace(/^Mozilla\//, ''),
+      appName: 'Netscape',
+      appCodeName: 'Mozilla',
+      product: 'Gecko',
+      productSub: '20030107',
+      vendor: 'Apple Computer, Inc.',
+      vendorSub: '',
+      platform: platform,
+      language: lang,
+      languages: langs,
+      onLine: true,
+      cookieEnabled: true,
+      doNotTrack: null,
+      webdriver: false,
+      hardwareConcurrency: 4,
+      maxTouchPoints: 5,
+      pdfViewerEnabled: false,
+      sendBeacon: function () { return false; },
+      javaEnabled: function () { return false; },
+      vibrate: function () { return false; },
+      taintEnabled: function () { return false; }
+    };
+  }
+
+  // location — a background userscript has no page, so this defaults to about:blank (native may pass a
+  // different __bbHeadlessLocation). Scripts read location.href/.hostname/.origin; the navigation
+  // methods (assign/replace/reload) are inert because there is nothing to navigate. Defined as a real
+  // object (not the URL polyfill, which lacks those methods) so neither reads nor calls throw.
+  if (typeof g.location === 'undefined') {
+    var locHref = (typeof g.__bbHeadlessLocation === 'string' && g.__bbHeadlessLocation)
+      ? g.__bbHeadlessLocation : 'about:blank';
+    var locURL = null;
+    try { locURL = new g.URL(locHref); } catch (e) { locURL = null; }
+    g.location = {
+      href: locHref,
+      protocol: locURL ? locURL.protocol : 'about:',
+      host: locURL ? locURL.host : '',
+      hostname: locURL ? locURL.hostname : '',
+      port: locURL ? locURL.port : '',
+      pathname: locURL ? locURL.pathname : 'blank',
+      search: locURL ? locURL.search : '',
+      hash: locURL ? locURL.hash : '',
+      origin: locURL ? locURL.origin : 'null',
+      assign: function () {},
+      replace: function () {},
+      reload: function () {},
+      toString: function () { return this.href; }
+    };
+  }
 })();

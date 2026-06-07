@@ -102,6 +102,9 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
             context.setObject(baseURL, forKeyedSubscript: "__bbBgBaseURL" as NSString)
             let messagesJSON = jsonString(messages)
             context.setObject(messagesJSON, forKeyedSubscript: "__bbBgMessages" as NSString)
+            // Device-derived inputs for the navigator polyfill (JSC has no DOM; see HeadlessEnvironment).
+            context.setObject(HeadlessEnvironment.userAgent, forKeyedSubscript: "__bbUserAgent" as NSString)
+            context.setObject(HeadlessEnvironment.language, forKeyedSubscript: "__bbLanguage" as NSString)
 
             context.evaluateScript(runtimeJS, withSourceURL: URL(string: "brownbear://webext/\(extensionID)/runtime.js"))
             // Wrap in a function so a worker/background script using a top-level `return` (some
