@@ -22,3 +22,14 @@ void BBEvaluateJavaScriptInFrame(WKWebView *webView, NSString *script,
                  inContentWorld:world
               completionHandler:nil];
 }
+
+void BBEvaluateJavaScriptForResult(WKWebView *webView, NSString *script, WKContentWorld *world,
+                                   void (^_Nullable completion)(id _Nullable result,
+                                                                NSError *_Nullable error)) {
+    [webView evaluateJavaScript:script
+                        inFrame:nil
+                 inContentWorld:world
+              completionHandler:^(id _Nullable result, NSError *_Nullable error) {
+        if (completion) { completion(result, error); }
+    }];
+}

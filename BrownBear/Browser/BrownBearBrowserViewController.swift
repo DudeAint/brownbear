@@ -726,6 +726,42 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
         present(DownloadsView.makeHostingController(), animated: true)
     }
 
+    /// The bundled clean-room article extractor, loaded once.
+    private static let readabilityScript: String = {
+        guard let url = Bundle.main.url(forResource: "brownbear-readability", withExtension: "js")
+                ?? Bundle.main.url(forResource: "brownbear-readability", withExtension: "js", subdirectory: "JS"),
+              let source = try? String(contentsOf: url, encoding: .utf8) else { return "" }
+        return source
+    }()
+
+    /// Extract the active page's article (in the page world) and present the reader, or explain that
+    /// the page isn't article-like. Uses the ObjC result-returning eval so no Swift WebKit overlay links.
+    private func presentReader() {
+        guard let webView = tabManager.activeTab?.webView, !Self.readabilityScript.isEmpty else { return }
+        BBEvaluateJavaScriptForResult(webView, Self.readabilityScript, .page) { [weak self] result, _ in
+            guard let self else { return }
+            guard let dict = result as? [String: Any],
+                  let content = dict["content"] as? String, !content.isEmpty else {
+                self.presentReaderUnavailable()
+                return
+            }
+            let fallbackTitle = self.tabManager.activeTab?.state.displayTitle ?? "Article"
+            let article = ReaderViewController.Article(
+                title: (dict["title"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? fallbackTitle,
+                byline: (dict["byline"] as? String) ?? "",
+                content: content)
+            ReaderViewController.present(article, from: self)
+        }
+    }
+
+    private func presentReaderUnavailable() {
+        let alert = UIAlertController(title: "Reader unavailable",
+                                     message: "This page doesn't look like an article.",
+                                     preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        present(alert, animated: true)
+    }
+
     /// Present the install card for a userscript URL, with a "View source" escape that re-loads the
     /// raw file (allowed through the interceptor once).
     private func presentScriptInstall(for url: URL) {
@@ -810,6 +846,8 @@ extension BrownBearBrowserViewController: BrowserMenuDelegate {
             presentDownloads()
         case .settings:
             presentDashboard(initialTab: .settings)
+        case .reader:
+            presentReader()
         }
     }
 
