@@ -72,6 +72,23 @@ actor WebExtensionStore {
         file(extensionID: extensionID, path: path).flatMap { String(data: $0, encoding: .utf8) }
     }
 
+    /// Synchronous, non-isolated packaged-file read with the same containment guarantees as `file`.
+    /// `baseDirectory` is an immutable `let` of a `Sendable` type, so reading it off-actor is race-free,
+    /// and the on-disk files are immutable for the life of an install. Exists so synchronous UI code —
+    /// `WebExtension.displayName`/`displayDescription` resolving `__MSG_*__` placeholders — can read the
+    /// default-locale messages.json without an `await` it cannot perform. Do NOT use it for anything the
+    /// actor mutates (the index); it only touches the immutable package tree.
+    nonisolated func fileSync(extensionID: String, path: String) -> Data? {
+        guard ChromeWebStore.isExtensionID(extensionID) else { return nil }
+        let cleaned = path.hasPrefix("/") ? String(path.dropFirst()) : path
+        let root = baseDirectory.appendingPathComponent(extensionID, isDirectory: true).standardizedFileURL
+        let url = root.appendingPathComponent(cleaned).standardizedFileURL
+        let baseRoot = baseDirectory.standardizedFileURL.path
+        guard url.path == root.path || url.path.hasPrefix(root.path + "/"),
+              url.path.hasPrefix(baseRoot + "/") else { return nil }
+        return try? Data(contentsOf: url)
+    }
+
     // MARK: - Install / manage
 
     /// Install an extension from a `.crx`/`.zip` package. Returns the stored record. `storeID` is the

@@ -55,7 +55,19 @@ struct WebExtension: Codable, Identifiable, Equatable {
         return try? WebExtensionManifest.parse(data)
     }
 
-    var displayName: String { manifest?.name ?? id }
+    /// The user-facing name, with any Chrome i18n `__MSG_*__` placeholders resolved against the
+    /// extension's default-locale messages (a localized extension stores e.g. `__MSG_appName__` here).
+    var displayName: String {
+        let raw = manifest?.name ?? id
+        return WebExtensionLocalizer.resolve(raw, extensionID: id, defaultLocale: manifest?.defaultLocale)
+    }
+
+    /// The user-facing description with `__MSG_*__` placeholders resolved, or nil when none is declared.
+    var displayDescription: String? {
+        guard let raw = manifest?.descriptionText, !raw.isEmpty else { return nil }
+        return WebExtensionLocalizer.resolve(raw, extensionID: id, defaultLocale: manifest?.defaultLocale)
+    }
+
     var version: String { manifest?.version ?? "—" }
 
     /// A chrome-extension-style base URL for this extension's resources.
