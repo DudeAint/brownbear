@@ -160,8 +160,7 @@ struct ExtensionsView: View {
 
     private func extensionRow(_ ext: WebExtension) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: "puzzlepiece.extension.fill")
-                .foregroundStyle(BBTheme.Color.accent)
+            ExtensionIconView(ext: ext)
             VStack(alignment: .leading, spacing: 3) {
                 Text(ext.displayName).font(.body.weight(.semibold)).foregroundStyle(BBTheme.Color.textPrimary)
                 Text(subtitle(for: ext))
@@ -223,5 +222,55 @@ struct ExtensionsView: View {
         case .failure(let error):
             model.errorMessage = error.localizedDescription
         }
+    }
+}
+
+/// Loads an extension's own icon — its action/toolbar icon, else the largest manifest icon — from the
+/// extension package, falling back to the generic puzzle glyph. This is the same icon the "•••" menu
+/// shows; the dashboard previously only ever showed the puzzle placeholder.
+struct ExtensionIconView: View {
+    let ext: WebExtension
+    @State private var image: UIImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            } else {
+                Image(systemName: "puzzlepiece.extension.fill")
+                    .foregroundStyle(BBTheme.Color.accent)
+            }
+        }
+        .frame(width: 28, height: 28)
+        .task(id: ext.id) {
+            guard let path = ExtensionIconView.bestIconPath(ext.manifest) else { return }
+            if let data = await BrownBearServices.shared.webExtensionStore.file(extensionID: ext.id, path: path),
+               let loaded = UIImage(data: data) {
+                image = loaded
+            }
+        }
+    }
+
+    /// Prefer the action/toolbar icon (what users associate with the extension), else the manifest
+    /// icon set; within a set, pick the size closest to 64 (crisp at 28pt @2–3x), else the largest.
+    static func bestIconPath(_ manifest: WebExtensionManifest?) -> String? {
+        guard let manifest else { return nil }
+        return pickIconPath(from: manifest.action?.defaultIcon) ?? pickIconPath(from: manifest.icons)
+    }
+
+    /// Pick a path from a `size → path` icon map. Internal for testing.
+    static func pickIconPath(from icons: [String: String]?) -> String? {
+        guard let icons else { return nil }
+        let sized = icons.compactMap { key, value -> (size: Int, path: String)? in
+            value.isEmpty ? nil : (Int(key) ?? 0, value)
+        }
+        guard !sized.isEmpty else { return nil }
+        let inRange = sized.filter { $0.size >= 32 && $0.size <= 128 }
+        let chosen = inRange.min { abs($0.size - 64) < abs($1.size - 64) }
+            ?? sized.max { $0.size < $1.size }
+        return chosen?.path
     }
 }

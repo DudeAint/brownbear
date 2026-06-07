@@ -60,6 +60,8 @@ struct MenuExtensionAction {
     let badgeText: String
     let badgeColor: UIColor
     let iconPath: String?   // resolved relative to the extension package; nil = generic glyph
+    var hasPopup: Bool = false     // the action declares a default_popup
+    var hasOptions: Bool = false   // the manifest declares an options page
 }
 
 /// A GM_registerMenuCommand entry for a userscript matching the active tab, rendered in the menu's
@@ -79,6 +81,8 @@ protocol BrowserMenuDelegate: AnyObject {
     func browserMenu(_ menu: BrowserMenuViewController, didToggleScript id: UUID, enabled: Bool)
     func browserMenu(_ menu: BrowserMenuViewController, didTapExtensionAction extensionID: String)
     func browserMenu(_ menu: BrowserMenuViewController, didTapScriptCommand command: MenuScriptCommand)
+    /// Long-press affordance on an extension row: open its options page (popup uses didTapExtensionAction).
+    func browserMenu(_ menu: BrowserMenuViewController, didRequestExtensionOptions extensionID: String)
 }
 
 @MainActor
@@ -86,6 +90,9 @@ final class BrowserMenuViewController: UIViewController {
 
     private let state: BrowserMenuState
     private weak var delegate: BrowserMenuDelegate?
+    /// Maps an extension row's long-press interaction back to its action, so the context menu can offer
+    /// that extension's popup / options page.
+    private var extensionInteractionActions: [ObjectIdentifier: MenuExtensionAction] = [:]
 
     init(state: BrowserMenuState, delegate: BrowserMenuDelegate) {
         self.state = state
@@ -525,9 +532,18 @@ final class BrowserMenuViewController: UIViewController {
         name.textColor = BrownBearTheme.Palette.textPrimary
         name.numberOfLines = 1
 
-        let arranged: [UIView] = action.badgeText.isEmpty
+        var arranged: [UIView] = action.badgeText.isEmpty
             ? [icon, name]
             : [icon, name, makeBadgePill(text: action.badgeText, color: action.badgeColor)]
+        // A trailing "hold for more" hint so users discover the long-press menu (popup/options) — iOS
+        // has no toolbar to right-click. Only shown when there's actually a secondary action to reach.
+        if action.hasPopup || action.hasOptions {
+            let hint = UIImageView(image: UIImage(systemName: "ellipsis.circle"))
+            hint.tintColor = BrownBearTheme.Palette.textSecondary
+            hint.contentMode = .scaleAspectFit
+            hint.setContentHuggingPriority(.required, for: .horizontal)
+            arranged.append(hint)
+        }
         let row = UIStackView(arrangedSubviews: arranged)
         row.axis = .horizontal
         row.spacing = 12
@@ -546,6 +562,12 @@ final class BrowserMenuViewController: UIViewController {
             button.leadingAnchor.constraint(equalTo: row.leadingAnchor),
             button.trailingAnchor.constraint(equalTo: row.trailingAnchor)
         ])
+        // Long-press → popup / options page, without losing the tap action (open popup / onClicked).
+        if action.hasPopup || action.hasOptions {
+            let interaction = UIContextMenuInteraction(delegate: self)
+            button.addInteraction(interaction)
+            extensionInteractionActions[ObjectIdentifier(interaction)] = action
+        }
         return row
     }
 
@@ -619,5 +641,43 @@ private final class PaddedLabel: UILabel {
         let size = super.intrinsicContentSize
         return CGSize(width: size.width + insets.left + insets.right,
                       height: size.height + insets.top + insets.bottom)
+    }
+}
+
+// MARK: - UIContextMenuInteractionDelegate (extension row long-press → popup / options)
+
+extension BrowserMenuViewController: UIContextMenuInteractionDelegate {
+    func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                configurationForMenuAtLocation location: CGPoint)
+        -> UIContextMenuConfiguration? {
+        guard let action = extensionInteractionActions[ObjectIdentifier(interaction)] else { return nil }
+        return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
+            var items: [UIAction] = []
+            if action.hasPopup {
+                items.append(UIAction(title: "Open Popup", image: UIImage(systemName: "macwindow")) { _ in
+                    self?.openExtensionPopup(action.extensionID)
+                })
+            }
+            if action.hasOptions {
+                items.append(UIAction(title: "Options", image: UIImage(systemName: "gearshape")) { _ in
+                    self?.openExtensionOptions(action.extensionID)
+                })
+            }
+            return items.isEmpty ? nil : UIMenu(title: action.title, children: items)
+        }
+    }
+
+    private func openExtensionPopup(_ extensionID: String) {
+        dismiss(animated: true) { [weak self] in
+            guard let self else { return }
+            self.delegate?.browserMenu(self, didTapExtensionAction: extensionID)
+        }
+    }
+
+    private func openExtensionOptions(_ extensionID: String) {
+        dismiss(animated: true) { [weak self] in
+            guard let self else { return }
+            self.delegate?.browserMenu(self, didRequestExtensionOptions: extensionID)
+        }
     }
 }

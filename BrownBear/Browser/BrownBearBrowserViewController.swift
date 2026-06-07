@@ -541,7 +541,9 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
                     title: resolved.title.isEmpty ? ext.displayName : resolved.title,
                     badgeText: resolved.badgeText,
                     badgeColor: Self.actionBadgeColor(actionState.badgeColorBytes(extensionID: ext.id, tabId: actionTabId)),
-                    iconPath: resolved.iconPath))
+                    iconPath: resolved.iconPath,
+                    hasPopup: (action.defaultPopup?.isEmpty == false),
+                    hasOptions: (ext.manifest?.optionsPage?.isEmpty == false)))
             }
             // GM_registerMenuCommand entries the matching userscripts registered for THIS tab's web
             // view (iframe registrations included). Built from the active tab's live injections.
@@ -940,6 +942,11 @@ extension BrownBearBrowserViewController: BrowserMenuDelegate {
         // The menu either already dismissed (autoClose) or stayed open; fire the script's callback back
         // into its own frame/world. Stale rows (the script unregistered or navigated) fire nothing.
         injection.fireUserScriptMenuCommand(token: command.token, commandID: command.commandID)
+    }
+
+    func browserMenu(_ menu: BrowserMenuViewController, didRequestExtensionOptions extensionID: String) {
+        // The menu already dismissed; open the extension's options page (sheet or tab per open_in_tab).
+        webExtOpenOptionsPage(extensionID: extensionID)
     }
 }
 
