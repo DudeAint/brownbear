@@ -764,6 +764,7 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
                     webView.customUserAgent = tab.prefersDesktop ? Self.desktopSafariUserAgent : nil
                 }
             }
+            applyShields(to: tab, preferences: preferences, navigationAction: navigationAction, destination: destination, isStore: isStore)
         }
         if let url = navigationAction.request.url {
             // Open external app schemes (mailto:, tel:, etc.) via the system.

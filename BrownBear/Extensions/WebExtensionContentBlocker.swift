@@ -35,6 +35,10 @@ final class WebExtensionContentBlocker {
     // their remove/add calls and install a stale rule-list set.
     private var isRefreshing = false
     private var refreshRequested = false
+    /// Hosts (normalized: lowercased, "www."-stripped) where the user turned Shields OFF for the
+    /// site. Captured on the last refresh so a shields-down host is excluded from BrownBear's built-in
+    /// tracker list AND from every extension rule that can carry an `unless-domain`.
+    private var shieldsDisabledHosts: [String] = []
 
     init(store: WebExtensionStore = BrownBearServices.shared.webExtensionStore,
          dnrStore: WebExtensionDNRStore = BrownBearServices.shared.webExtensionDNRStore,
@@ -50,7 +54,10 @@ final class WebExtensionContentBlocker {
     /// Recompile every enabled extension's enabled DNR rulesets and install them into the shared
     /// content controller, replacing whatever was there. Coalesced (single-flight + one trailing
     /// pass) so overlapping calls can't interleave; the swap is atomic.
-    func refresh(into userContentController: WKUserContentController) async {
+    func refresh(into userContentController: WKUserContentController,
+                 shieldsDisabledHosts: [String] = []) async {
+        // Latest caller wins for the exclusion set; a queued trailing pass uses the newest value.
+        self.shieldsDisabledHosts = shieldsDisabledHosts
         if isRefreshing { refreshRequested = true; return }
         isRefreshing = true
         defer { isRefreshing = false }
@@ -63,6 +70,14 @@ final class WebExtensionContentBlocker {
     private func performRefresh(into userContentController: WKUserContentController) async {
         var newReports: [Report] = []
         var compiledLists: [WKContentRuleList] = []
+        let exclusions = shieldsDisabledHosts
+
+        // BrownBear's own built-in ad/tracker list, applied to every site EXCEPT the hosts where the
+        // user turned Shields off. This is what makes the per-site "Content Blocking" toggle bite even
+        // with no extensions installed.
+        if let builtin = await compileBuiltInList(excluding: exclusions) {
+            compiledLists.append(builtin)
+        }
 
         if let ruleListStore {
             for ext in await store.enabledExtensions() {
@@ -95,8 +110,12 @@ final class WebExtensionContentBlocker {
                                              error: result.warnings.first ?? "no rules compiled"))
                     continue
                 }
+                // Exclude shields-off hosts from every extension rule that can carry an exclusion
+                // (a rule already pinned with `if-domain` can't also take `unless-domain`, so it is
+                // left unchanged — BrownBear's built-in list still honors the shields-off host).
+                let scopedJSON = Self.applyExclusions(to: result.json, hosts: exclusions)
                 do {
-                    let list = try await compile(store: ruleListStore, identifier: identifier, json: result.json)
+                    let list = try await compile(store: ruleListStore, identifier: identifier, json: scopedJSON)
                     compiledLists.append(list)
                     newReports.append(Report(extensionID: ext.id, extensionName: ext.displayName,
                                              rulesetID: "(merged)", compiledCount: result.compiledCount,
@@ -128,5 +147,49 @@ final class WebExtensionContentBlocker {
                 }
             }
         }
+    }
+
+    /// Compile BrownBear's built-in tracker/ad list with the shields-off hosts excluded. Returns nil
+    /// (and installs nothing) if the bundled list is missing or fails to compile — a built-in-list
+    /// failure must never take the extension lists down with it.
+    private func compileBuiltInList(excluding hosts: [String]) async -> WKContentRuleList? {
+        guard let ruleListStore, let json = Self.builtInBlocklistJSON(excluding: hosts) else { return nil }
+        return try? await compile(store: ruleListStore, identifier: "brownbear-builtin-blocklist", json: json)
+    }
+
+    // MARK: - Built-in list + per-site exclusions (pure helpers, unit-testable)
+
+    /// BrownBear's bundled tracker/ad blocklist, already in WebKit content-rule-list JSON, with the
+    /// shields-off hosts injected as a global `unless-domain` so blocking is suppressed there. Returns
+    /// nil if the bundled resource is missing or empty (then no built-in list is installed).
+    static func builtInBlocklistJSON(excluding hosts: [String]) -> String? {
+        guard let url = Bundle.main.url(forResource: "brownbear-blocklist", withExtension: "json", subdirectory: nil)
+                ?? Bundle.main.url(forResource: "brownbear-blocklist", withExtension: "json", subdirectory: "JS"),
+              let data = try? Data(contentsOf: url) else { return nil }
+        guard let json = String(data: data, encoding: .utf8) else { return nil }
+        let scoped = applyExclusions(to: json, hosts: hosts)
+        return scoped == "[]" ? nil : scoped
+    }
+
+    /// Add `unless-domain: [*host …]` to every rule trigger in a WebKit rule-list JSON array, EXCEPT
+    /// rules that already pin `if-domain` (WebKit forbids both in one trigger). A leading `*` makes
+    /// each entry match the host and all its subdomains (DNR/WebKit subdomain semantics). With no
+    /// hosts the input JSON is returned unchanged.
+    static func applyExclusions(to json: String, hosts: [String]) -> String {
+        guard !hosts.isEmpty,
+              let data = json.data(using: .utf8),
+              var rules = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return json }
+        let entries = hosts.map { "*" + $0 }
+        for index in rules.indices {
+            guard var trigger = rules[index]["trigger"] as? [String: Any] else { continue }
+            if trigger["if-domain"] != nil { continue }   // can't combine with unless-domain
+            var unless = (trigger["unless-domain"] as? [String]) ?? []
+            for entry in entries where !unless.contains(entry) { unless.append(entry) }
+            trigger["unless-domain"] = unless
+            rules[index]["trigger"] = trigger
+        }
+        guard let out = try? JSONSerialization.data(withJSONObject: rules, options: [.sortedKeys]),
+              let string = String(data: out, encoding: .utf8) else { return json }
+        return string
     }
 }

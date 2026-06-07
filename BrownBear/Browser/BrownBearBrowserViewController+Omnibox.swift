@@ -64,6 +64,10 @@ extension BrownBearBrowserViewController: OmniboxViewDelegate {
         suggestionTask?.cancel()
         omniboxSuggestions.dismiss()
     }
+
+    func omniboxDidTapSiteInfo(_ omnibox: OmniboxView) {
+        presentSiteShields()
+    }
 }
 
 // MARK: - OmniboxSuggestionsViewDelegate
