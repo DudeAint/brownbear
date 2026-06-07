@@ -95,7 +95,7 @@ final class WebExtensionContextMenuStore {
             enabled: (properties["enabled"] as? Bool) ?? true,
             visible: (properties["visible"] as? Bool) ?? true,
             contexts: Self.sanitizeContexts(properties["contexts"]),
-            parentID: Self.sanitizeParent(properties["parentId"], in: items, itemID: id),
+            parentID: Self.sanitizeParent(properties["parentId"], in: items, selfID: id),
             documentURLPatterns: Self.sanitizePatterns(properties["documentUrlPatterns"]),
             targetURLPatterns: Self.sanitizePatterns(properties["targetUrlPatterns"]))
         items.append(item)
@@ -123,7 +123,7 @@ final class WebExtensionContextMenuStore {
         if let visible = properties["visible"] as? Bool { item.visible = visible }
         if properties.keys.contains("contexts") { item.contexts = Self.sanitizeContexts(properties["contexts"]) }
         if properties.keys.contains("parentId") {
-            item.parentID = Self.sanitizeParent(properties["parentId"], in: items, itemID: id)
+            item.parentID = Self.sanitizeParent(properties["parentId"], in: items, selfID: id)
         }
         if properties.keys.contains("documentUrlPatterns") {
             item.documentURLPatterns = Self.sanitizePatterns(properties["documentUrlPatterns"])
@@ -288,14 +288,14 @@ final class WebExtensionContextMenuStore {
 
     /// A parent id is accepted only if it names an existing item AND introducing it doesn't create a
     /// cycle (the would-be parent's ancestry must not include this item). Otherwise the item is a root.
-    private static func sanitizeParent(_ value: Any?, in items: [Item], itemID: String) -> String? {
-        guard let parentID = itemID(value), parentID != itemID,
+    private static func sanitizeParent(_ value: Any?, in items: [Item], selfID: String) -> String? {
+        guard let parentID = itemID(value), parentID != selfID,
               items.contains(where: { $0.id == parentID }) else { return nil }
-        // Walk up from parentID; if we reach itemID, it's a cycle — reject.
+        // Walk up from parentID; if we reach selfID, it's a cycle — reject.
         var cursor: String? = parentID
         var hops = 0
         while let current = cursor, hops < items.count + 1 {
-            if current == itemID { return nil }
+            if current == selfID { return nil }
             cursor = items.first(where: { $0.id == current })?.parentID
             hops += 1
         }
