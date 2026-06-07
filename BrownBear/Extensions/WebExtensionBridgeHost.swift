@@ -28,6 +28,15 @@ protocol WebExtensionBridgeHost: AnyObject {
     func webExtRemoveTabs(extTabIds: [Int])
     /// chrome.tabs.reload — reload a tab (`nil` ext id = the active tab).
     func webExtReloadTab(extTabId: Int?, bypassCache: Bool)
+
+    /// chrome.scripting.executeScript / chrome.tabs.executeScript — run `code` in a tab (`nil` ext id =
+    /// active) and return one `{result, frameId}` per frame. `world` is "MAIN" (page) or "ISOLATED"
+    /// (the extension content world). Main frame only on iOS.
+    func webExtExecuteScript(extTabId: Int?, world: String, code: String) async -> [[String: Any]]
+    /// chrome.scripting.insertCSS / chrome.tabs.insertCSS — inject CSS into a tab.
+    func webExtInsertCSS(extTabId: Int?, css: String)
+    /// chrome.scripting.removeCSS — remove CSS previously inserted (matched by its exact text).
+    func webExtRemoveCSS(extTabId: Int?, css: String)
 }
 
 /// Stable bidirectional `UUID (Tab.id) ↔ Int (chrome tab id)` map. chrome.tabs ids must be integers

@@ -124,11 +124,44 @@
         var cb = (args.length && typeof args[args.length - 1] === "function") ? args.pop() : null;
         return settle(_Promise.resolve(undefined), cb);
       }
+      function executeScript(tabId, details, callback) {
+        if (tabId !== null && typeof tabId === "object") { callback = details; details = tabId; tabId = undefined; }
+        details = details || {};
+        return settle(bridge("tabs.executeScript", { tabId: tabId, code: details.code, file: details.file, world: details.world }, token), callback);
+      }
+      function insertCSS(tabId, details, callback) {
+        if (tabId !== null && typeof tabId === "object") { callback = details; details = tabId; tabId = undefined; }
+        details = details || {};
+        return settle(bridge("tabs.insertCSS", { tabId: tabId, code: details.code, file: details.file }, token).then(function () { return undefined; }), callback);
+      }
       return {
         query: query, get: get, getCurrent: getCurrent, create: create, update: update,
         remove: remove, reload: reload, sendMessage: sendMessage,
+        executeScript: executeScript, insertCSS: insertCSS,
         onUpdated: noopEvent, onActivated: noopEvent, onCreated: noopEvent,
         onRemoved: noopEvent, onReplaced: noopEvent
+      };
+    }
+
+    // chrome.scripting (MV3). func+args are serialized to a code string here; files/css go to native.
+    function scriptingApi() {
+      function serialize(injection) {
+        var payload = { target: injection.target || {}, world: injection.world || "ISOLATED" };
+        if (injection.files) { payload.files = injection.files; }
+        else if (typeof injection.func === "function") {
+          payload.code = "(" + injection.func.toString() + ").apply(null, " + _JSON.stringify(injection.args || []) + ")";
+        } else if (typeof injection.code === "string") { payload.code = injection.code; }
+        return payload;
+      }
+      function cssPayload(injection) {
+        var payload = { target: injection.target || {} };
+        if (injection.files) { payload.files = injection.files; } else { payload.css = injection.css || ""; }
+        return payload;
+      }
+      return {
+        executeScript: function (injection, callback) { return settle(bridge("scripting.executeScript", serialize(injection), token), callback); },
+        insertCSS: function (injection, callback) { return settle(bridge("scripting.insertCSS", cssPayload(injection), token).then(function () { return undefined; }), callback); },
+        removeCSS: function (injection, callback) { return settle(bridge("scripting.removeCSS", cssPayload(injection), token).then(function () { return undefined; }), callback); }
       };
     }
 
@@ -161,6 +194,7 @@
         getPlatformInfo: function (cb) { var info = { os: "ios", arch: "arm64", nacl_arch: "arm64" }; if (typeof cb === "function") { cb(info); return undefined; } return _Promise.resolve(info); }
       },
       tabs: tabsApi(),
+      scripting: scriptingApi(),
       i18n: {
         getMessage: i18nGetMessage,
         getUILanguage: function () { return (W.navigator && W.navigator.language) || "en"; },

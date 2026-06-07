@@ -194,6 +194,59 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
             }
         }
         context.setObject(tabs, forKeyedSubscript: "__bb_tabs" as NSString)
+
+        // chrome.scripting (+ MV2 tabs.executeScript/insertCSS) from the background worker. Async on
+        // the host (it awaits the page eval), so we await before calling back.
+        let scripting: @convention(block) (String, String, JSValue) -> Void = { [weak self] method, argsJSON, callback in
+            guard let self else { return }
+            let args = ((try? JSONSerialization.jsonObject(with: Data(argsJSON.utf8))) as? [String: Any]) ?? [:]
+            let extID = self.extensionID
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let result: Any
+                if let host = self.host {
+                    result = await WebExtensionBackgroundContext.dispatchScripting(
+                        host: host, method: method, args: args, extensionID: extID)
+                } else {
+                    result = NSNull()
+                }
+                self.callBack(callback, with: self.jsonString(result))
+            }
+        }
+        context.setObject(scripting, forKeyedSubscript: "__bb_scripting" as NSString)
+    }
+
+    /// Map a chrome.scripting method to the bridge host, resolving `files` from the extension package.
+    @MainActor
+    private static func dispatchScripting(host: WebExtensionBridgeHost, method: String,
+                                          args: [String: Any], extensionID: String) async -> Any {
+        let store = BrownBearServices.shared.webExtensionStore
+        let target = args["target"] as? [String: Any] ?? [:]
+        let tabId = target["tabId"] as? Int ?? (args["tabId"] as? Int)
+        switch method {
+        case "executeScript":
+            var code = args["code"] as? String ?? ""
+            if code.isEmpty {
+                for path in (args["files"] as? [String] ?? []) {
+                    if let text = await store.text(extensionID: extensionID, path: path) { code += text + "\n;\n" }
+                }
+            }
+            guard !code.isEmpty else { return [] }
+            let world = (args["world"] as? String) ?? "ISOLATED"
+            return await host.webExtExecuteScript(extTabId: tabId, world: world, code: code)
+        case "insertCSS", "removeCSS":
+            var css = args["css"] as? String ?? ""
+            if css.isEmpty {
+                for path in (args["files"] as? [String] ?? []) {
+                    if let text = await store.text(extensionID: extensionID, path: path) { css += text + "\n" }
+                }
+            }
+            if method == "insertCSS" { host.webExtInsertCSS(extTabId: tabId, css: css) }
+            else { host.webExtRemoveCSS(extTabId: tabId, css: css) }
+            return NSNull()
+        default:
+            return NSNull()
+        }
     }
 
     /// Map a chrome.tabs method + args to the bridge host, returning a JSON-serializable value.
