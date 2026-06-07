@@ -59,10 +59,29 @@ enum AppSettings {
 
     enum Key {
         static let searchEngine = "bbSearchEngine"
+        static let autoUpdateScripts = "bbAutoUpdateScripts"
+        static let lastScriptUpdateCheck = "bbLastScriptUpdateCheck"
     }
 
     static var searchEngine: SearchEngine {
         get { SearchEngine(rawValue: UserDefaults.standard.string(forKey: Key.searchEngine) ?? "") ?? .google }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.searchEngine) }
+    }
+
+    /// Whether installed userscripts are checked for newer @versions automatically. Default ON; the
+    /// Settings toggle uses @AppStorage on the same key, so `object(forKey:) == nil` means "unset" →
+    /// treat as true.
+    static var autoUpdateScripts: Bool {
+        get {
+            UserDefaults.standard.object(forKey: Key.autoUpdateScripts) == nil
+                ? true : UserDefaults.standard.bool(forKey: Key.autoUpdateScripts)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: Key.autoUpdateScripts) }
+    }
+
+    /// When the automatic update check last ran, so we don't re-check on every dashboard open.
+    static var lastScriptUpdateCheck: Date? {
+        get { UserDefaults.standard.object(forKey: Key.lastScriptUpdateCheck) as? Date }
+        set { UserDefaults.standard.set(newValue, forKey: Key.lastScriptUpdateCheck) }
     }
 }

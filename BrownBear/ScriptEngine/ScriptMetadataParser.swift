@@ -87,6 +87,8 @@ struct ScriptMetadataParser {
             meta.homepageURL = value
         case "icon", "iconurl", "defaulticon":
             meta.iconURL = value
+        case "updateurl": meta.updateURL = value
+        case "downloadurl": meta.downloadURL = value
 
         case "match" where !value.isEmpty: meta.matches.append(value)
         case "include" where !value.isEmpty: meta.includes.append(value)

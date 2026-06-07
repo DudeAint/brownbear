@@ -34,6 +34,8 @@ final class DashboardViewModel: ObservableObject {
     @Published private(set) var scheduleStates: [String: ScheduleState] = [:]
     @Published private(set) var isLoading = false
     @Published var errorMessage: String?
+    @Published var updateMessage: String?
+    @Published private(set) var isCheckingUpdates = false
 
     /// Installed scripts narrowed by the search field (name + match/include/crontab rules), so a
     /// power user with dozens of scripts can find one without scrolling the whole store-ordered list.
@@ -151,6 +153,27 @@ final class DashboardViewModel: ObservableObject {
     func clearAllLogs() async {
         await logStore.clear()
         await load()
+    }
+
+    /// Check installed scripts for newer @versions and re-install any that have one. `auto` is the
+    /// silent on-open pass: it respects the Settings toggle and a ~6h debounce, and stays quiet unless
+    /// something actually updated. A manual check always runs and always reports a result.
+    func checkForScriptUpdates(auto: Bool) async {
+        if auto {
+            guard AppSettings.autoUpdateScripts else { return }
+            if let last = AppSettings.lastScriptUpdateCheck, Date().timeIntervalSince(last) < 6 * 3600 { return }
+        }
+        guard !isCheckingUpdates else { return }
+        isCheckingUpdates = true
+        defer { isCheckingUpdates = false }
+        AppSettings.lastScriptUpdateCheck = Date()
+        let updated = await ScriptUpdateService().checkForUpdates()
+        if !updated.isEmpty {
+            await load()
+            updateMessage = updated.count == 1 ? "Updated “\(updated[0])”." : "Updated \(updated.count) scripts."
+        } else if !auto {
+            updateMessage = "All scripts are up to date."
+        }
     }
 }
 

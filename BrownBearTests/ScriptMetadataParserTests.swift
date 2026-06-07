@@ -104,4 +104,18 @@ final class ScriptMetadataParserTests: XCTestCase {
         let meta = try parser.parse(script)
         XCTAssertEqual(meta.name, "X")
     }
+
+    func testParsesUpdateAndDownloadURLs() throws {
+        let script = """
+        // ==UserScript==
+        // @name        Updatable
+        // @version     1.0.0
+        // @updateURL   https://example.com/s.meta.js
+        // @downloadURL https://example.com/s.user.js
+        // ==/UserScript==
+        """
+        let meta = try parser.parse(script)
+        XCTAssertEqual(meta.updateURL, "https://example.com/s.meta.js")
+        XCTAssertEqual(meta.downloadURL, "https://example.com/s.user.js")
+    }
 }
