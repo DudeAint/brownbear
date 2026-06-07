@@ -45,6 +45,52 @@
     };
   }
 
+  // chrome.runtime.connect / onConnect long-lived ports (popup/options page = CONNECTOR). Mirrors the
+  // content runtime, adapted to the page's 2-arg bridge(api, payload). A synchronous Port buffers
+  // postMessage() until the async native id-mint resolves, then flushes; native pushes the worker's
+  // replies via W.__brownbearExtPage.onPortMessage/onPortDisconnect.
+  var connectListeners = [];
+  var ports = Object.create(null);
+  function makePort(name, sender) {
+    var msgListeners = [], discListeners = [];
+    var portId = null, disconnected = false, buffer = [];
+    var port = {
+      name: name || "", sender: sender || null,
+      onMessage: makeEvent(msgListeners),
+      onDisconnect: makeEvent(discListeners),
+      postMessage: function (msg) {
+        if (disconnected) { return; }
+        var m = (msg === undefined ? null : msg);
+        if (portId) { bridge("port.postMessage", { portId: portId, message: m }); }
+        else { buffer.push(m); }
+      },
+      disconnect: function () {
+        if (disconnected) { return; }
+        disconnected = true;
+        if (portId) { bridge("port.disconnect", { portId: portId }); delete ports[portId]; }
+      }
+    };
+    port._bindId = function (id) {
+      portId = id;
+      if (!id) { return; }
+      ports[id] = port;
+      if (disconnected) { bridge("port.disconnect", { portId: id }); delete ports[id]; return; }
+      for (var i = 0; i < buffer.length; i++) { bridge("port.postMessage", { portId: id, message: buffer[i] }); }
+      buffer = [];
+    };
+    port._fireMessage = function (m) { for (var i = 0; i < msgListeners.length; i++) { try { msgListeners[i](m, port); } catch (e) {} } };
+    port._fireDisconnect = function () { disconnected = true; for (var i = 0; i < discListeners.length; i++) { try { discListeners[i](port); } catch (e) {} } };
+    return port;
+  }
+  function runtimeConnect(connectInfo) {
+    var ci = connectInfo || {};
+    var port = makePort(ci.name || "", null);
+    bridge("port.connect", { name: ci.name || "" }).then(function (res) {
+      port._bindId(res && res.portId ? res.portId : null);
+    }, function () { port._bindId(null); });
+    return port;
+  }
+
   function storageArea(area) {
     function get(keys, callback) {
       if (typeof keys === "function") { callback = keys; keys = null; }
@@ -455,7 +501,7 @@
       getManifest: function () { return manifest; },
       getURL: getURL,
       onMessage: makeEvent(messageListeners),
-      onConnect: { addListener: function () {}, removeListener: function () {}, hasListener: function () { return false; } },
+      onConnect: makeEvent(connectListeners),
       onInstalled: { addListener: function () {}, removeListener: function () {}, hasListener: function () { return false; } },
       sendMessage: function () {
         var args = _Array.prototype.slice.call(arguments);
@@ -465,7 +511,7 @@
           .then(function (resp) { return resp ? resp.value : undefined; });
         return settle(promise, cb);
       },
-      connect: function () { return { name: "", onMessage: makeEvent([]), onDisconnect: makeEvent([]), postMessage: function () {}, disconnect: function () {} }; },
+      connect: runtimeConnect,
       openOptionsPage: function (cb) {
         return settle(bridge("runtime.openOptionsPage", {}).then(function () { return undefined; }), cb);
       },
@@ -534,6 +580,21 @@
       for (var i = 0; i < list.length; i++) {
         try { list[i].apply(null, args); } catch (e) {}
       }
+    },
+    // Port pushes from native (the worker's replies on a port this page opened). name/sender for
+    // onPortConnect (responder path, present for symmetry) arrive already parsed as JS literals.
+    onPortConnect: function (portId, name, sender) {
+      var port = makePort(typeof name === "string" ? name : "", sender || null);
+      port._bindId(portId);
+      for (var i = 0; i < connectListeners.length; i++) { try { connectListeners[i](port); } catch (e) {} }
+    },
+    onPortMessage: function (portId, message) {
+      var p = ports[portId];
+      if (p) { p._fireMessage(message); }
+    },
+    onPortDisconnect: function (portId) {
+      var p = ports[portId];
+      if (p) { delete ports[portId]; p._fireDisconnect(); }
     }
   };
   W.__brownbearExtPageReady = true;

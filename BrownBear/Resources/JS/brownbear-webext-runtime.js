@@ -108,6 +108,52 @@
       };
     }
 
+    // chrome.runtime.connect / onConnect long-lived ports. A content script is a CONNECTOR: it opens a
+    // port to its worker via runtime.connect, and native pushes the worker's replies via
+    // window.__bbExtContent[token].onPortMessage/onPortDisconnect. A synchronous Port is returned that
+    // buffers postMessage() until the async native id-mint resolves, then flushes.
+    var connectListeners = [];
+    var ports = Object.create(null);   // portId -> port
+    function makePort(name, sender) {
+      var msgListeners = [], discListeners = [];
+      var portId = null, disconnected = false, buffer = [];
+      var port = {
+        name: name || "", sender: sender || null,
+        onMessage: makeEvent(msgListeners),
+        onDisconnect: makeEvent(discListeners),
+        postMessage: function (msg) {
+          if (disconnected) { return; }
+          var m = (msg === undefined ? null : msg);
+          if (portId) { bridge("port.postMessage", { portId: portId, message: m }, token); }
+          else { buffer.push(m); }
+        },
+        disconnect: function () {
+          if (disconnected) { return; }
+          disconnected = true;
+          if (portId) { bridge("port.disconnect", { portId: portId }, token); delete ports[portId]; }
+        }
+      };
+      port._bindId = function (id) {
+        portId = id;
+        if (!id) { return; }
+        ports[id] = port;
+        if (disconnected) { bridge("port.disconnect", { portId: id }, token); delete ports[id]; return; }
+        for (var i = 0; i < buffer.length; i++) { bridge("port.postMessage", { portId: id, message: buffer[i] }, token); }
+        buffer = [];
+      };
+      port._fireMessage = function (m) { for (var i = 0; i < msgListeners.length; i++) { try { msgListeners[i](m, port); } catch (e) {} } };
+      port._fireDisconnect = function () { disconnected = true; for (var i = 0; i < discListeners.length; i++) { try { discListeners[i](port); } catch (e) {} } };
+      return port;
+    }
+    function runtimeConnect(connectInfo) {
+      var ci = connectInfo || {};
+      var port = makePort(ci.name || "", null);
+      bridge("port.connect", { name: ci.name || "" }, token).then(function (res) {
+        port._bindId(res && res.portId ? res.portId : null);
+      }, function () { port._bindId(null); });
+      return port;
+    }
+
     function tabsApi() {
       function query(queryInfo, callback) {
         return settle(bridge("tabs.query", { query: queryInfo || {} }, token), callback);
@@ -480,9 +526,9 @@
           return settle(promise, cb);
         },
         onMessage: makeEvent(messageListeners),
-        onConnect: noopEvent,
+        onConnect: makeEvent(connectListeners),
         onInstalled: noopEvent,
-        connect: function () { return { name: "", onMessage: noopEvent, onDisconnect: noopEvent, postMessage: function () {}, disconnect: function () {} }; },
+        connect: runtimeConnect,
         lastError: null,
         getPlatformInfo: function (cb) { var info = { os: "ios", arch: "arm64", nacl_arch: "arm64" }; if (typeof cb === "function") { cb(info); return undefined; } return _Promise.resolve(info); }
       },
@@ -539,6 +585,24 @@
           try { storageListeners[i](changes, areaName); }
           catch (e) { if (_console.error) { _console.error("[BrownBear ext] onChanged listener:", e); } }
         }
+      },
+      // Port pushes from native (the worker's side of a port this endpoint opened). For a port opened
+      // TOWARD this endpoint (responder path — present for symmetry), onPortConnect builds the port and
+      // fires onConnect. name/sender arrive already parsed (embedded as JS literals by native).
+      onPortConnect: function (portId, name, sender) {
+        var port = makePort(typeof name === "string" ? name : "", sender || null);
+        port._bindId(portId);
+        for (var i = 0; i < connectListeners.length; i++) {
+          try { connectListeners[i](port); } catch (e) { if (_console.error) { _console.error("[BrownBear ext] onConnect:", e); } }
+        }
+      },
+      onPortMessage: function (portId, message) {
+        var p = ports[portId];
+        if (p) { p._fireMessage(message); }
+      },
+      onPortDisconnect: function (portId) {
+        var p = ports[portId];
+        if (p) { delete ports[portId]; p._fireDisconnect(); }
       }
     };
     return chrome;

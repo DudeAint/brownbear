@@ -67,7 +67,7 @@ final class BrownBearBrowserViewController: UIViewController {
     let webExtTabRegistry = WebExtensionTabRegistry()
     /// Turns the tab + navigation lifecycle into chrome.tabs.* / chrome.webNavigation.* events for
     /// extension workers and popups. Fed from the TabManager + WKNavigation delegate hooks below.
-    private lazy var webExtEvents = WebExtensionEventEmitter(registry: webExtTabRegistry, host: self)
+    lazy var webExtEvents = WebExtensionEventEmitter(registry: webExtTabRegistry, host: self)
     /// Last-seen tab id set, so tabManager(_:didUpdate:) can diff to fire tabs.onCreated / onRemoved.
     private var lastKnownTabIDs: [UUID] = []
 
@@ -83,6 +83,7 @@ final class BrownBearBrowserViewController: UIViewController {
         injection.webExtensionBridgeHost = self   // chrome.tabs → TabManager
         injection.webExtensionCookieHost = self   // chrome.cookies → WKHTTPCookieStore
         webExtEvents.setHost(self)   // chrome.tabs/webNavigation event push uses the tab registry
+        injection.historyStateHandler.delegate = self   // SPA history → webNavigation.onHistoryStateUpdated
         DownloadManager.shared.onDownloadStarted = { [weak self] in self?.presentDownloadStartedToast() }
         buildHierarchy()
     }
@@ -700,8 +701,8 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
         }
     }
 
-    /// The chrome tab id for the tab backing `webView`, or nil if none — for webNavigation events.
-    private func extTabId(for webView: WKWebView) -> Int? {
+    /// The chrome tab id for the tab backing `webView`, or nil if none (for webNavigation events).
+    func extTabId(for webView: WKWebView) -> Int? {
         tabManager.tabs.first { $0.webView === webView }.map { webExtTabRegistry.id(for: $0.id) }
     }
 

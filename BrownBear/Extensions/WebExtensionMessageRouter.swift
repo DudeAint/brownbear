@@ -31,7 +31,7 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
         var frameInfo: WKFrameInfo?
     }
 
-    private let store: WebExtensionStore
+    let store: WebExtensionStore   // internal: the +ContextMenus / +Ports extension files reach it
     private let storage: WebExtensionStorage
     private let runtime: WebExtensionRuntime
     /// The world content scripts (and thus their __bbExtContent push targets) live in. Pushes are
@@ -81,6 +81,31 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
         return token
     }
 
+    /// Attach the page's web view to a page session after the WKWebView is created (makePageSession runs
+    /// before the view exists). Lets the runtime push chrome.runtime.connect port traffic INTO an open
+    /// popup/options page, which needs the exact web view to evaluate into.
+    func attachPageWebView(token: String, webView: WKWebView) {
+        guard var session = sessions[token] else { return }
+        session.webView = webView
+        sessions[token] = session
+    }
+
+    /// The web view + frame + content-vs-page kind a `token`'s session evaluates into, or nil if the
+    /// session is gone or has no live web view. Used by the +Ports extension (separate file, which
+    /// can't see the private `sessions`/`Session`) to deliver port callbacks. Internal, not public.
+    func portDeliveryTarget(token: String) -> (webView: WKWebView, frame: WKFrameInfo?, isContent: Bool)? {
+        guard let session = sessions[token], let webView = session.webView else { return nil }
+        return (webView, session.frameInfo, session.isContent)
+    }
+
+    /// The router's isolated content world (content endpoints) — exposed for the +Ports extension, which
+    /// evaluates into the same world the content scripts / page surface live in.
+    var portContentWorld: WKContentWorld { contentWorld }
+
+    /// JSON-encode a value for embedding in evaluated JS — the same fragment-allowed encoding the
+    /// in-file pushes use, exposed so the +Ports extension can build its port-push argument literals.
+    static func encodeJSONForJS(_ value: Any) -> String { jsonString(value) }
+
     nonisolated func userContentController(_ userContentController: WKUserContentController,
                                            didReceive message: WKScriptMessage,
                                            replyHandler: @escaping (Any?, String?) -> Void) {
@@ -123,6 +148,12 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
                 responseTable.resolve(responseId, value: payload["value"])
             }
             return NSNull()
+        }
+
+        // chrome.runtime.connect/onConnect long-lived ports. Resolved against the token (so the port is
+        // bound to the right extension + endpoint) but otherwise relayed opaquely by the port hub.
+        if api == "port.connect" || api == "port.postMessage" || api == "port.disconnect" {
+            return try await routePort(api: api, payload: payload, token: token)
         }
 
         let extensionID = try await resolve(token)
@@ -405,6 +436,10 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
 
     // MARK: - Identity / sessions
 
+    /// Internal alias for `resolve(_:)` so the +Ports extension (separate file) can resolve a token to
+    /// its extension id — the same fail-closed identity check every routed call uses.
+    func resolveExtensionID(_ token: String?) async throws -> String { try await resolve(token) }
+
     private func resolve(_ token: String?) async throws -> String {
         guard let token, let session = sessions[token] else {
             throw BrownBearError.bridgeRejected("unrecognized extension token")
@@ -449,6 +484,9 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
         for token in stale { sessions.removeValue(forKey: token) }
         let staleSet = Set(stale)
         tokenOrder.removeAll { staleSet.contains($0) }
+        // The purged content scripts may have held open chrome.runtime ports; tear those down so their
+        // background-worker peers get onDisconnect rather than stranding a listener on a dead frame.
+        BrownBearServices.shared.webExtensionRuntime.portHub.disconnectClientPorts(tokens: staleSet)
     }
 
     // MARK: - getContentScripts
@@ -745,11 +783,22 @@ extension WebExtensionMessageRouter {
             return WebExtensionManagementInfo.contains(requested, manifest: manifest, granted: granted)
 
         case "permissions.request":
-            let manifest = await store.ext(for: extensionID)?.manifest
+            let ext = await store.ext(for: extensionID)
+            let manifest = ext?.manifest
             let grants = BrownBearServices.shared.webExtensionPermissionGrants
             let requested = WebExtensionManagementInfo.PermissionSet(payload: payload)
+            // Reject anything the manifest never declared (required or optional) — Chrome parity.
             guard let toGrant = WebExtensionManagementInfo.resolveRequest(requested, manifest: manifest) else { return false }
-            await grants.grant(extensionID: extensionID, toGrant)
+            // Only prompt for what is NOT already held; an already-held request resolves true silently.
+            let held = await grants.granted(extensionID: extensionID)
+            let effective = WebExtensionManagementInfo.effective(manifest: manifest, granted: held)
+            var newlyRequested = toGrant
+            newlyRequested.permissions.subtract(effective.permissions)
+            newlyRequested.origins.subtract(effective.origins)
+            // User consent gate (replaces the old auto-grant). Deny ⇒ resolve false, grant nothing.
+            guard await WebExtensionPermissionPrompt.request(extensionName: ext?.displayName ?? extensionID,
+                                                             toGrant: newlyRequested) else { return false }
+            await grants.grant(extensionID: extensionID, newlyRequested)
             return true
 
         case "permissions.remove":
@@ -874,53 +923,6 @@ extension WebExtensionMessageRouter {
         }
     }
 
-    // MARK: - chrome.contextMenus / browser.menus
-
-    /// chrome.contextMenus.create/update/remove/removeAll for the CONTENT/POPUP surface. Gated on the
-    /// `contextMenus` (or Firefox `menus`) API permission, then driven through the shared
-    /// WebExtensionContextMenuStore (@MainActor). create returns { id }; the rest return NSNull (void).
-    /// A thrown store guard surfaces as a rejected bridge call so JS gets runtime.lastError.
-    private func routeContextMenus(api: String, payload: [String: Any], extensionID: String) async throws -> Any? {
-        let perms = await store.ext(for: extensionID)?.manifest?.permissions ?? []
-        guard perms.contains("contextMenus") || perms.contains("menus") else {
-            throw BrownBearError.bridgeRejected("the \"contextMenus\" permission is not granted")
-        }
-        let menuStore = BrownBearServices.shared.webExtensionContextMenuStore
-        let bare = api.hasPrefix("menus.")
-            ? String(api.dropFirst("menus.".count))
-            : String(api.dropFirst("contextMenus.".count))
-        switch bare {
-        case "create":
-            let id = try menuStore.create(extensionID: extensionID,
-                                          properties: payload["properties"] as? [String: Any] ?? [:])
-            return ["id": id]
-        case "update":
-            guard let id = Self.menuItemID(payload["id"]) else {
-                throw BrownBearError.bridgeRejected("contextMenus.update requires an id")
-            }
-            try menuStore.update(extensionID: extensionID, id: id,
-                                 properties: payload["properties"] as? [String: Any] ?? [:])
-            return NSNull()
-        case "remove":
-            guard let id = Self.menuItemID(payload["id"]) else {
-                throw BrownBearError.bridgeRejected("contextMenus.remove requires an id")
-            }
-            try menuStore.remove(extensionID: extensionID, id: id)
-            return NSNull()
-        case "removeAll":
-            menuStore.removeAll(extensionID: extensionID)
-            return NSNull()
-        default:
-            throw BrownBearError.bridgeRejected("unsupported contextMenus api '\(api)'")
-        }
-    }
-
-    /// contextMenus item ids are strings, but a worker may pass an integer id; normalize either form.
-    private static func menuItemID(_ value: Any?) -> String? {
-        if let string = value as? String, !string.isEmpty { return string }
-        if let int = value as? Int { return String(int) }
-        return nil
-    }
 
     /// Build a RuleUpdate from a chrome update payload (addRules + removeRuleIds).
     static func parseRuleUpdate(_ payload: [String: Any]) -> WebExtensionDNRStore.RuleUpdate {

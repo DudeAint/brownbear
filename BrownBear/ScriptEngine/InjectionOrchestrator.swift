@@ -28,6 +28,9 @@ final class InjectionOrchestrator {
     private let webExtensionRouter: WebExtensionMessageRouter
     /// Captures the page's own console.* output (PAGE world) for the Logs "Page" filter.
     private let pageConsoleHandler: PageConsoleHandler
+    /// Captures same-document history changes (pushState/replaceState/popstate, PAGE world) so
+    /// chrome.webNavigation.onHistoryStateUpdated can fire — WKWebView's nav delegate never reports them.
+    let historyStateHandler = WebExtHistoryStateHandler()
     /// Backs the in-page "Add to BrownBear" / "Remove from BrownBear" button on Chrome Web Store pages.
     private let webStoreInstallHandler = WebStoreInstallHandler()
     /// Compiles each extension's declarativeNetRequest rulesets into WKContentRuleLists (Module 6 P2).
@@ -129,6 +132,19 @@ final class InjectionOrchestrator {
                                     forMainFrameOnly: true,
                                     in: .page)
         userContentController.addUserScript(webStore)
+
+        // Same-document history capture for chrome.webNavigation.onHistoryStateUpdated — a PAGE-world
+        // hook (history.pushState lives in page scope) that posts the new URL to native, which emits the
+        // webNavigation event. Main frame only. The handler does NO privileged work (untrusted PAGE
+        // world); it only forwards a validated http(s) main-frame URL for an event emission.
+        userContentController.add(historyStateHandler,
+                                  contentWorld: .page,
+                                  name: WebExtHistoryStateHandler.handlerName)
+        let historyHook = WKUserScript(source: Self.bootstrapSource("brownbear-webext-histstate"),
+                                       injectionTime: .atDocumentStart,
+                                       forMainFrameOnly: true,
+                                       in: .page)
+        userContentController.addUserScript(historyHook)
 
         // Boot background service workers + the content↔background message bus (self-observes
         // extension changes thereafter).
