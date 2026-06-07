@@ -179,6 +179,22 @@ final class TabManager {
         }
     }
 
+    // MARK: - Reordering
+
+    /// Reorder tabs to match the grid's new visible order after a drag. `orderedIDs` is the new order
+    /// of one privacy mode's tabs (the grid only ever shows a single mode at a time). Tabs not in the
+    /// list — the other mode — keep their relative order. Unknown ids are ignored. Order-only change,
+    /// so the active tab and tab count are untouched and no delegate notification is needed (the grid
+    /// drives its own animation).
+    func reorderTabs(toMatch orderedIDs: [UUID]) {
+        let byID = Dictionary(tabs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let reordered = orderedIDs.compactMap { byID[$0] }
+        guard !reordered.isEmpty else { return }
+        let movedIDs = Set(orderedIDs)
+        let rest = tabs.filter { !movedIDs.contains($0.id) }
+        tabs = reordered + rest
+    }
+
     // MARK: - Recently closed
 
     /// Record a closed normal tab so it can be reopened. Private tabs leave no trace.
