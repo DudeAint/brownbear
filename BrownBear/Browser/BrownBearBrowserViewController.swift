@@ -162,12 +162,15 @@ final class BrownBearBrowserViewController: UIViewController {
     }
 
     /// Tint the top chrome a distinct dark shade when the active tab is private, so the user can tell
-    /// at a glance they're in a private session (the Safari/Firefox private-bar cue).
+    /// at a glance they're in a private session (the Safari/Firefox private-bar cue). Forcing the
+    /// chrome subtree to dark appearance makes the omnibox text/icons resolve to their light variants,
+    /// so they stay readable on the dark private bar even when the app is in light mode.
     private func applyPrivateChrome() {
         let isPrivate = tabManager.activeTab?.isPrivate ?? false
         topChrome.backgroundColor = isPrivate
             ? UIColor(red: 0.11, green: 0.09, blue: 0.16, alpha: 1)
             : BrownBearTheme.Palette.chrome
+        topChrome.overrideUserInterfaceStyle = isPrivate ? .dark : .unspecified
     }
 
     private func syncProgress(for state: NavigationState) {
@@ -183,7 +186,12 @@ final class BrownBearBrowserViewController: UIViewController {
 
     private func loadNewTabPage(in tab: Tab) {
         tab.delegate = self
-        // Build the page from the user's bookmarks (a fast actor read), then load it.
+        // Private tabs get a distinct incognito page (no shortcut tiles, explicit "not saved" copy);
+        // normal tabs build from the user's bookmarks (a fast actor read).
+        if tab.isPrivate {
+            tab.webView.loadHTMLString(Self.privateNewTabHTML(), baseURL: nil)
+            return
+        }
         Task { @MainActor in
             let bookmarks = await BrownBearServices.shared.bookmarkStore.all()
             tab.webView.loadHTMLString(Self.newTabHTML(bookmarks: bookmarks), baseURL: nil)
@@ -278,6 +286,43 @@ final class BrownBearBrowserViewController: UIViewController {
             <div class="grid">
         \(tiles)
             </div>
+          </div>
+        </body></html>
+        """
+    }
+
+    /// The private/incognito New Tab page: a dark, self-explanatory page that makes clear nothing is
+    /// being saved. No shortcut tiles (which would leak browsing) — just the search box and the
+    /// privacy explanation, matching Safari/Chrome incognito. First-party, no user strings injected.
+    private static func privateNewTabHTML() -> String {
+        let engine = AppSettings.searchEngine
+        return """
+        <!doctype html><html><head><meta charset="utf-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+        <style>
+          :root{color-scheme:dark;--bg:#161020;--field:#241a33;--text:#F3EEFA;--sub:#A99CC2;
+            --accent:#B79CF0;--border:#33264a;}
+          *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+          html,body{margin:0;height:100%;font-family:-apple-system,system-ui,sans-serif;
+            background:var(--bg);color:var(--text);}
+          .wrap{max-width:560px;margin:0 auto;padding:max(48px,10vh) 24px 40px;text-align:center;}
+          .glyph{font-size:40px;margin-bottom:14px;}
+          h1{font-size:22px;font-weight:800;margin:0 0 10px;letter-spacing:-.3px;}
+          p{font-size:15px;line-height:1.5;color:var(--sub);margin:0 auto 28px;max-width:420px;}
+          form.search{display:flex;align-items:center;gap:10px;background:var(--field);
+            border:1px solid var(--border);border-radius:16px;padding:0 14px;height:52px;text-align:left;}
+          form.search svg{width:20px;height:20px;fill:var(--sub);flex:none;}
+          form.search input{flex:1;border:0;background:transparent;font-size:17px;color:var(--text);outline:none;}
+        </style></head><body>
+          <div class="wrap">
+            <div class="glyph">🕶️</div>
+            <h1>Private Browsing</h1>
+            <p>Pages you view in private tabs won't appear in your history, and cookies and site
+               data are cleared when you close them. Downloads and bookmarks you save are kept.</p>
+            <form class="search" action="\(engine.formAction)" method="GET" autocomplete="off">
+              <svg viewBox="0 0 24 24"><path d="M21 20l-5.6-5.6a7 7 0 10-1.4 1.4L20 21zM5 10a5 5 0 1110 0 5 5 0 01-10 0z"/></svg>
+              <input name="\(engine.formQueryParam)" placeholder="Search privately" autocapitalize="off" autocorrect="off" spellcheck="false">
+            </form>
           </div>
         </body></html>
         """
@@ -408,7 +453,7 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
         let tab = tabManager.activeTab
         let state = tab?.state ?? NavigationState()
         let url = state.url
-        let isDesktop = tab?.webView.customUserAgent != nil
+        let isDesktop = tab?.prefersDesktop ?? false
         // The bookmarked check is async (actor); build + present the menu once it resolves.
         Task { @MainActor in
             let isBookmarked: Bool
@@ -451,13 +496,15 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
 
     /// Toggle a desktop user-agent on the active tab and reload, so a page renders its desktop site.
     private func toggleDesktopSite() {
-        guard let webView = tabManager.activeTab?.webView else { return }
+        guard let tab = tabManager.activeTab else { return }
+        tab.prefersDesktop.toggle()
+        let webView = tab.webView
+        // Set BOTH levers: a desktop UA for sites that sniff it, and (the reliable one) the
+        // per-navigation preferredContentMode applied in decidePolicyFor below. Then re-load the URL
+        // so the new mode actually takes effect (reload() can serve cache and skip re-requesting).
         let desktopUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
             + "(KHTML, like Gecko) Version/17.0 Safari/605.1.15"
-        webView.customUserAgent = (webView.customUserAgent == nil) ? desktopUA : nil
-        // Re-load the current URL rather than reload(): reload() can serve from cache and doesn't
-        // reliably re-request with the just-changed customUserAgent, so the page would come back
-        // unchanged (looking like the toggle did nothing). A fresh load applies the new UA.
+        webView.customUserAgent = tab.prefersDesktop ? desktopUA : nil
         if let url = webView.url {
             webView.load(URLRequest(url: url))
         } else {
@@ -580,14 +627,21 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView,
                  decidePolicyFor navigationAction: WKNavigationAction,
-                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+                 preferences: WKWebpagePreferences,
+                 decisionHandler: @escaping (WKNavigationActionPolicy, WKWebpagePreferences) -> Void) {
+        // Apply the tab's desktop/mobile choice to every navigation. preferredContentMode is the
+        // reliable lever (a desktop UA alone is ignored by responsive sites), so the Desktop toggle
+        // actually changes the rendered layout — and it persists across the tab's loads.
+        if let tab = tabManager.tabs.first(where: { $0.webView === webView }) {
+            preferences.preferredContentMode = tab.prefersDesktop ? .desktop : .mobile
+        }
         if let url = navigationAction.request.url {
             // Open external app schemes (mailto:, tel:, etc.) via the system.
             if let scheme = url.scheme?.lowercased(),
                !["http", "https", "about", "file", "data"].contains(scheme),
                UIApplication.shared.canOpenURL(url) {
                 UIApplication.shared.open(url)
-                decisionHandler(.cancel)
+                decisionHandler(.cancel, preferences)
                 return
             }
 
@@ -599,15 +653,15 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
                ["http", "https", "file"].contains(scheme),
                UserScriptInstaller.isUserScriptURL(url) {
                 if viewSourceAllowOnce.remove(url) != nil {
-                    decisionHandler(.allow)   // user picked "View source" — let it load as text
+                    decisionHandler(.allow, preferences)   // user picked "View source" — load as text
                     return
                 }
-                decisionHandler(.cancel)
+                decisionHandler(.cancel, preferences)
                 presentScriptInstall(for: url)
                 return
             }
         }
-        decisionHandler(.allow)
+        decisionHandler(.allow, preferences)
     }
 
     func webView(_ webView: WKWebView,
@@ -728,16 +782,6 @@ extension BrownBearBrowserViewController: ScriptBridgeHost {
 extension BrownBearBrowserViewController: BrowserMenuDelegate {
     func browserMenu(_ menu: BrowserMenuViewController, didSelect action: BrowserMenuAction) {
         switch action {
-        case .newTab:
-            let tab = tabManager.createTab()
-            loadNewTabPage(in: tab)
-            refreshChrome()
-            omnibox.beginEditing()
-        case .newPrivateTab:
-            let tab = tabManager.createTab(isPrivate: true)
-            loadNewTabPage(in: tab)
-            refreshChrome()
-            omnibox.beginEditing()
         case .reloadOrStop:
             guard let tab = tabManager.activeTab else { return }
             if tab.state.isLoading { tab.stopLoading() } else { tab.reload() }
@@ -763,6 +807,8 @@ extension BrownBearBrowserViewController: BrowserMenuDelegate {
             presentHistory()
         case .downloads:
             presentDownloads()
+        case .settings:
+            presentDashboard(initialTab: .settings)
         }
     }
 

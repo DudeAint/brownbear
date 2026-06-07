@@ -58,6 +58,11 @@ final class Tab {
     /// Latest published state. Always kept in sync with `webView` via KVO.
     private(set) var state = NavigationState()
 
+    /// Whether this tab is requesting the desktop site. Applied per-navigation via the nav delegate's
+    /// `preferredContentMode` (the reliable way to get a desktop layout — a desktop UA alone is
+    /// ignored by responsive sites) plus a desktop user-agent.
+    var prefersDesktop = false
+
     /// Last rendered thumbnail, used by the tab grid. Refreshed when a tab resigns active.
     private(set) var snapshot: UIImage?
 
