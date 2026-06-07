@@ -869,6 +869,44 @@
     onPermissionLevelChanged: makeEvent([])
   };
 
+  // ---------------------------------------------------------------- chrome.contextMenus
+  // Backed by native __bb_context_menus(method, argsJSON, cb). create resolves { id }; a native
+  // { error } result rejects the promise. onClicked is LIVE here — the browser delivers a long-press
+  // tap via __bbBg.dispatchContextMenuClicked.
+  var contextMenuClickedListeners = [];
+  function contextMenusCall(method, args) {
+    return new Promise(function (resolve, reject) {
+      __bb_context_menus(method, JSON.stringify(args || {}), function (resJSON) {
+        var r = parseJSON(resJSON);
+        if (r && typeof r === 'object' && typeof r.error === 'string') { reject(new Error(r.error)); }
+        else { resolve(r); }
+      });
+    });
+  }
+  var contextMenus = {
+    create: function (createProperties, cb) {
+      createProperties = createProperties || {};
+      // Chrome: create() RETURNS the id synchronously (and accepts an optional callback). We can't
+      // know a minted id synchronously across the bridge, so echo back the supplied id (the common
+      // case) and resolve the real id via the callback.
+      contextMenusCall('create', { properties: createProperties }).then(function () {
+        if (typeof cb === 'function') { cb(); }
+      }, function () { if (typeof cb === 'function') { cb(); } });
+      return (createProperties.id !== undefined && createProperties.id !== null) ? createProperties.id : undefined;
+    },
+    update: function (id, updateProperties, cb) {
+      return settleBg(contextMenusCall('update', { id: id, properties: updateProperties || {} }).then(function () { return undefined; }), cb);
+    },
+    remove: function (menuItemId, cb) {
+      return settleBg(contextMenusCall('remove', { id: menuItemId }).then(function () { return undefined; }), cb);
+    },
+    removeAll: function (cb) {
+      return settleBg(contextMenusCall('removeAll', {}).then(function () { return undefined; }), cb);
+    },
+    onClicked: makeEvent(contextMenuClickedListeners),
+    ACTION_MENU_TOP_LEVEL_LIMIT: 6
+  };
+
   var chrome = {
     runtime: runtime,
     storage: storage,
@@ -882,6 +920,8 @@
     webNavigation: webNavigation,
     alarms: alarms,
     commands: commands,
+    contextMenus: contextMenus,
+    menus: contextMenus,
     action: action,
     browserAction: action,
     tabs: tabs,
@@ -987,6 +1027,15 @@
       for (var i = 0; i < actionClickedListeners.length; i++) {
         try { actionClickedListeners[i](tab); }
         catch (e) { __bb_log('error', 'action.onClicked listener threw: ' + (e && e.message ? e.message : e)); }
+      }
+    },
+
+    dispatchContextMenuClicked: function (infoJSON, tabJSON) {
+      var info = parseJSON(infoJSON);
+      var tab = parseJSON(tabJSON);
+      for (var i = 0; i < contextMenuClickedListeners.length; i++) {
+        try { contextMenuClickedListeners[i](info, tab); }
+        catch (e) { __bb_log('error', 'contextMenus.onClicked listener threw: ' + (e && e.message ? e.message : e)); }
       }
     },
 

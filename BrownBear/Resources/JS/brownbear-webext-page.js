@@ -386,6 +386,37 @@
     }
   };
 
+  // --- chrome.contextMenus (page/popup: create/update/remove over the bridge; onClicked is
+  //     background-only in Chrome, so the event here is inert) -----------------------------------
+  function contextMenusApi() {
+    function unwrapMenu(result) {
+      if (result && typeof result === "object" && typeof result.error === "string") {
+        return _Promise.reject(new Error(result.error));
+      }
+      return result;
+    }
+    return {
+      create: function (createProperties, callback) {
+        createProperties = createProperties || {};
+        bridge("contextMenus.create", { properties: createProperties }).then(unwrapMenu).then(function () {
+          if (typeof callback === "function") { callback(); }
+        }, function () { if (typeof callback === "function") { callback(); } });
+        return (createProperties.id !== undefined && createProperties.id !== null) ? createProperties.id : undefined;
+      },
+      update: function (id, updateProperties, callback) {
+        return settle(bridge("contextMenus.update", { id: id, properties: updateProperties || {} }).then(unwrapMenu).then(function () { return undefined; }), callback);
+      },
+      remove: function (menuItemId, callback) {
+        return settle(bridge("contextMenus.remove", { id: menuItemId }).then(unwrapMenu).then(function () { return undefined; }), callback);
+      },
+      removeAll: function (callback) {
+        return settle(bridge("contextMenus.removeAll", {}).then(unwrapMenu).then(function () { return undefined; }), callback);
+      },
+      onClicked: { addListener: function () {}, removeListener: function () {}, hasListener: function () { return false; } },
+      ACTION_MENU_TOP_LEVEL_LIMIT: 6
+    };
+  }
+
   var chrome = {
     storage: {
       local: storageArea("local"),
@@ -395,6 +426,8 @@
     },
     cookies: cookiesApi(),
     notifications: notificationsApi(),
+    contextMenus: contextMenusApi(),
+    menus: contextMenusApi(),
     action: actionApi(),
     browserAction: actionApi(),
     windows: windowsApi(),

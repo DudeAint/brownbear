@@ -187,6 +187,10 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
              "action.getBadgeText", "action.getTitle", "action.getBadgeBackgroundColor":
             return routeAction(api: api, payload: payload, extensionID: extensionID)
 
+        case "contextMenus.create", "contextMenus.update", "contextMenus.remove", "contextMenus.removeAll",
+             "menus.create", "menus.update", "menus.remove", "menus.removeAll":
+            return try await routeContextMenus(api: api, payload: payload, extensionID: extensionID)
+
         case "dnr.updateDynamicRules", "dnr.updateSessionRules", "dnr.updateEnabledRulesets",
              "dnr.getDynamicRules", "dnr.getSessionRules", "dnr.getEnabledRulesets",
              "userScripts.register", "userScripts.update", "userScripts.getScripts",
@@ -868,6 +872,54 @@ extension WebExtensionMessageRouter {
         guard perms.contains("userScripts") else {
             throw BrownBearError.bridgeRejected("userScripts permission not granted")
         }
+    }
+
+    // MARK: - chrome.contextMenus / browser.menus
+
+    /// chrome.contextMenus.create/update/remove/removeAll for the CONTENT/POPUP surface. Gated on the
+    /// `contextMenus` (or Firefox `menus`) API permission, then driven through the shared
+    /// WebExtensionContextMenuStore (@MainActor). create returns { id }; the rest return NSNull (void).
+    /// A thrown store guard surfaces as a rejected bridge call so JS gets runtime.lastError.
+    private func routeContextMenus(api: String, payload: [String: Any], extensionID: String) async throws -> Any? {
+        let perms = await store.ext(for: extensionID)?.manifest?.permissions ?? []
+        guard perms.contains("contextMenus") || perms.contains("menus") else {
+            throw BrownBearError.bridgeRejected("the \"contextMenus\" permission is not granted")
+        }
+        let menuStore = BrownBearServices.shared.webExtensionContextMenuStore
+        let bare = api.hasPrefix("menus.")
+            ? String(api.dropFirst("menus.".count))
+            : String(api.dropFirst("contextMenus.".count))
+        switch bare {
+        case "create":
+            let id = try menuStore.create(extensionID: extensionID,
+                                          properties: payload["properties"] as? [String: Any] ?? [:])
+            return ["id": id]
+        case "update":
+            guard let id = Self.menuItemID(payload["id"]) else {
+                throw BrownBearError.bridgeRejected("contextMenus.update requires an id")
+            }
+            try menuStore.update(extensionID: extensionID, id: id,
+                                 properties: payload["properties"] as? [String: Any] ?? [:])
+            return NSNull()
+        case "remove":
+            guard let id = Self.menuItemID(payload["id"]) else {
+                throw BrownBearError.bridgeRejected("contextMenus.remove requires an id")
+            }
+            try menuStore.remove(extensionID: extensionID, id: id)
+            return NSNull()
+        case "removeAll":
+            menuStore.removeAll(extensionID: extensionID)
+            return NSNull()
+        default:
+            throw BrownBearError.bridgeRejected("unsupported contextMenus api '\(api)'")
+        }
+    }
+
+    /// contextMenus item ids are strings, but a worker may pass an integer id; normalize either form.
+    private static func menuItemID(_ value: Any?) -> String? {
+        if let string = value as? String, !string.isEmpty { return string }
+        if let int = value as? Int { return String(int) }
+        return nil
     }
 
     /// Build a RuleUpdate from a chrome update payload (addRules + removeRuleIds).

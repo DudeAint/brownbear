@@ -38,6 +38,9 @@ final class BrownBearServices {
     let webExtensionDNRStore = WebExtensionDNRStore()
     /// Module 6 Phase 3 — chrome.userScripts (MV3) runtime-registered content scripts, per extension.
     let webExtensionUserScriptStore = WebExtensionUserScriptStore()
+    /// chrome.contextMenus / browser.menus items registered by extensions, shared across content/
+    /// popup/background and surfaced in the page's long-press menu (iOS has no toolbar right-click).
+    let webExtensionContextMenuStore = WebExtensionContextMenuStore()
     /// Module 6 Phase 2 — headless background service workers + the content↔background message bus.
     let webExtensionRuntime: WebExtensionRuntime
 

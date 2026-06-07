@@ -403,6 +403,31 @@
       }
     };
 
+    // --- chrome.contextMenus (content scripts may create/update/remove; onClicked fires in the
+    //     background page in Chrome, so the event here is a no-op) --------------------------------
+    function contextMenusApi() {
+      return {
+        create: function (createProperties, callback) {
+          createProperties = createProperties || {};
+          bridge("contextMenus.create", { properties: createProperties }, token).then(unwrap).then(function () {
+            if (typeof callback === "function") { callback(); }
+          }, function () { if (typeof callback === "function") { callback(); } });
+          return (createProperties.id !== undefined && createProperties.id !== null) ? createProperties.id : undefined;
+        },
+        update: function (id, updateProperties, callback) {
+          return settle(bridge("contextMenus.update", { id: id, properties: updateProperties || {} }, token).then(unwrap).then(function () { return undefined; }), callback);
+        },
+        remove: function (menuItemId, callback) {
+          return settle(bridge("contextMenus.remove", { id: menuItemId }, token).then(unwrap).then(function () { return undefined; }), callback);
+        },
+        removeAll: function (callback) {
+          return settle(bridge("contextMenus.removeAll", {}, token).then(unwrap).then(function () { return undefined; }), callback);
+        },
+        onClicked: noopEvent,
+        ACTION_MENU_TOP_LEVEL_LIMIT: 6
+      };
+    }
+
     var chrome = {
       storage: {
         local: storageArea("local"),
@@ -412,6 +437,8 @@
       },
       cookies: cookiesApi(),
       notifications: notificationsApi(),
+      contextMenus: contextMenusApi(),
+      menus: contextMenusApi(),
       action: actionApi(),
       browserAction: actionApi(),
       windows: windowsApi(),

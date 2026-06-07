@@ -206,6 +206,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
         installDNRAndUserScriptNatives(into: context)
         installCryptoNatives(into: context)
         installFetchNative(into: context)
+        installContextMenuNatives(into: context)
 
         // chrome.tabs from the background worker. Hop to the main actor (TabManager is MainActor),
         // run the op, then call back onto this context's queue with the JSON result.
@@ -780,6 +781,35 @@ extension WebExtensionBackgroundContext {
         let tabJSON = jsonString(tab ?? NSNull())
         queue.async { [self] in
             fire(method: "dispatchActionClicked", arguments: [tabJSON])
+        }
+    }
+
+    /// chrome.contextMenus from the background worker. create/update/remove/removeAll hop to the main
+    /// actor (the store is @MainActor), run the op, then call back onto this context's serial queue with
+    /// the JSON result ({id} | null | {error}). Mirrors __bb_dnr / __bb_userscripts.
+    private func installContextMenuNatives(into context: JSContext) {
+        let extensionID = self.extensionID
+        let contextMenus: @convention(block) (String, String, JSValue) -> Void = { [weak self] method, argsJSON, callback in
+            guard let self else { return }
+            let args = ((try? JSONSerialization.jsonObject(with: Data(argsJSON.utf8))) as? [String: Any]) ?? [:]
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let result = await WebExtensionBackgroundContext.dispatchContextMenus(
+                    extensionID: extensionID, method: method, args: args)
+                self.callBack(callback, with: self.jsonString(result))
+            }
+        }
+        context.setObject(contextMenus, forKeyedSubscript: "__bb_context_menus" as NSString)
+    }
+
+    /// Fire chrome.contextMenus.onClicked into this worker with the OnClickData info object + the Tab
+    /// record (or null). Called from the main actor (the browser's long-press tap); hops to `queue` to
+    /// touch the JSContext, exactly like fireActionClicked.
+    func fireContextMenuClicked(info: [String: Any], tab: [String: Any]?) {
+        let infoJSON = jsonString(info)
+        let tabJSON = jsonString(tab ?? NSNull())
+        queue.async { [self] in
+            fire(method: "dispatchContextMenuClicked", arguments: [infoJSON, tabJSON])
         }
     }
 
