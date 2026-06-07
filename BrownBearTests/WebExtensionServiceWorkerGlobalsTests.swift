@@ -101,4 +101,42 @@ final class WebExtensionServiceWorkerGlobalsTests: XCTestCase {
                        "fetch to an un-permitted host must fail closed (no host_permissions declared)")
         XCTAssertTrue((r["message"] as? String ?? "").contains("host permission"))
     }
+
+    func testURLLocationPerformanceAndStorageSetAccessLevel() async throws {
+        let context = try makeContext(background: """
+        chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+          if (!msg || msg.check !== 'webglobals') { return; }
+          var u = new URL('https://ex.com:8443/a/b?x=1&y=2#f');
+          u.searchParams.set('x', '9');
+          var sp = new URLSearchParams('a=1&a=2');
+          var setAccessLevelOk = false;
+          try { chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_AND_UNTRUSTED_CONTEXTS' });
+                setAccessLevelOk = true; } catch (e) { setAccessLevelOk = false; }
+          sendResponse({
+            hasURL: typeof URL === 'function',
+            hostname: u.hostname,
+            port: u.port,
+            origin: u.origin,
+            href: u.href,
+            getAllA: sp.getAll('a').join(','),
+            hasLocation: typeof location === 'object' && typeof location.href === 'string',
+            perfIsNumber: typeof performance.now() === 'number',
+            setAccessLevelOk: setAccessLevelOk
+          });
+        });
+        """)
+        defer { context.shutdown() }
+
+        let response = await context.deliverRuntimeMessage(message: ["check": "webglobals"], sender: [:])
+        let r = try XCTUnwrap(response?["value"] as? [String: Any])
+        XCTAssertEqual(r["hasURL"] as? Bool, true)
+        XCTAssertEqual(r["hostname"] as? String, "ex.com")
+        XCTAssertEqual(r["port"] as? String, "8443")
+        XCTAssertEqual(r["origin"] as? String, "https://ex.com:8443")
+        XCTAssertEqual(r["href"] as? String, "https://ex.com:8443/a/b?x=9&y=2#f")
+        XCTAssertEqual(r["getAllA"] as? String, "1,2")
+        XCTAssertEqual(r["hasLocation"] as? Bool, true)
+        XCTAssertEqual(r["perfIsNumber"] as? Bool, true)
+        XCTAssertEqual(r["setAccessLevelOk"] as? Bool, true)
+    }
 }
