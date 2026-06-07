@@ -30,15 +30,20 @@ final class ExtensionsViewModel: ObservableObject {
         }
     }
 
-    /// Fetch a CRX straight from the Chrome Web Store (link or 32-char id) and install it.
+    /// Fetch and install from a store link — Chrome Web Store, Edge Add-ons, or Firefox (AMO) — or a
+    /// bare 32-char Chrome id.
     func installFromStore(_ input: String) async {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         isInstalling = true
         defer { isInstalling = false }
         do {
-            let data = try await ChromeWebStore.downloadCRX(forInput: trimmed)
-            _ = try await store.install(archive: data, storeID: ChromeWebStore.extensionID(from: trimmed))
+            guard let source = ExtensionStoreSource.detect(fromInput: trimmed) else {
+                errorMessage = "Paste a Chrome Web Store, Edge Add-ons, or Firefox link — or a 32-char Chrome id."
+                return
+            }
+            let data = try await source.downloadArchive()
+            _ = try await store.install(archive: data, storeID: source.storeID)
             await load()
             notifyChanged()
         } catch {
@@ -116,7 +121,7 @@ struct ExtensionsView: View {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
                     Button { importing = true } label: { Label("Install from file…", systemImage: "doc.badge.plus") }
-                    Button { storePrompting = true } label: { Label("From Chrome Web Store…", systemImage: "link") }
+                    Button { storePrompting = true } label: { Label("From a web store…", systemImage: "link") }
                 } label: {
                     Image(systemName: "plus")
                 }
@@ -125,7 +130,7 @@ struct ExtensionsView: View {
         .fileImporter(isPresented: $importing, allowedContentTypes: allowedTypes) { result in
             handleImport(result)
         }
-        .alert("Install from Chrome Web Store", isPresented: $storePrompting) {
+        .alert("Install from a web store", isPresented: $storePrompting) {
             TextField("Store link or extension ID", text: $storeInput)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
@@ -136,7 +141,7 @@ struct ExtensionsView: View {
             }
             Button("Cancel", role: .cancel) { storeInput = "" }
         } message: {
-            Text("Paste a chromewebstore.google.com link or a 32-character extension ID.")
+            Text("Paste a Chrome Web Store, Edge Add-ons, or Firefox (AMO) link — or a 32-character Chrome id.")
         }
         .alert("Couldn’t install", isPresented: Binding(
             get: { model.errorMessage != nil },
