@@ -83,6 +83,7 @@ final class BrownBearBrowserViewController: UIViewController {
         injection.webExtensionBridgeHost = self   // chrome.tabs → TabManager
         injection.webExtensionCookieHost = self   // chrome.cookies → WKHTTPCookieStore
         webExtEvents.setHost(self)   // chrome.tabs/webNavigation event push uses the tab registry
+        injection.historyStateHandler.delegate = self   // SPA history → webNavigation.onHistoryStateUpdated
         DownloadManager.shared.onDownloadStarted = { [weak self] in self?.presentDownloadStartedToast() }
         buildHierarchy()
     }
@@ -836,6 +837,19 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
         // Present on the top-most controller so the card still appears when a modal (the menu
         // action sheet, the dashboard) is already up — rather than silently swallowing the load.
         TopViewControllerPresenter.present(installer.wrappedForPresentation())
+    }
+}
+
+// MARK: - WebExtHistoryStateDelegate (SPA history → chrome.webNavigation.onHistoryStateUpdated)
+
+extension BrownBearBrowserViewController: WebExtHistoryStateDelegate {
+    /// A same-document history change (pushState/replaceState/popstate) was captured in `webView`'s main
+    /// frame by the PAGE-world hook. WKWebView's navigation delegate never reports these, so this is the
+    /// only signal for SPA route changes — turn it into the webNavigation event for the backing tab.
+    /// The runtime gates delivery on each extension's "webNavigation" permission.
+    func historyStateDidUpdate(in webView: WKWebView, url: String) {
+        guard let id = extTabId(for: webView) else { return }
+        webExtEvents.webNavHistoryStateUpdated(extTabId: id, url: url)
     }
 }
 

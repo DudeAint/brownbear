@@ -41,6 +41,8 @@ final class WebExtensionPageViewController: UIViewController {
     private var storageObserver: NSObjectProtocol?
     private var cookieObserver: NSObjectProtocol?
     private var notificationObserver: NSObjectProtocol?
+    /// This page's session token, retained so its open chrome.runtime ports can be torn down on dismiss.
+    private var pageToken: String?
 
     init(ext: WebExtension,
          kind: Kind,
@@ -102,6 +104,11 @@ final class WebExtensionPageViewController: UIViewController {
         // Stop receiving browser-pushed events once the page is gone (the runtime holds receivers
         // weakly, so this just prunes promptly rather than waiting for the next fan-out to skip a dead box).
         runtime.unregisterEventReceiver(self)
+        // Tear down any chrome.runtime ports this popup/options page opened so the worker's onDisconnect
+        // fires rather than stranding the channel against a dismissed web view.
+        if let pageToken {
+            runtime.portHub.disconnectClientPorts(tokens: [pageToken])
+        }
     }
 
     // MARK: - Build
@@ -109,6 +116,7 @@ final class WebExtensionPageViewController: UIViewController {
     private func build(path: String) async {
         let messages = await loadMessages()
         let token = router.makePageSession(for: ext.id)
+        self.pageToken = token
 
         let bootstrapData: [String: Any] = [
             "token": token,
@@ -138,6 +146,9 @@ final class WebExtensionPageViewController: UIViewController {
         webView.navigationDelegate = self   // surface load failures instead of a blank sheet
         view.addSubview(webView)
         self.webView = webView
+        // Bind the page session to this web view so the runtime can push chrome.runtime.connect port
+        // traffic INTO this popup/options page (the session was minted before the web view existed).
+        router.attachPageWebView(token: token, webView: webView)
 
         observeStorageChanges()
         // Receive browser-pushed chrome.tabs.* / chrome.webNavigation.* events for this extension.

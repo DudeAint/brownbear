@@ -207,6 +207,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
         installCryptoNatives(into: context)
         installFetchNative(into: context)
         installContextMenuNatives(into: context)
+        installPortNatives(into: context)
 
         // chrome.tabs from the background worker. Hop to the main actor (TabManager is MainActor),
         // run the op, then call back onto this context's queue with the JSON result.
@@ -917,12 +918,17 @@ extension WebExtensionBackgroundContext {
         }
     }
 
-    /// chrome.permissions reconciliation, off the store + grant actors.
+    /// chrome.permissions reconciliation, off the store + grant actors. `request` now shows a user
+    /// consent prompt (WebExtensionPermissionPrompt) before granting any NEW optional permission,
+    /// replacing the previous silent auto-grant. Runs on the main actor (called from a @MainActor Task),
+    /// so presenting the prompt and reading the store/grants is race-free here.
+    @MainActor
     private static func dispatchPermissions(store: WebExtensionStore,
                                             grants: WebExtensionPermissionGrants,
                                             extensionID: String, method: String,
                                             args: [String: Any]) async -> Any {
-        let manifest = await store.ext(for: extensionID)?.manifest
+        let ext = await store.ext(for: extensionID)
+        let manifest = ext?.manifest
         let requested = WebExtensionManagementInfo.PermissionSet(payload: args)
         let granted = await grants.granted(extensionID: extensionID)
         switch method {
@@ -934,7 +940,14 @@ extension WebExtensionBackgroundContext {
             guard let toGrant = WebExtensionManagementInfo.resolveRequest(requested, manifest: manifest) else {
                 return false
             }
-            await grants.grant(extensionID: extensionID, toGrant)
+            // Prompt only for what isn't already held; an already-held request resolves true silently.
+            let effective = WebExtensionManagementInfo.effective(manifest: manifest, granted: granted)
+            var newlyRequested = toGrant
+            newlyRequested.permissions.subtract(effective.permissions)
+            newlyRequested.origins.subtract(effective.origins)
+            guard await WebExtensionPermissionPrompt.request(extensionName: ext?.displayName ?? extensionID,
+                                                             toGrant: newlyRequested) else { return false }
+            await grants.grant(extensionID: extensionID, newlyRequested)
             return true
         case "remove":
             guard let remaining = WebExtensionManagementInfo.resolveRemove(requested, manifest: manifest, granted: granted) else {
@@ -974,4 +987,16 @@ extension WebExtensionBackgroundContext {
         }
         context.setObject(userScripts, forKeyedSubscript: "__bb_userscripts" as NSString)
     }
+
+    // MARK: - Port helpers (used by the +Ports file, which can't reach private members)
+
+    /// Enqueue a `__bbBg` dispatch call on this context's serial queue. Exposed (internal) so the +Ports
+    /// extension can fire port lifecycle/data callbacks without touching the private `queue`/`fire`.
+    func firePortDispatch(method: String, arguments: [Any]) {
+        queue.async { [self] in fire(method: method, arguments: arguments) }
+    }
+
+    /// JSON-encode a value for embedding in a `__bbBg` dispatch argument — the same fragment-allowed
+    /// encoding the rest of this context uses, exposed (internal) for the +Ports extension.
+    func encodePortJSON(_ value: Any) -> String { jsonString(value) }
 }

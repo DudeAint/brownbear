@@ -600,6 +600,42 @@
   var installedListeners = [];
   var startupListeners = [];
 
+  // chrome.runtime.connect / onConnect long-lived ports — RESPONDER side. A content script or page
+  // connects; the hub fires dispatchPortConnect here; the worker replies via the __bb_port_* natives.
+  // Ports are addressed by the unguessable id the hub minted, so the worker needs no token.
+  var connectListeners = [];
+  var ports = Object.create(null);   // portId -> port object
+  function makeWorkerPort(portId, name, sender) {
+    var msgListeners = [], discListeners = [];
+    var disconnected = false;
+    var port = {
+      name: name || '',
+      sender: sender || null,
+      onMessage: makeEvent(msgListeners),
+      onDisconnect: makeEvent(discListeners),
+      postMessage: function (msg) {
+        if (disconnected) { return; }
+        try { __bb_port_post(portId, JSON.stringify(msg === undefined ? null : msg)); } catch (e) {}
+      },
+      disconnect: function () {
+        if (disconnected) { return; }
+        disconnected = true;
+        try { __bb_port_disconnect(portId); } catch (e) {}
+        delete ports[portId];
+      }
+    };
+    port._fireMessage = function (m) {
+      for (var i = 0; i < msgListeners.length; i++) {
+        try { msgListeners[i](m, port); } catch (e) { __bb_log('error', 'port.onMessage threw: ' + (e && e.message ? e.message : e)); }
+      }
+    };
+    port._fireDisconnect = function () {
+      disconnected = true;
+      for (var i = 0; i < discListeners.length; i++) { try { discListeners[i](port); } catch (e) {} }
+    };
+    return port;
+  }
+
   function getURL(path) {
     path = path || '';
     return baseURL + (path.charAt(0) === '/' ? path.slice(1) : path);
@@ -622,7 +658,7 @@
     onMessage: makeEvent(messageListeners),
     onInstalled: makeEvent(installedListeners),
     onStartup: makeEvent(startupListeners),
-    onConnect: makeEvent([]),
+    onConnect: makeEvent(connectListeners),
     onSuspend: makeEvent([]),
     sendMessage: function () {
       // Accept (extensionId?, message, options?, callback?) — Chrome's overloaded shape.
@@ -634,7 +670,16 @@
         if (typeof cb === 'function') { cb(r ? r.value : undefined); }
       });
     },
-    connect: function () { throw new Error('chrome.runtime.connect (long-lived ports) is not yet supported in BrownBear'); },
+    connect: function (connectInfo) {
+      // iOS: the worker has no addressable content/page peer to open a port TOWARD (the hub is
+      // client→worker only), so a worker-initiated connect() returns a well-formed but peerless Port
+      // whose calls are no-ops — rather than throwing. The reverse direction (content/page → worker,
+      // via onConnect above) is fully functional.
+      var ci = connectInfo || {};
+      return { name: ci.name || '', sender: null,
+               onMessage: makeEvent([]), onDisconnect: makeEvent([]),
+               postMessage: function () {}, disconnect: function () {} };
+    },
     openOptionsPage: function (cb) {
       __bb_runtime_open_options(function () { if (typeof cb === 'function') { cb(); } });
     },
@@ -1180,6 +1225,28 @@
         try { list[i].apply(null, args); }
         catch (e) { __bb_log('error', name + ' listener threw: ' + (e && e.message ? e.message : e)); }
       }
+    },
+
+    // chrome.runtime.onConnect: a content script / page opened a port to this worker. nameJSON and
+    // senderJSON are JSON strings (the sender is the {id,url} object); build the port, register it by
+    // id, and fire onConnect. dispatchPortMessage/Disconnect fan into that port's listener lists.
+    dispatchPortConnect: function (portId, nameJSON, senderJSON) {
+      var name = parseJSON(nameJSON);
+      var sender = parseJSON(senderJSON);
+      var port = makeWorkerPort(portId, typeof name === 'string' ? name : '', sender || null);
+      ports[portId] = port;
+      for (var i = 0; i < connectListeners.length; i++) {
+        try { connectListeners[i](port); }
+        catch (e) { __bb_log('error', 'runtime.onConnect listener threw: ' + (e && e.message ? e.message : e)); }
+      }
+    },
+    dispatchPortMessage: function (portId, messageJSON) {
+      var p = ports[portId];
+      if (p) { p._fireMessage(parseJSON(messageJSON)); }
+    },
+    dispatchPortDisconnect: function (portId) {
+      var p = ports[portId];
+      if (p) { delete ports[portId]; p._fireDisconnect(); }
     },
 
     fireInstalled: function (reason) {

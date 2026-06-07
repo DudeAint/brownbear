@@ -26,6 +26,12 @@ class WebExtensionRuntime {
     private var contexts: [String: WebExtensionBackgroundContext] = [:]
     private var observers: [NSObjectProtocol] = []
 
+    /// chrome.runtime.connect/onConnect long-lived ports. Owned here because the runtime is the one
+    /// object that reaches every surface (background workers + the routers that own content/page
+    /// endpoints). The hub delegates background-side delivery back to this runtime (see the
+    /// WebExtensionPortBackgroundDeliverer conformance), which routes to the right worker's context.
+    let portHub = WebExtensionPortHub()
+
     /// Live extension PAGES (popups/options) that want browser-pushed chrome.tabs/webNavigation
     /// events, held weakly so a dismissed page is skipped (and cleaned up) on the next fan-out.
     private final class WeakEventReceiver { weak var value: WebExtensionEventReceiver?; init(_ v: WebExtensionEventReceiver) { value = v } }
@@ -55,6 +61,7 @@ class WebExtensionRuntime {
         self.store = store
         self.storage = storage
         self.logStore = logStore
+        self.portHub.backgroundDeliverer = self
     }
 
     deinit {
@@ -279,6 +286,24 @@ class WebExtensionRuntime {
         return out
     }
 
+    // MARK: - Ports (background-side delivery)
+
+    /// Relay port traffic the worker initiates or replies to — the worker side of a port is its
+    /// JSContext, which only this runtime can touch. Called by the port hub on the main actor; the
+    /// context hops to its own serial queue. A port to an extension with no running worker drops
+    /// (nothing could have connected to it), matching Chrome's "no listener" outcome.
+    func deliverPortConnectToWorker(extensionID: String, portId: String, name: String, senderJSON: String) {
+        contexts[extensionID]?.dispatchPortConnect(portId: portId, name: name, senderJSON: senderJSON)
+    }
+
+    func deliverPortMessageToWorker(extensionID: String, portId: String, messageJSON: String) {
+        contexts[extensionID]?.dispatchPortMessage(portId: portId, messageJSON: messageJSON)
+    }
+
+    func deliverPortDisconnectToWorker(extensionID: String, portId: String) {
+        contexts[extensionID]?.dispatchPortDisconnect(portId: portId)
+    }
+
     // MARK: - Runtime source
 
     /// The chrome.* background runtime JS, loaded once from the bundle.
@@ -290,4 +315,22 @@ class WebExtensionRuntime {
         }
         return source
     }()
+}
+
+// MARK: - WebExtensionPortBackgroundDeliverer
+//
+// The port hub never imports JavaScriptCore; it asks the runtime to deliver background-side port
+// callbacks, and the runtime forwards to the extension's worker context (which owns the JSContext).
+extension WebExtensionRuntime: WebExtensionPortBackgroundDeliverer {
+    func deliverPortConnect(extensionID: String, portId: String, name: String, senderJSON: String) {
+        deliverPortConnectToWorker(extensionID: extensionID, portId: portId, name: name, senderJSON: senderJSON)
+    }
+
+    func deliverPortMessage(extensionID: String, portId: String, messageJSON: String) {
+        deliverPortMessageToWorker(extensionID: extensionID, portId: portId, messageJSON: messageJSON)
+    }
+
+    func deliverPortDisconnect(extensionID: String, portId: String) {
+        deliverPortDisconnectToWorker(extensionID: extensionID, portId: portId)
+    }
 }
