@@ -40,6 +40,7 @@ final class WebExtensionPageViewController: UIViewController {
     private var webView: WKWebView?
     private var storageObserver: NSObjectProtocol?
     private var cookieObserver: NSObjectProtocol?
+    private var notificationObserver: NSObjectProtocol?
 
     init(ext: WebExtension,
          kind: Kind,
@@ -66,6 +67,7 @@ final class WebExtensionPageViewController: UIViewController {
     deinit {
         if let storageObserver { NotificationCenter.default.removeObserver(storageObserver) }
         if let cookieObserver { NotificationCenter.default.removeObserver(cookieObserver) }
+        if let notificationObserver { NotificationCenter.default.removeObserver(notificationObserver) }
     }
 
     // MARK: - The page path
@@ -165,6 +167,34 @@ final class WebExtensionPageViewController: UIViewController {
             forName: .brownBearExtensionCookieDidChange, object: nil, queue: .main) { [weak self] note in
             Task { @MainActor in self?.handleCookieChange(note) }
         }
+        notificationObserver = NotificationCenter.default.addObserver(
+            forName: .brownBearExtensionNotificationEvent, object: nil, queue: .main) { [weak self] note in
+            Task { @MainActor in self?.handleNotificationEvent(note) }
+        }
+    }
+
+    /// Deliver a chrome.notifications event to an open popup/options page's listeners.
+    private func handleNotificationEvent(_ note: Notification) {
+        guard let info = note.userInfo,
+              info["extensionID"] as? String == ext.id,
+              let kind = info["kind"] as? String,
+              let notificationID = info["notificationID"] as? String,
+              let webView else { return }
+        let idJSON = Self.jsonString(notificationID)
+        let js: String
+        switch kind {
+        case "clicked":
+            js = "window.__brownbearExtPage && window.__brownbearExtPage.dispatchNotificationClicked(\(idJSON));"
+        case "closed":
+            let byUser = (info["byUser"] as? Bool) ?? false
+            js = "window.__brownbearExtPage && window.__brownbearExtPage.dispatchNotificationClosed(\(idJSON), \(byUser));"
+        case "buttonClicked":
+            let idx = (info["buttonIndex"] as? Int) ?? 0
+            js = "window.__brownbearExtPage && window.__brownbearExtPage.dispatchNotificationButtonClicked(\(idJSON), \(idx));"
+        default:
+            return
+        }
+        BBEvaluateJavaScript(webView, js, contentWorld)   // ObjC shim — no Swift WebKit overlay (iOS 16.4).
     }
 
     /// Push a cookie change into an open popup/options page's chrome.cookies.onChanged. Double-encoded

@@ -44,6 +44,18 @@ protocol WebExtensionBridgeHost: AnyObject {
     /// frame. Routed through the shared content runtime, which owns the per-tab content sessions — so a
     /// popup or background worker (each with its own router) still reaches the page's content scripts.
     func webExtSendMessageToTab(extensionID: String, extTabId: Int?, message: Any, frameId: Int?) async -> Any?
+
+    // chrome.notifications — backed by UNUserNotificationCenter via WebExtensionNotificationManager.
+    // These are async (UN is async) and throw (the "notifications" permission is enforced inside the
+    // manager). `extensionID` is required to gate the permission and namespace the notification.
+    /// chrome.notifications.create — returns the effective notification id (supplied or minted).
+    func webExtNotificationsCreate(extensionID: String, notificationID: String?, options: [String: Any]) async throws -> String
+    /// chrome.notifications.update — returns whether a notification with that id existed.
+    func webExtNotificationsUpdate(extensionID: String, notificationID: String, options: [String: Any]) async throws -> Bool
+    /// chrome.notifications.clear — returns whether a notification with that id was present.
+    func webExtNotificationsClear(extensionID: String, notificationID: String) async throws -> Bool
+    /// chrome.notifications.getAll — this extension's live notification ids as { id: true }.
+    func webExtNotificationsGetAll(extensionID: String) async throws -> [String: Bool]
 }
 
 /// The native side of `chrome.cookies` — the browser implements it over the shared WKHTTPCookieStore

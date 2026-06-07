@@ -69,6 +69,10 @@ final class WebExtensionRuntime {
             forName: .brownBearExtensionCookieDidChange, object: nil, queue: .main) { [weak self] note in
             Task { @MainActor in self?.handleCookieChange(note) }
         })
+        observers.append(NotificationCenter.default.addObserver(
+            forName: .brownBearExtensionNotificationEvent, object: nil, queue: .main) { [weak self] note in
+            Task { @MainActor in self?.handleNotificationEvent(note) }
+        })
 
         Task { await reload() }
     }
@@ -186,6 +190,19 @@ final class WebExtensionRuntime {
     private func handleCookieChange(_ note: Notification) {
         guard let change = note.userInfo?["change"] as? [String: Any] else { return }
         for context in contexts.values { context.dispatchCookieChanged(change: change) }
+    }
+
+    /// Deliver a chrome.notifications event to the originating extension's background worker.
+    private func handleNotificationEvent(_ note: Notification) {
+        guard let info = note.userInfo,
+              let extensionID = info["extensionID"] as? String,
+              let kind = info["kind"] as? String,
+              let notificationID = info["notificationID"] as? String,
+              let context = contexts[extensionID] else { return }
+        context.dispatchNotificationEvent(kind: kind,
+                                          notificationID: notificationID,
+                                          byUser: (info["byUser"] as? Bool) ?? false,
+                                          buttonIndex: (info["buttonIndex"] as? Int) ?? 0)
     }
 
     // MARK: - i18n messages

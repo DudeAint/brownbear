@@ -20,6 +20,9 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         // Skipped under unit tests, which don't exercise (and can't permit) background tasks.
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
             BrownBearServices.shared.backgroundScheduler.registerTaskHandlers()
+            // Own the notification-center delegate from launch so a cold-start tap on an extension's
+            // chrome.notifications banner routes to the right worker.
+            WebExtensionNotificationManager.shared.configureDelegate()
         }
         return true
     }

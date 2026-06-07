@@ -170,6 +170,9 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
         case "cookies.get", "cookies.getAll", "cookies.set", "cookies.remove", "cookies.getAllCookieStores":
             return try await routeCookies(api: api, payload: payload, extensionID: extensionID)
 
+        case "notifications.create", "notifications.update", "notifications.clear", "notifications.getAll":
+            return try await routeNotifications(api: api, payload: payload, extensionID: extensionID)
+
         default:
             guard let result = await routeTabsAndScripting(api: api, payload: payload, extensionID: extensionID) else {
                 throw BrownBearError.bridgeRejected("unsupported extension api '\(api)'")
@@ -238,6 +241,38 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
         let matcher = URLMatcher(matches: manifest.effectiveHostPatterns,
                                  includes: [], excludes: [], excludeMatches: [])
         return matcher.matches(targetURL)
+    }
+
+    // MARK: - chrome.notifications
+
+    /// chrome.notifications — UNUserNotificationCenter-backed via the bridge host. `extensionID`
+    /// (resolved from the token above) gates the manifest "notifications" permission in the manager.
+    private func routeNotifications(api: String, payload: [String: Any], extensionID: String) async throws -> Any? {
+        switch api {
+        case "notifications.create":
+            guard let host else { throw BrownBearError.bridgeRejected("no browser for notifications") }
+            return try await host.webExtNotificationsCreate(
+                extensionID: extensionID,
+                notificationID: payload["notificationId"] as? String,
+                options: payload["options"] as? [String: Any] ?? [:])
+
+        case "notifications.update":
+            guard let host, let id = payload["notificationId"] as? String else { return false }
+            return try await host.webExtNotificationsUpdate(
+                extensionID: extensionID, notificationID: id,
+                options: payload["options"] as? [String: Any] ?? [:])
+
+        case "notifications.clear":
+            guard let host, let id = payload["notificationId"] as? String else { return false }
+            return try await host.webExtNotificationsClear(extensionID: extensionID, notificationID: id)
+
+        case "notifications.getAll":
+            guard let host else { return [String: Bool]() }
+            return try await host.webExtNotificationsGetAll(extensionID: extensionID)
+
+        default:
+            throw BrownBearError.bridgeRejected("unsupported notifications api '\(api)'")
+        }
     }
 
     /// chrome.tabs + chrome.scripting routing — driven through the browser's TabManager via the bridge

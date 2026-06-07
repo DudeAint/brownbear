@@ -177,6 +177,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
         installTimerNatives(into: context)
         installMessagingNatives(into: context)
         installCookiesNatives(into: context)
+        installNotificationNatives(into: context)
 
         // chrome.tabs from the background worker. Hop to the main actor (TabManager is MainActor),
         // run the op, then call back onto this context's queue with the JSON result.
@@ -259,76 +260,6 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
         }
         context.setObject(tabsSendMessage, forKeyedSubscript: "__bb_tabs_send_message" as NSString)
     }
-
-    /// chrome.cookies from the background worker. Hop to the main actor (WKHTTPCookieStore lives on
-    /// the browser's data stores, reached via the cookie host), run the op, then call back onto this
-    /// context's serial queue with the JSON result. The worker is privileged but still gated: we
-    /// check the `cookies` permission + a host_permission for the target here before the call.
-    private func installCookiesNatives(into context: JSContext) {
-        let cookies: @convention(block) (String, String, JSValue) -> Void = { [weak self] method, argsJSON, callback in
-            guard let self else { return }
-            let args = ((try? JSONSerialization.jsonObject(with: Data(argsJSON.utf8))) as? [String: Any]) ?? [:]
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                let result: Any
-                if let host = self.cookieHost, self.cookiePermitted(method: method, args: args) {
-                    result = await WebExtensionBackgroundContext.dispatchCookies(host: host, method: method, args: args)
-                } else {
-                    result = NSNull()
-                }
-                self.callBack(callback, with: self.jsonString(result))
-            }
-        }
-        context.setObject(cookies, forKeyedSubscript: "__bb_cookies" as NSString)
-    }
-
-    /// Whether this extension's manifest grants the `cookies` permission AND (for reads/writes) a
-    /// host_permission covering the target. getAllCookieStores needs only the cookies permission.
-    private func cookiePermitted(method: String, args: [String: Any]) -> Bool {
-        guard cookiePermissions.contains("cookies") else { return false }
-        if method == "getAllCookieStores" { return true }
-        let details = (args["details"] as? [String: Any]) ?? [:]
-        if let urlString = details["url"] as? String { return cookieHostMatcher(urlString) }
-        if let domain = details["domain"] as? String, !domain.isEmpty {
-            let host = domain.hasPrefix(".") ? String(domain.dropFirst()) : domain
-            return cookieHostMatcher("https://\(host)/")
-        }
-        return true   // an unscoped getAll — the cookies permission gate above still applies.
-    }
-
-    /// Map a chrome.cookies method + args to the cookie host, returning a JSON-serializable value.
-    @MainActor
-    private static func dispatchCookies(host: WebExtensionCookieBridgeHost, method: String, args: [String: Any]) async -> Any {
-        let details = (args["details"] as? [String: Any]) ?? [:]
-        let storeId = details["storeId"] as? String
-        switch method {
-        case "get":
-            guard let url = details["url"] as? String, let name = details["name"] as? String else { return NSNull() }
-            return await host.webExtGetCookie(url: url, name: name, storeId: storeId) ?? NSNull()
-        case "getAll":
-            return await host.webExtGetAllCookies(filter: details, storeId: storeId)
-        case "set":
-            return await host.webExtSetCookie(details: details, storeId: storeId) ?? NSNull()
-        case "remove":
-            guard let url = details["url"] as? String, let name = details["name"] as? String else { return NSNull() }
-            return await host.webExtRemoveCookie(url: url, name: name, storeId: storeId) ?? NSNull()
-        case "getAllCookieStores":
-            return host.webExtGetAllCookieStores()
-        default:
-            return NSNull()
-        }
-    }
-
-    /// Fire chrome.cookies.onChanged for a single change record (called from the main actor by the
-    /// runtime, which observes the global cookie-change notification). Hops onto `queue` before the
-    /// JSContext is touched, exactly like dispatchStorageChanged.
-    func dispatchCookieChanged(change: [String: Any]) {
-        let changeJSON = jsonString(change)
-        queue.async { [self] in
-            fire(method: "dispatchCookieChanged", arguments: [changeJSON])
-        }
-    }
-
     /// Map a chrome.scripting method to the bridge host, resolving `files` from the extension package.
     @MainActor
     private static func dispatchScripting(host: WebExtensionBridgeHost, method: String,
@@ -603,5 +534,154 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
     private func makeLog(_ level: LogEntry.Level, _ message: String) -> LogEntry {
         LogEntry(scriptID: nil, scriptName: extensionName, level: level,
                  message: message, context: .background, source: .engine)
+    }
+}
+
+// MARK: - chrome.cookies + chrome.notifications natives
+//
+// Split into a same-file extension so the primary type body stays under the length limit; a same-file
+// extension still reaches the class's `private` members (queue/callBack/jsonString/fire/host/…).
+extension WebExtensionBackgroundContext {
+
+    /// chrome.cookies from the background worker. Hop to the main actor (WKHTTPCookieStore lives on
+    /// the browser's data stores, reached via the cookie host), run the op, then call back onto this
+    /// context's serial queue with the JSON result. The worker is privileged but still gated: we
+    /// check the `cookies` permission + a host_permission for the target here before the call.
+    private func installCookiesNatives(into context: JSContext) {
+        let cookies: @convention(block) (String, String, JSValue) -> Void = { [weak self] method, argsJSON, callback in
+            guard let self else { return }
+            let args = ((try? JSONSerialization.jsonObject(with: Data(argsJSON.utf8))) as? [String: Any]) ?? [:]
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let result: Any
+                if let host = self.cookieHost, self.cookiePermitted(method: method, args: args) {
+                    result = await WebExtensionBackgroundContext.dispatchCookies(host: host, method: method, args: args)
+                } else {
+                    result = NSNull()
+                }
+                self.callBack(callback, with: self.jsonString(result))
+            }
+        }
+        context.setObject(cookies, forKeyedSubscript: "__bb_cookies" as NSString)
+    }
+
+    /// Whether this extension's manifest grants the `cookies` permission AND (for reads/writes) a
+    /// host_permission covering the target. getAllCookieStores needs only the cookies permission.
+    private func cookiePermitted(method: String, args: [String: Any]) -> Bool {
+        guard cookiePermissions.contains("cookies") else { return false }
+        if method == "getAllCookieStores" { return true }
+        let details = (args["details"] as? [String: Any]) ?? [:]
+        if let urlString = details["url"] as? String { return cookieHostMatcher(urlString) }
+        if let domain = details["domain"] as? String, !domain.isEmpty {
+            let host = domain.hasPrefix(".") ? String(domain.dropFirst()) : domain
+            return cookieHostMatcher("https://\(host)/")
+        }
+        return true   // an unscoped getAll — the cookies permission gate above still applies.
+    }
+
+    /// Map a chrome.cookies method + args to the cookie host, returning a JSON-serializable value.
+    @MainActor
+    private static func dispatchCookies(host: WebExtensionCookieBridgeHost, method: String, args: [String: Any]) async -> Any {
+        let details = (args["details"] as? [String: Any]) ?? [:]
+        let storeId = details["storeId"] as? String
+        switch method {
+        case "get":
+            guard let url = details["url"] as? String, let name = details["name"] as? String else { return NSNull() }
+            return await host.webExtGetCookie(url: url, name: name, storeId: storeId) ?? NSNull()
+        case "getAll":
+            return await host.webExtGetAllCookies(filter: details, storeId: storeId)
+        case "set":
+            return await host.webExtSetCookie(details: details, storeId: storeId) ?? NSNull()
+        case "remove":
+            guard let url = details["url"] as? String, let name = details["name"] as? String else { return NSNull() }
+            return await host.webExtRemoveCookie(url: url, name: name, storeId: storeId) ?? NSNull()
+        case "getAllCookieStores":
+            return host.webExtGetAllCookieStores()
+        default:
+            return NSNull()
+        }
+    }
+
+    /// Fire chrome.cookies.onChanged for a single change record (called from the main actor by the
+    /// runtime, which observes the global cookie-change notification). Hops onto `queue` before the
+    /// JSContext is touched, exactly like dispatchStorageChanged.
+    func dispatchCookieChanged(change: [String: Any]) {
+        let changeJSON = jsonString(change)
+        queue.async { [self] in
+            fire(method: "dispatchCookieChanged", arguments: [changeJSON])
+        }
+    }
+
+    /// chrome.notifications from the background worker. UNUserNotificationCenter is async and confined
+    /// to the main actor (via WebExtensionNotificationManager), so hop to the main actor, run the op,
+    /// then call back onto this context's queue with the JSON result. Mirrors __bb_tabs / dispatchTab.
+    private func installNotificationNatives(into context: JSContext) {
+        let notifications: @convention(block) (String, String, JSValue) -> Void = { [weak self] method, argsJSON, callback in
+            guard let self else { return }
+            let args = ((try? JSONSerialization.jsonObject(with: Data(argsJSON.utf8))) as? [String: Any]) ?? [:]
+            let extensionID = self.extensionID
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let result: Any
+                if let host = self.host {
+                    result = await WebExtensionBackgroundContext.dispatchNotification(
+                        host: host, method: method, args: args, extensionID: extensionID)
+                } else {
+                    result = NSNull()
+                }
+                self.callBack(callback, with: self.jsonString(result))
+            }
+        }
+        context.setObject(notifications, forKeyedSubscript: "__bb_notifications" as NSString)
+    }
+
+    /// Map a chrome.notifications method + args to the bridge host, returning a JSON-serializable value.
+    /// On a permission/disabled error we resolve NSNull rather than reject the worker (it would crash
+    /// an otherwise-harmless worker that touches notifications without the permission).
+    @MainActor
+    private static func dispatchNotification(host: WebExtensionBridgeHost, method: String,
+                                             args: [String: Any], extensionID: String) async -> Any {
+        do {
+            switch method {
+            case "create":
+                return try await host.webExtNotificationsCreate(
+                    extensionID: extensionID,
+                    notificationID: args["notificationId"] as? String,
+                    options: args["options"] as? [String: Any] ?? [:])
+            case "update":
+                guard let id = args["notificationId"] as? String else { return false }
+                return try await host.webExtNotificationsUpdate(
+                    extensionID: extensionID, notificationID: id,
+                    options: args["options"] as? [String: Any] ?? [:])
+            case "clear":
+                guard let id = args["notificationId"] as? String else { return false }
+                return try await host.webExtNotificationsClear(extensionID: extensionID, notificationID: id)
+            case "getAll":
+                return try await host.webExtNotificationsGetAll(extensionID: extensionID)
+            default:
+                return NSNull()
+            }
+        } catch {
+            return NSNull()
+        }
+    }
+
+    /// Fan a chrome.notifications event (clicked/closed/buttonClicked) into this worker's listeners.
+    /// Called from WebExtensionRuntime on the main actor; hops onto this context's serial queue before
+    /// touching the JSContext, mirroring dispatchStorageChanged.
+    func dispatchNotificationEvent(kind: String, notificationID: String, byUser: Bool, buttonIndex: Int) {
+        let idJSON = jsonString(notificationID)
+        queue.async { [self] in
+            switch kind {
+            case "clicked":
+                fire(method: "dispatchNotificationClicked", arguments: [idJSON])
+            case "closed":
+                fire(method: "dispatchNotificationClosed", arguments: [idJSON, byUser])
+            case "buttonClicked":
+                fire(method: "dispatchNotificationButtonClicked", arguments: [idJSON, buttonIndex])
+            default:
+                break
+            }
+        }
     }
 }
