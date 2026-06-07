@@ -47,7 +47,9 @@ struct BackgroundMonitorView: View {
 
     private func runNow(_ script: UserScript) {
         running.insert(script.id)
-        Task {
+        // @MainActor so the post-await @State mutation (running) and the @MainActor scheduler/model
+        // access stay on the main actor rather than a background continuation.
+        Task { @MainActor in
             await scheduler.runNow(script)
             await model.load()
             running.remove(script.id)

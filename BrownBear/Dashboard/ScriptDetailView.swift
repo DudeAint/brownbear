@@ -174,7 +174,7 @@ struct ScriptDetailView: View {
                         }
                     }
                     Button(role: .destructive) {
-                        Task { await valueStore.clear(scriptID: script.id); await reloadStoredValues() }
+                        Task { @MainActor in await valueStore.clear(scriptID: script.id); await reloadStoredValues() }
                     } label: {
                         Label("Clear all values", systemImage: "trash").font(.caption.weight(.semibold))
                     }
@@ -196,7 +196,10 @@ struct ScriptDetailView: View {
             Menu {
                 Button { beginEditing(key: key, value: value) } label: { Label("Edit", systemImage: "pencil") }
                 Button(role: .destructive) {
-                    Task { await valueStore.deleteValue(scriptID: script.id, key: key); await reloadStoredValues() }
+                    Task { @MainActor in
+                        await valueStore.deleteValue(scriptID: script.id, key: key)
+                        await reloadStoredValues()
+                    }
                 } label: { Label("Delete", systemImage: "trash") }
             } label: {
                 Image(systemName: "ellipsis").foregroundStyle(BBTheme.Color.textSecondary).padding(.vertical, 2)
@@ -225,7 +228,7 @@ struct ScriptDetailView: View {
             valueError = "“\(trimmed)” isn't valid JSON. Wrap strings in quotes, e.g. \"hello\"."
             return
         }
-        Task {
+        Task { @MainActor in
             await valueStore.setValue(scriptID: script.id, key: key, jsonValue: trimmed)
             await reloadStoredValues()
         }
