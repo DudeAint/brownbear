@@ -988,15 +988,9 @@ extension WebExtensionBackgroundContext {
         context.setObject(userScripts, forKeyedSubscript: "__bb_userscripts" as NSString)
     }
 
-    // MARK: - Port helpers (used by the +Ports file, which can't reach private members)
-
-    /// Enqueue a `__bbBg` dispatch call on this context's serial queue. Exposed (internal) so the +Ports
-    /// extension can fire port lifecycle/data callbacks without touching the private `queue`/`fire`.
+    // MARK: - Port helpers (internal, for the +Ports file which can't reach private queue/fire/jsonString)
     func firePortDispatch(method: String, arguments: [Any]) {
         queue.async { [self] in fire(method: method, arguments: arguments) }
     }
-
-    /// JSON-encode a value for embedding in a `__bbBg` dispatch argument — the same fragment-allowed
-    /// encoding the rest of this context uses, exposed (internal) for the +Ports extension.
     func encodePortJSON(_ value: Any) -> String { jsonString(value) }
 }

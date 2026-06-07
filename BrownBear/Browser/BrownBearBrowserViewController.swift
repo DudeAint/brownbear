@@ -67,7 +67,7 @@ final class BrownBearBrowserViewController: UIViewController {
     let webExtTabRegistry = WebExtensionTabRegistry()
     /// Turns the tab + navigation lifecycle into chrome.tabs.* / chrome.webNavigation.* events for
     /// extension workers and popups. Fed from the TabManager + WKNavigation delegate hooks below.
-    private lazy var webExtEvents = WebExtensionEventEmitter(registry: webExtTabRegistry, host: self)
+    lazy var webExtEvents = WebExtensionEventEmitter(registry: webExtTabRegistry, host: self)
     /// Last-seen tab id set, so tabManager(_:didUpdate:) can diff to fire tabs.onCreated / onRemoved.
     private var lastKnownTabIDs: [UUID] = []
 
@@ -701,8 +701,8 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
         }
     }
 
-    /// The chrome tab id for the tab backing `webView`, or nil if none — for webNavigation events.
-    private func extTabId(for webView: WKWebView) -> Int? {
+    /// The chrome tab id for the tab backing `webView`, or nil if none (for webNavigation events).
+    func extTabId(for webView: WKWebView) -> Int? {
         tabManager.tabs.first { $0.webView === webView }.map { webExtTabRegistry.id(for: $0.id) }
     }
 
@@ -837,19 +837,6 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
         // Present on the top-most controller so the card still appears when a modal (the menu
         // action sheet, the dashboard) is already up — rather than silently swallowing the load.
         TopViewControllerPresenter.present(installer.wrappedForPresentation())
-    }
-}
-
-// MARK: - WebExtHistoryStateDelegate (SPA history → chrome.webNavigation.onHistoryStateUpdated)
-
-extension BrownBearBrowserViewController: WebExtHistoryStateDelegate {
-    /// A same-document history change (pushState/replaceState/popstate) was captured in `webView`'s main
-    /// frame by the PAGE-world hook. WKWebView's navigation delegate never reports these, so this is the
-    /// only signal for SPA route changes — turn it into the webNavigation event for the backing tab.
-    /// The runtime gates delivery on each extension's "webNavigation" permission.
-    func historyStateDidUpdate(in webView: WKWebView, url: String) {
-        guard let id = extTabId(for: webView) else { return }
-        webExtEvents.webNavHistoryStateUpdated(extTabId: id, url: url)
     }
 }
 
