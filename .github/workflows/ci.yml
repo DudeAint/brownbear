@@ -21,13 +21,15 @@ permissions:
 jobs:
   lint:
     name: SwiftLint
-    runs-on: macos-14
+    # Runs on Linux (Docker) instead of a macOS runner: SwiftLint doesn't need macOS, and keeping it
+    # off the scarce macOS pool lets the gating "Build & Test" get a runner immediately.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install SwiftLint
-        run: brew install swiftlint
       - name: Run SwiftLint
-        run: swiftlint lint --config .swiftlint.yml --reporter github-actions-logging
+        uses: norio-nomura/action-swiftlint@3.2.1
+        with:
+          args: --config .swiftlint.yml
 
   commitlint:
     name: Conventional Commits
