@@ -50,9 +50,11 @@ The app is built in five sequenced modules. Each is shippable and verifiable on 
 
 - `BrownBearBrowserViewController` (UIKit) owns the tab model and the active `WKWebView`.
 - `OmniboxView` — rounded address bar; classifies input as URL vs. search; shows TLS state;
-  exposes back/forward/reload/stop.
-- `BrownBearTabGridController` — a `UICollectionView` square grid; create/close/select tabs;
-  snapshots for previews.
+  exposes back/forward/reload/stop. While editing it drives a live autocomplete dropdown
+  (`OmniboxSuggestionsView`) built by the pure `OmniboxSuggestionEngine` from `HistoryStore`
+  matches + the typed action; top sites show on focus.
+- `BrownBearTabGridController` — a `UICollectionView` square grid; create/close/select tabs,
+  drag-to-reorder (drag & drop, coexisting with the cells' context menu); snapshots for previews.
 - `Tab` model wraps one `WKWebView` + its `WKWebViewConfiguration` (shared process pool,
   shared `WKUserContentController` so scripts inject consistently).
 - Navigation state captured through `WKNavigationDelegate`:
