@@ -12,8 +12,6 @@ import UIKit
 
 /// The actions the menu can emit. The browser controller performs them.
 enum BrowserMenuAction {
-    case newTab
-    case newPrivateTab
     case reloadOrStop
     case share
     case copyLink
@@ -26,6 +24,7 @@ enum BrowserMenuAction {
     case bookmarks
     case history
     case downloads
+    case settings
 }
 
 /// A snapshot of the active tab the menu renders against.
@@ -115,7 +114,11 @@ final class BrowserMenuViewController: UIViewController {
         ])
 
         root.addArrangedSubview(makeHeader())
-        root.addArrangedSubview(makeTileRow())
+        // New-tab / private-tab live on the toolbar + button (tap / long-press) and the tab grid, not
+        // here — so the tile row shows only page actions, and only when there's a page to act on.
+        if state.canInteractWithPage {
+            root.addArrangedSubview(makeTileRow())
+        }
         if !state.matchedScripts.isEmpty {
             root.addArrangedSubview(makeScriptsSection())
         }
@@ -145,19 +148,16 @@ final class BrowserMenuViewController: UIViewController {
         return stack
     }
 
+    /// Primary page actions (only shown when a page is loaded — see buildLayout).
     private func makeTileRow() -> UIView {
-        var tiles: [UIView] = [
-            makeTile(icon: "plus.square.on.square", title: "New Tab", action: .newTab),
-            makeTile(icon: "eyeglasses", title: "Private", action: .newPrivateTab)
+        let tiles: [UIView] = [
+            makeTile(icon: "square.and.arrow.up", title: "Share", action: .share),
+            makeTile(icon: "magnifyingglass", title: "Find", action: .findOnPage),
+            makeTile(icon: state.isDesktopSite ? "iphone" : "desktopcomputer",
+                     title: state.isDesktopSite ? "Mobile" : "Desktop",
+                     action: .toggleDesktopSite,
+                     highlighted: state.isDesktopSite)
         ]
-        if state.canInteractWithPage {
-            tiles.append(makeTile(icon: "square.and.arrow.up", title: "Share", action: .share))
-            tiles.append(makeTile(icon: "magnifyingglass", title: "Find", action: .findOnPage))
-            tiles.append(makeTile(icon: state.isDesktopSite ? "iphone" : "desktopcomputer",
-                                  title: state.isDesktopSite ? "Mobile" : "Desktop",
-                                  action: .toggleDesktopSite,
-                                  highlighted: state.isDesktopSite))
-        }
         let row = UIStackView(arrangedSubviews: tiles)
         row.axis = .horizontal
         row.spacing = 10
@@ -196,7 +196,8 @@ final class BrowserMenuViewController: UIViewController {
             makeRow(icon: "puzzlepiece.extension", title: "Extensions", action: .extensions),
             makeRow(icon: "bookmark", title: "Bookmarks", action: .bookmarks),
             makeRow(icon: "clock.arrow.circlepath", title: "History", action: .history),
-            makeRow(icon: "arrow.down.circle", title: "Downloads", action: .downloads)
+            makeRow(icon: "arrow.down.circle", title: "Downloads", action: .downloads),
+            makeRow(icon: "gearshape", title: "Settings", action: .settings)
         ])
         let section = UIStackView(arrangedSubviews: [header, card])
         section.axis = .vertical
