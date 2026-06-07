@@ -17,7 +17,7 @@ extension WebExtensionBackgroundContext {
     /// Map a chrome.declarativeNetRequest method + args to the shared stores (main actor). A thrown
     /// guard becomes {"error": message} so the JS shim can reject the promise faithfully.
     @MainActor
-    private static func dispatchDNR(extensionID: String, method: String, args: [String: Any]) async -> Any {
+    static func dispatchDNR(extensionID: String, method: String, args: [String: Any]) async -> Any {
         let services = BrownBearServices.shared
         let dnrStore = services.webExtensionDNRStore
         let manifest = await services.webExtensionStore.ext(for: extensionID)?.manifest
@@ -66,7 +66,7 @@ extension WebExtensionBackgroundContext {
 
     /// Map a chrome.userScripts method + args to the shared store on the main actor.
     @MainActor
-    private static func dispatchUserScripts(extensionID: String, method: String, args: [String: Any]) async -> Any {
+    static func dispatchUserScripts(extensionID: String, method: String, args: [String: Any]) async -> Any {
         let services = BrownBearServices.shared
         let usStore = services.webExtensionUserScriptStore
         let perms = await services.webExtensionStore.ext(for: extensionID)?.manifest?.permissions ?? []
