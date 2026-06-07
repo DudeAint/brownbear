@@ -50,7 +50,8 @@ final class WebExtensionPageViewController: UIViewController {
         self.store = store
         self.storage = storage
         self.runtime = runtime
-        self.router = WebExtensionMessageRouter(store: store, storage: storage, runtime: runtime)
+        self.router = WebExtensionMessageRouter(store: store, storage: storage, runtime: runtime,
+                                                contentWorld: contentWorld)
         self.schemeHandler = WebExtensionSchemeHandler(extensionID: ext.id, store: store)
         super.init(nibName: nil, bundle: nil)
         // The popup runs its own router instance, so give it the same chrome.tabs bridge the runtime

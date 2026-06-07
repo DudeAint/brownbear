@@ -101,6 +101,19 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
         BBEvaluateJavaScript(tab.webView, js, .page)
     }
 
+    // MARK: - chrome.tabs.sendMessage
+
+    func webExtSendMessageToTab(extensionID: String, extTabId: Int?, message: Any, frameId: Int?) async -> Any? {
+        guard let tab = resolveTab(extTabId) else { return nil }
+        // The shared content router (on InjectionOrchestrator) owns the content sessions for this tab,
+        // so delivery flows through it regardless of which surface (popup/background/content) sent the
+        // message — each of those has its own router with no content sessions of its own.
+        return await injection.webExtSendMessageToTab(extensionID: extensionID,
+                                                      webView: tab.webView,
+                                                      message: message,
+                                                      frameId: frameId)
+    }
+
     // MARK: - Helpers
 
     /// Encode a Swift string as a safe JS string literal (quotes included) via JSON.

@@ -65,7 +65,8 @@ final class InjectionOrchestrator {
                                           contentWorld: contentWorld)
         self.webExtensionRouter = WebExtensionMessageRouter(store: webExtensionStore,
                                                             storage: webExtensionStorage,
-                                                            runtime: BrownBearServices.shared.webExtensionRuntime)
+                                                            runtime: BrownBearServices.shared.webExtensionRuntime,
+                                                            contentWorld: contentWorld)
         self.contentBlocker = WebExtensionContentBlocker(store: webExtensionStore)
         self.pageConsoleHandler = PageConsoleHandler(logStore: logStore)
         configure()
@@ -124,6 +125,17 @@ final class InjectionOrchestrator {
             forName: .brownBearExtensionsDidChange, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.refreshExtensionContentBlockers() }
         }
+    }
+
+    /// chrome.tabs.sendMessage delivery. Hands off to the shared extension content router, which owns
+    /// the per-tab content sessions and pushes the message into the matching content scripts'
+    /// runtime.onMessage listeners. Resolves with the first listener's response (or nil). The browser
+    /// view controller resolves the target tab → web view before calling this.
+    func webExtSendMessageToTab(extensionID: String, webView: WKWebView, message: Any, frameId: Int?) async -> Any? {
+        await webExtensionRouter.sendMessageToTab(extensionID: extensionID,
+                                                  webView: webView,
+                                                  message: message,
+                                                  frameId: frameId)
     }
 
     /// Recompile and reinstall every enabled extension's content-blocking rules. Fire-and-forget;
