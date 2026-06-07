@@ -21,15 +21,26 @@ permissions:
 jobs:
   lint:
     name: SwiftLint
-    # Runs on Linux (Docker) instead of a macOS runner: SwiftLint doesn't need macOS, and keeping it
-    # off the scarce macOS pool lets the gating "Build & Test" get a runner immediately.
+    # Runs on Linux instead of a macOS runner: SwiftLint doesn't need macOS, and keeping it off the
+    # scarce macOS pool lets the gating "Build & Test" claim a runner immediately. We fetch
+    # SwiftLint's official prebuilt Linux binary (a small unzip) rather than the norio-nomura Docker
+    # action, whose per-run `docker build` step is slow and flakes intermittently with "Docker build
+    # failed" while assembling its base image — which was red-flagging otherwise-green PRs.
     runs-on: ubuntu-latest
+    env:
+      SWIFTLINT_VERSION: "0.63.3"
     steps:
       - uses: actions/checkout@v4
+      - name: Install SwiftLint (official Linux binary)
+        run: |
+          set -euo pipefail
+          curl -fsSL -o swiftlint.zip \
+            "https://github.com/realm/SwiftLint/releases/download/${SWIFTLINT_VERSION}/swiftlint_linux_amd64.zip"
+          unzip -q -o swiftlint.zip -d "${RUNNER_TEMP}/swiftlint"
+          chmod +x "${RUNNER_TEMP}/swiftlint/swiftlint"
+          echo "${RUNNER_TEMP}/swiftlint" >> "${GITHUB_PATH}"
       - name: Run SwiftLint
-        uses: norio-nomura/action-swiftlint@3.2.1
-        with:
-          args: --config .swiftlint.yml
+        run: swiftlint lint --config .swiftlint.yml --reporter github-actions-logging
 
   commitlint:
     name: Conventional Commits
