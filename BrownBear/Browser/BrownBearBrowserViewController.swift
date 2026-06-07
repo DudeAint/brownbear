@@ -60,6 +60,10 @@ final class BrownBearBrowserViewController: UIViewController {
     /// `transitioningDelegate` only weakly.
     private let tabGridTransition = TabGridTransitionController()
 
+    /// Maps Tab UUIDs to the stable integer ids chrome.tabs exposes. Owned here, used by the
+    /// WebExtensionBridgeHost conformance in BrownBearBrowserViewController+WebExtensions.swift.
+    let webExtTabRegistry = WebExtensionTabRegistry()
+
     // MARK: - Lifecycle
 
     override func viewDidLoad() {
@@ -69,6 +73,7 @@ final class BrownBearBrowserViewController: UIViewController {
         omnibox.delegate = self
         toolbar.delegate = self
         injection.bridgeHost = self
+        injection.webExtensionBridgeHost = self   // chrome.tabs → TabManager
         DownloadManager.shared.onDownloadStarted = { [weak self] in self?.presentDownloadStartedToast() }
         buildHierarchy()
     }
@@ -226,7 +231,8 @@ final class BrownBearBrowserViewController: UIViewController {
 
     // MARK: - New Tab page
 
-    private func loadNewTabPage(in tab: Tab) {
+    // Not `private`: also used by the WebExtensionBridgeHost conformance for chrome.tabs.create({}).
+    func loadNewTabPage(in tab: Tab) {
         tab.delegate = self
         // Private tabs get a distinct incognito page (no shortcut tiles, explicit "not saved" copy);
         // normal tabs build from the user's bookmarks (a fast actor read).

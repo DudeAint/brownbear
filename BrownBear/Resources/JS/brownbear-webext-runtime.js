@@ -89,6 +89,49 @@
 
     var noopEvent = { addListener: function () {}, removeListener: function () {}, hasListener: function () { return false; } };
 
+    function tabsApi() {
+      function query(queryInfo, callback) {
+        return settle(bridge("tabs.query", { query: queryInfo || {} }, token), callback);
+      }
+      function get(tabId, callback) {
+        return settle(bridge("tabs.get", { tabId: tabId }, token), callback);
+      }
+      function getCurrent(callback) {
+        return settle(bridge("tabs.getCurrent", {}, token), callback);
+      }
+      function create(props, callback) {
+        props = props || {};
+        return settle(bridge("tabs.create", { url: props.url, active: props.active !== false }, token), callback);
+      }
+      function update(tabId, props, callback) {
+        if (tabId !== null && typeof tabId === "object") { callback = props; props = tabId; tabId = undefined; }
+        props = props || {};
+        return settle(bridge("tabs.update", { tabId: tabId, url: props.url, active: props.active }, token), callback);
+      }
+      function remove(tabIds, callback) {
+        var ids = _Array.isArray(tabIds) ? tabIds : [tabIds];
+        return settle(bridge("tabs.remove", { tabIds: ids }, token).then(function () { return undefined; }), callback);
+      }
+      function reload(tabId, props, callback) {
+        if (typeof tabId === "function") { callback = tabId; tabId = undefined; props = {}; }
+        else if (tabId !== null && typeof tabId === "object") { callback = props; props = tabId; tabId = undefined; }
+        props = props || {};
+        return settle(bridge("tabs.reload", { tabId: tabId, bypassCache: !!props.bypassCache }, token).then(function () { return undefined; }), callback);
+      }
+      function sendMessage() {
+        // Background↔content messaging (Phase 3) isn't wired yet; resolve undefined rather than hang.
+        var args = _Array.prototype.slice.call(arguments);
+        var cb = (args.length && typeof args[args.length - 1] === "function") ? args.pop() : null;
+        return settle(_Promise.resolve(undefined), cb);
+      }
+      return {
+        query: query, get: get, getCurrent: getCurrent, create: create, update: update,
+        remove: remove, reload: reload, sendMessage: sendMessage,
+        onUpdated: noopEvent, onActivated: noopEvent, onCreated: noopEvent,
+        onRemoved: noopEvent, onReplaced: noopEvent
+      };
+    }
+
     var chrome = {
       storage: {
         local: storageArea("local"),
@@ -117,6 +160,7 @@
         lastError: null,
         getPlatformInfo: function (cb) { var info = { os: "ios", arch: "arm64", nacl_arch: "arm64" }; if (typeof cb === "function") { cb(info); return undefined; } return _Promise.resolve(info); }
       },
+      tabs: tabsApi(),
       i18n: {
         getMessage: i18nGetMessage,
         getUILanguage: function () { return (W.navigator && W.navigator.language) || "en"; },

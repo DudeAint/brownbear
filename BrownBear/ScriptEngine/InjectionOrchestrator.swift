@@ -42,6 +42,15 @@ final class InjectionOrchestrator {
         didSet { router.host = bridgeHost }
     }
 
+    /// Forwarded to the extension content/popup router AND the background runtime so chrome.tabs (and
+    /// the rest of the tab surface) can reach TabManager from every surface.
+    weak var webExtensionBridgeHost: WebExtensionBridgeHost? {
+        didSet {
+            webExtensionRouter.host = webExtensionBridgeHost
+            BrownBearServices.shared.webExtensionRuntime.host = webExtensionBridgeHost
+        }
+    }
+
     init(scriptStore: ScriptStore = BrownBearServices.shared.scriptStore,
          valueStore: GMValueStore = BrownBearServices.shared.valueStore,
          logStore: LogStore = BrownBearServices.shared.logStore,

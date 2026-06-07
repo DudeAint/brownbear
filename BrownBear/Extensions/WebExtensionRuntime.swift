@@ -23,6 +23,12 @@ final class WebExtensionRuntime {
 
     private var contexts: [String: WebExtensionBackgroundContext] = [:]
     private var observers: [NSObjectProtocol] = []
+
+    /// chrome.tabs bridge to the browser; pushed to every background context. Set after the browser
+    /// view controller loads (contexts may already exist), so propagate to the live ones too.
+    weak var host: WebExtensionBridgeHost? {
+        didSet { for context in contexts.values { context.host = host } }
+    }
     private var didStart = false
     // Single-flight reconciliation: reload() is async and suspends at every actor await, so two
     // overlapping calls (the initial start() one and a change-notification one) could otherwise
@@ -133,6 +139,7 @@ final class WebExtensionRuntime {
             context.shutdown()
             return
         }
+        context.host = host   // chrome.tabs bridge (may be nil until the browser VC loads)
         contexts[ext.id] = context
         context.boot(runtimeJS: Self.backgroundRuntimeJS,
                      backgroundSource: source,
