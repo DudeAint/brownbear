@@ -899,7 +899,7 @@ extension BrownBearBrowserViewController {
         container.translatesAutoresizingMaskIntoConstraints = false
 
         let label = UILabel()
-        label.font = .systemFont(ofSize: 15, weight: .semibold).monospacedDigit()
+        label.font = .monospacedDigitSystemFont(ofSize: 15, weight: .semibold)
         label.textColor = BrownBearTheme.Palette.textPrimary
         label.textAlignment = .center
         label.text = currentZoomText()
