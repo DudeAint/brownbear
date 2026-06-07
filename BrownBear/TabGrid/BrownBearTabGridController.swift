@@ -152,18 +152,9 @@ final class BrownBearTabGridController: UIViewController {
         newTabButton.layer.shadowRadius = 10
         newTabButton.layer.shadowOffset = CGSize(width: 0, height: 4)
         newTabButton.addTarget(self, action: #selector(tapNewTab), for: .touchUpInside)
-        // Tap = new tab in the current mode; long-press = pick New Tab / New Private Tab explicitly,
-        // so private mode is reachable straight from the + even with no private tabs yet.
-        newTabButton.menu = UIMenu(children: [
-            UIAction(title: "New Tab", image: UIImage(systemName: "plus.square")) { [weak self] _ in
-                guard let self else { return }
-                self.gridDelegate?.tabGrid(self, didRequestNewTabPrivate: false)
-            },
-            UIAction(title: "New Private Tab", image: UIImage(systemName: "eyeglasses")) { [weak self] _ in
-                guard let self else { return }
-                self.gridDelegate?.tabGrid(self, didRequestNewTabPrivate: true)
-            }
-        ])
+        // Tap = new tab in the current mode; long-press = pick New Tab / New Private Tab, plus a
+        // Recently Closed submenu to reopen a tab you closed by accident.
+        newTabButton.menu = makeNewTabMenu()
         newTabButton.showsMenuAsPrimaryAction = false
         newTabButton.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(newTabButton)
@@ -193,6 +184,36 @@ final class BrownBearTabGridController: UIViewController {
             newTabButton.widthAnchor.constraint(equalToConstant: 56),
             newTabButton.heightAnchor.constraint(equalToConstant: 56)
         ])
+    }
+
+    /// The + button's long-press menu: New Tab / New Private Tab, plus a Recently Closed submenu to
+    /// reopen accidentally-closed tabs (built from TabManager's bounded history).
+    private func makeNewTabMenu() -> UIMenu {
+        var children: [UIMenuElement] = [
+            UIAction(title: "New Tab", image: UIImage(systemName: "plus.square")) { [weak self] _ in
+                guard let self else { return }
+                self.gridDelegate?.tabGrid(self, didRequestNewTabPrivate: false)
+            },
+            UIAction(title: "New Private Tab", image: UIImage(systemName: "eyeglasses")) { [weak self] _ in
+                guard let self else { return }
+                self.gridDelegate?.tabGrid(self, didRequestNewTabPrivate: true)
+            }
+        ]
+        let closed = Array(tabManager.recentlyClosed.prefix(10))
+        if !closed.isEmpty {
+            let items = closed.map { record -> UIAction in
+                let label = record.title.isEmpty ? (record.url.host ?? record.url.absoluteString) : record.title
+                return UIAction(title: label) { [weak self] _ in
+                    guard let self else { return }
+                    self.tabManager.createTab(loading: record.url)
+                    self.gridDelegate?.tabGridDidRequestDismiss(self)
+                }
+            }
+            children.append(UIMenu(title: "Recently Closed",
+                                   image: UIImage(systemName: "clock.arrow.circlepath"),
+                                   children: items))
+        }
+        return UIMenu(children: children)
     }
 
     private func updateItemSize() {
