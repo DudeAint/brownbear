@@ -165,9 +165,17 @@ final class HeadlessScriptRunner: @unchecked Sendable {
         })();
         """)
 
-        // URL / URLSearchParams / performance — web globals JavaScriptCore lacks. Loaded from a
-        // node-validated bundled resource (regex-heavy, so embedding it as a Swift string literal would
-        // be escape-hell and unchecked). Background userscripts otherwise throw "Can't find variable: URL".
+        // Honest, device-derived inputs for the navigator/location polyfills the bundle installs below.
+        // A background userscript has no page, so `location` defaults to about:blank; navigator mirrors
+        // the running OS. Set before the bundle so its `if (absent)` guards pick these up.
+        context.setObject(HeadlessEnvironment.userAgent, forKeyedSubscript: "__bbUserAgent" as NSString)
+        context.setObject(HeadlessEnvironment.language, forKeyedSubscript: "__bbLanguage" as NSString)
+        context.setObject("about:blank", forKeyedSubscript: "__bbHeadlessLocation" as NSString)
+
+        // URL / URLSearchParams / performance / navigator / location — web globals JavaScriptCore lacks.
+        // Loaded from a node-validated bundled resource (regex-heavy, so embedding it as a Swift string
+        // literal would be escape-hell and unchecked). Background userscripts otherwise throw
+        // "Can't find variable: URL / navigator / location".
         if let url = Bundle.main.url(forResource: "brownbear-jscore-globals", withExtension: "js")
             ?? Bundle.main.url(forResource: "brownbear-jscore-globals", withExtension: "js", subdirectory: "JS"),
            let source = try? String(contentsOf: url, encoding: .utf8) {
