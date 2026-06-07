@@ -26,13 +26,29 @@ extension BrownBearBrowserViewController {
         presentExtensionInstallBanner(extensionID: extensionID, name: Self.chromeWebStoreName(from: url))
     }
 
-    /// The 32-char extension id if `url` is a Chrome Web Store detail page, else nil. Covers both the
-    /// current `chromewebstore.google.com` host and the legacy `chrome.google.com/webstore` path.
-    static func chromeWebStoreExtensionID(for url: URL) -> String? {
-        guard let host = url.host?.lowercased() else { return nil }
-        let isStore = host == "chromewebstore.google.com"
+    /// True for ANY Chrome Web Store page (detail, search, category…), used to force a desktop Chrome
+    /// experience on the whole store. Covers the current `chromewebstore.google.com` host and the
+    /// legacy `chrome.google.com/webstore` path.
+    static func isChromeWebStoreURL(_ url: URL) -> Bool {
+        guard let host = url.host?.lowercased() else { return false }
+        return host == "chromewebstore.google.com"
             || (host == "chrome.google.com" && url.path.hasPrefix("/webstore"))
-        guard isStore else { return nil }
+    }
+
+    /// A desktop Chrome User-Agent. Sending this for store hosts makes the store serve its desktop
+    /// "Add to Chrome" experience (enabled button, no "you're not on Chrome" banner).
+    static let desktopChromeUserAgent =
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        + "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+    /// A desktop Safari User-Agent — the default desktop UA for the manual "Request Desktop Site" toggle.
+    static let desktopSafariUserAgent =
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
+        + "(KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+
+    /// The 32-char extension id if `url` is a Chrome Web Store detail page, else nil.
+    static func chromeWebStoreExtensionID(for url: URL) -> String? {
+        guard isChromeWebStoreURL(url) else { return nil }
         return ChromeWebStore.extensionID(from: url.absoluteString)
     }
 
@@ -137,7 +153,8 @@ extension BrownBearBrowserViewController {
         Task { @MainActor in
             do {
                 let data = try await ChromeWebStore.downloadCRX(forInput: extensionID)
-                let installed = try await BrownBearServices.shared.webExtensionStore.install(archive: data)
+                let installed = try await BrownBearServices.shared.webExtensionStore.install(archive: data,
+                                                                                             storeID: extensionID)
                 NotificationCenter.default.post(name: .brownBearExtensionsDidChange, object: nil)
                 dismissExtensionInstallBanner()
                 presentExtensionInstalledToast(name: installed.displayName)

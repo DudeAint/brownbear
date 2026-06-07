@@ -168,9 +168,15 @@ content-script injection in the isolated world, and `chrome.storage`/`runtime`/`
 - **Messaging**: content → background `runtime.sendMessage`/`onMessage` with sync **and** async
   `sendResponse` (and Promise-returning listeners), over the same native-bound-token bridge.
 - **`chrome.alarms`**, **`storage.onChanged`** (in workers), and **direct Chrome Web Store install**
-  (`ChromeWebStore` — paste a link or id, fetch the CRX). Surfaced **in-page**: landing on a Chrome
-  Web Store detail page raises an "Add to BrownBear" banner above the toolbar
-  (`BrownBearBrowserViewController+ExtensionInstall`) that runs that same CRX install path in one tap.
+  (`ChromeWebStore` — paste a link or id, fetch the CRX). Surfaced **in-page** two ways: a banner
+  above the toolbar (`+ExtensionInstall`), and — primary — the store's **own install button rewired**
+  in place. `brownbear-webstore.js` (PAGE world, store hosts only) makes the store believe it's
+  desktop Chrome (`navigator.userAgentData`/`vendor` spoof + a forced desktop Chrome UA at the nav
+  layer) so the real enabled button renders with no "you're not on Chrome" banner, then relabels it to
+  **"Add to BrownBear"** / **"Remove from BrownBear"** (state from `WebExtensionStore.installed(forStoreID:)`)
+  and routes the click to `WebStoreInstallHandler` (origin-gated `WKScriptMessageHandlerWithReply`),
+  which runs the real install/remove. The store id is recorded on the `WebExtension` record so add/remove
+  state round-trips.
 
 **Status — Phase 3 (shipped, final):**
 - **Popup & options pages** render in a real WKWebView over a `chrome-extension://` scheme

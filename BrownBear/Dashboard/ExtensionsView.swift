@@ -38,7 +38,7 @@ final class ExtensionsViewModel: ObservableObject {
         defer { isInstalling = false }
         do {
             let data = try await ChromeWebStore.downloadCRX(forInput: trimmed)
-            _ = try await store.install(archive: data)
+            _ = try await store.install(archive: data, storeID: ChromeWebStore.extensionID(from: trimmed))
             await load()
             notifyChanged()
         } catch {

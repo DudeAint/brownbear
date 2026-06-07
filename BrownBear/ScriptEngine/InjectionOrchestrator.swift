@@ -28,6 +28,8 @@ final class InjectionOrchestrator {
     private let webExtensionRouter: WebExtensionMessageRouter
     /// Captures the page's own console.* output (PAGE world) for the Logs "Page" filter.
     private let pageConsoleHandler: PageConsoleHandler
+    /// Backs the in-page "Add to BrownBear" / "Remove from BrownBear" button on Chrome Web Store pages.
+    private let webStoreInstallHandler = WebStoreInstallHandler()
     /// Compiles each extension's declarativeNetRequest rulesets into WKContentRuleLists (Module 6 P2).
     let contentBlocker: WebExtensionContentBlocker
     let scriptStore: ScriptStore
@@ -90,6 +92,18 @@ final class InjectionOrchestrator {
                                        forMainFrameOnly: false,
                                        in: .page)
         userContentController.addUserScript(pageConsole)
+
+        // Chrome Web Store in-page install button — a PAGE-world content script that self-gates to
+        // store hosts, makes the store believe it's desktop Chrome, and rewires the install button to
+        // BrownBear's installer via the reply handler below. Main frame only (the button is there).
+        userContentController.addScriptMessageHandler(webStoreInstallHandler,
+                                                      contentWorld: .page,
+                                                      name: WebStoreInstallHandler.handlerName)
+        let webStore = WKUserScript(source: Self.bootstrapSource("brownbear-webstore"),
+                                    injectionTime: .atDocumentStart,
+                                    forMainFrameOnly: true,
+                                    in: .page)
+        userContentController.addUserScript(webStore)
 
         // Boot background service workers + the content↔background message bus (self-observes
         // extension changes thereafter).

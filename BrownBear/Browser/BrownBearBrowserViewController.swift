@@ -524,9 +524,7 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
         // Set BOTH levers: a desktop UA for sites that sniff it, and (the reliable one) the
         // per-navigation preferredContentMode applied in decidePolicyFor below. Then re-load the URL
         // so the new mode actually takes effect (reload() can serve cache and skip re-requesting).
-        let desktopUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
-            + "(KHTML, like Gecko) Version/17.0 Safari/605.1.15"
-        webView.customUserAgent = tab.prefersDesktop ? desktopUA : nil
+        webView.customUserAgent = tab.prefersDesktop ? Self.desktopSafariUserAgent : nil
         if let url = webView.url {
             webView.load(URLRequest(url: url))
         } else {
@@ -656,8 +654,22 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
         // Apply the tab's desktop/mobile choice to every navigation. preferredContentMode is the
         // reliable lever (a desktop UA alone is ignored by responsive sites), so the Desktop toggle
         // actually changes the rendered layout — and it persists across the tab's loads.
+        let destination = navigationAction.request.url
+        let isStore = destination.map(Self.isChromeWebStoreURL) ?? false
         if let tab = tabManager.tabs.first(where: { $0.webView === webView }) {
-            preferences.preferredContentMode = tab.prefersDesktop ? .desktop : .mobile
+            // Chrome Web Store pages only render their real "Add to Chrome" button (and skip the
+            // "you're not on Chrome" banner) for a desktop Chrome client, so force that for store
+            // hosts regardless of the tab's toggle; otherwise honor the user's Desktop choice.
+            if isStore {
+                preferences.preferredContentMode = .desktop
+                webView.customUserAgent = Self.desktopChromeUserAgent
+            } else {
+                preferences.preferredContentMode = tab.prefersDesktop ? .desktop : .mobile
+                // Clear the store UA when leaving the store (but don't clobber a manual Desktop UA).
+                if webView.customUserAgent == Self.desktopChromeUserAgent {
+                    webView.customUserAgent = tab.prefersDesktop ? Self.desktopSafariUserAgent : nil
+                }
+            }
         }
         if let url = navigationAction.request.url {
             // Open external app schemes (mailto:, tel:, etc.) via the system.
