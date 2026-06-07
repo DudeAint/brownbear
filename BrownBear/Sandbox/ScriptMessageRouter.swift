@@ -386,8 +386,7 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
                 var payload: [String: Any] = ["token": token, "key": change.key]
                 payload["old"] = change.old ?? NSNull()
                 payload["new"] = change.new ?? NSNull()
-                guard let data = try? JSONSerialization.data(withJSONObject: payload),
-                      let json = String(data: data, encoding: .utf8) else { continue }
+                let json = JSONSanitize.string(payload)   // NaN/Inf-safe (uncatchable Obj-C exception otherwise)
                 let js = "window.__brownbear&&window.__brownbear.applyValueChange('\(Self.escapeForJSStringLiteral(json))');"
                 // Via the ObjC shim, into the EXACT frame this injection runs in (iframe-aware).
                 BBEvaluateJavaScriptInFrame(webView, js, target.frameInfo, contentWorld)
@@ -610,8 +609,7 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         let emit: (String, [String: Any]) -> Void = { eventType, eventPayload in
             // Network events arrive on a background queue; deliver to JS on main IN ORDER.
             let args: [Any] = [requestID, eventType, eventPayload]
-            guard let data = try? JSONSerialization.data(withJSONObject: args),
-                  let json = String(data: data, encoding: .utf8) else { return }
+            let json = JSONSanitize.string(args)   // NaN/Inf-safe (uncatchable Obj-C exception otherwise)
             let js = "window.__brownbear && window.__brownbear.dispatchXHR.apply(null, \(json));"
             DispatchQueue.main.async {
                 // Via the Objective-C shim so we don't link the Swift WebKit overlay (see

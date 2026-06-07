@@ -425,13 +425,10 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
     }
 
     /// Serialize a value to a JSON literal for embedding in evaluated JS. Fragments allowed so a bare
-    /// string/number/bool message round-trips. Falls back to `null` if it isn't JSON-serializable.
+    /// string/number/bool message round-trips. Sanitizes NaN/Infinity (which would otherwise throw an
+    /// uncatchable Obj-C exception in JSONSerialization) and falls back to `null` — fail closed.
     private static func jsonString(_ value: Any) -> String {
-        if let data = try? JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed]),
-           let string = String(data: data, encoding: .utf8) {
-            return string
-        }
-        return "null"
+        JSONSanitize.string(value)
     }
 
     // MARK: - Identity / sessions
