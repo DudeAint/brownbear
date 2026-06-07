@@ -56,6 +56,10 @@ final class BrownBearBrowserViewController: UIViewController {
     /// accessibilityIdentifier so we don't rebuild it on every navigation tick for the same page).
     weak var extensionInstallBanner: UIView?
 
+    /// Drives the tab grid's spring zoom open/close. Retained here because UIKit holds a
+    /// `transitioningDelegate` only weakly.
+    private let tabGridTransition = TabGridTransitionController()
+
     // MARK: - Lifecycle
 
     override func viewDidLoad() {
@@ -174,6 +178,13 @@ final class BrownBearBrowserViewController: UIViewController {
             webView.bottomAnchor.constraint(equalTo: contentContainer.bottomAnchor)
         ])
         installedWebView = webView
+
+        // Fade the newly-installed web view in so switching tabs (and opening a new one) crossfades
+        // rather than snapping.
+        webView.alpha = 0
+        UIView.animate(withDuration: 0.2, delay: 0, options: [.allowUserInteraction, .beginFromCurrentState]) {
+            webView.alpha = 1
+        }
 
         tab.delegate = self
         tab.loadPendingURLIfNeeded()
@@ -455,6 +466,7 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
                                              showingPrivate: tabManager.activeTab?.isPrivate ?? false)
         grid.gridDelegate = self
         grid.modalPresentationStyle = .fullScreen
+        grid.transitioningDelegate = tabGridTransition   // spring zoom open/close
         present(grid, animated: true)
     }
 
