@@ -14,25 +14,25 @@ import UIKit
 
 extension BrownBearBrowserViewController {
 
-    /// Show, hide, or restyle the install banner based on whether `url` is a Chrome Web Store *detail*
-    /// page and whether that extension is already installed. Called on every active-tab navigation tick
-    /// (full loads and the store's in-page SPA nav) and after the banner's own Add/Remove completes.
+    /// Show, hide, or restyle the install banner based on whether `url` is an extension store *detail*
+    /// page (Chrome, Edge, or Firefox) and whether that extension is already installed. Called on every
+    /// active-tab navigation tick and after the banner's own Add/Remove completes.
     func updateExtensionInstallBanner(url: URL?) {
-        guard let url, let extensionID = Self.chromeWebStoreExtensionID(for: url) else {
+        guard let url, let source = ExtensionStoreSource.detect(url) else {
             dismissExtensionInstallBanner()
             return
         }
-        let name = Self.chromeWebStoreName(from: url)
+        let name = Self.storeExtensionName(from: url)
+        let storeID = source.storeID
         Task { @MainActor in
-            let installed = await BrownBearServices.shared.webExtensionStore.installed(forStoreID: extensionID) != nil
+            let installed = await BrownBearServices.shared.webExtensionStore.installed(forStoreID: storeID) != nil
             // Bail if the active tab navigated off this store page while we awaited the store.
-            let activeID = tabManager.activeTab?.state.url.flatMap(Self.chromeWebStoreExtensionID)
-            guard activeID == extensionID else { return }
-            // Key on id + state so a state change (installed via the in-page button) restyles the pill,
-            // but the same id+state is left in place (no flicker on every loading tick).
-            let key = "\(extensionID)|\(installed)"
+            guard tabManager.activeTab?.state.url.flatMap(ExtensionStoreSource.detect) == source else { return }
+            // Key on store id + state so a state change (installed via the in-page button) restyles the
+            // pill, but the same id+state is left in place (no flicker on every loading tick).
+            let key = "\(storeID)|\(installed)"
             if extensionInstallBanner?.accessibilityIdentifier == key { return }
-            presentExtensionInstallBanner(extensionID: extensionID, name: name, installed: installed)
+            presentExtensionInstallBanner(source: source, name: name, installed: installed)
         }
     }
 
@@ -67,16 +67,21 @@ extension BrownBearBrowserViewController {
         return ChromeWebStore.extensionID(from: url.absoluteString)
     }
 
-    /// A human-ish name from the store URL's slug (".../detail/<slug>/<id>"); "this extension" if absent.
-    static func chromeWebStoreName(from url: URL) -> String {
+    /// A human-ish name from a store URL's slug, across all three stores: Chrome/Edge put the slug
+    /// before the 32-char id (".../detail/<slug>/<id>"), Firefox puts it after "addon"
+    /// (".../addon/<slug>/"). "this extension" if none can be derived.
+    static func storeExtensionName(from url: URL) -> String {
         let components = url.pathComponents
+        var slug: String?
         if let idIndex = components.firstIndex(where: { ChromeWebStore.isExtensionID($0) }), idIndex > 0 {
-            let slug = components[idIndex - 1]
-                .replacingOccurrences(of: "-", with: " ")
-                .trimmingCharacters(in: .whitespaces)
-            // Require an actual word: skips the path root ("/") and the "detail" segment.
-            if slug.lowercased() != "detail", slug.rangeOfCharacter(from: .letters) != nil {
-                return slug.capitalized
+            slug = components[idIndex - 1]
+        } else if let addonIndex = components.firstIndex(of: "addon"), addonIndex + 1 < components.count {
+            slug = components[addonIndex + 1]
+        }
+        if let slug {
+            let name = slug.replacingOccurrences(of: "-", with: " ").trimmingCharacters(in: .whitespaces)
+            if name.lowercased() != "detail", name.rangeOfCharacter(from: .letters) != nil {
+                return name.capitalized
             }
         }
         return "this extension"
@@ -90,11 +95,11 @@ extension BrownBearBrowserViewController {
         }
     }
 
-    private func presentExtensionInstallBanner(extensionID: String, name: String, installed: Bool) {
+    private func presentExtensionInstallBanner(source: ExtensionStoreSource, name: String, installed: Bool) {
         extensionInstallBanner?.removeFromSuperview()   // replace a banner for a different ext/state
 
         let banner = UIView()
-        banner.accessibilityIdentifier = "\(extensionID)|\(installed)"
+        banner.accessibilityIdentifier = "\(source.storeID)|\(installed)"
         banner.backgroundColor = BrownBearTheme.Palette.chrome
         banner.layer.cornerRadius = 16
         banner.layer.cornerCurve = .continuous
@@ -130,9 +135,9 @@ extension BrownBearBrowserViewController {
         addButton.addAction(UIAction { [weak self, weak addButton] _ in
             guard let self, let addButton else { return }
             if installed {
-                self.performExtensionRemove(extensionID: extensionID, name: name, button: addButton)
+                self.performExtensionRemove(source: source, name: name, button: addButton)
             } else {
-                self.performExtensionInstall(extensionID: extensionID, name: name, button: addButton)
+                self.performExtensionInstall(source: source, name: name, button: addButton)
             }
         }, for: .touchUpInside)
 
@@ -167,13 +172,13 @@ extension BrownBearBrowserViewController {
         UIView.animate(withDuration: 0.25) { banner.alpha = 1 }
     }
 
-    private func performExtensionInstall(extensionID: String, name: String, button: UIButton) {
+    private func performExtensionInstall(source: ExtensionStoreSource, name: String, button: UIButton) {
         button.isEnabled = false
         button.configuration?.showsActivityIndicator = true
         Task { @MainActor in
             do {
-                let data = try await ChromeWebStore.downloadCRX(forInput: extensionID)
-                _ = try await BrownBearServices.shared.webExtensionStore.install(archive: data, storeID: extensionID)
+                let data = try await source.downloadArchive()
+                _ = try await BrownBearServices.shared.webExtensionStore.install(archive: data, storeID: source.storeID)
                 NotificationCenter.default.post(name: .brownBearExtensionsDidChange, object: nil)
                 presentExtensionToast(message: "Added “\(name)” to BrownBear")
                 refreshExtensionInstallBanner()   // flip the pill to the "Remove" state
@@ -185,12 +190,12 @@ extension BrownBearBrowserViewController {
         }
     }
 
-    private func performExtensionRemove(extensionID: String, name: String, button: UIButton) {
+    private func performExtensionRemove(source: ExtensionStoreSource, name: String, button: UIButton) {
         button.isEnabled = false
         button.configuration?.showsActivityIndicator = true
         Task { @MainActor in
             let store = BrownBearServices.shared.webExtensionStore
-            if let ext = await store.installed(forStoreID: extensionID) {
+            if let ext = await store.installed(forStoreID: source.storeID) {
                 await store.remove(id: ext.id)
                 NotificationCenter.default.post(name: .brownBearExtensionsDidChange, object: nil)
             }

@@ -187,6 +187,12 @@ content-script injection in the isolated world, and `chrome.storage`/`runtime`/`
   and routes the click to `WebStoreInstallHandler` (origin-gated `WKScriptMessageHandlerWithReply`),
   which runs the real install/remove. The store id is recorded on the `WebExtension` record so add/remove
   state round-trips.
+- **Edge Add-ons + Firefox (AMO)** install the same way: `ExtensionStoreSource` unifies detection +
+  download across all three — `EdgeAddons` pulls a Chromium CRX from Edge's on-demand endpoint;
+  `FirefoxAddons` resolves the current XPI (a ZIP, so `WebExtensionArchive` unpacks it unchanged) via
+  AMO's API. The in-page banner appears on Edge/Firefox store detail pages, and the dashboard's
+  paste-a-link accepts any of the three. Firefox extensions run on the same surface (their `browser.*`
+  Promise API is already aliased to `chrome`).
 
 **Status — Phase 3 (shipped, final):**
 - **Popup & options pages** render in a real WKWebView over a `chrome-extension://` scheme
