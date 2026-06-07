@@ -567,6 +567,67 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
         decisionHandler(.allow)
     }
 
+    func webView(_ webView: WKWebView,
+                 decidePolicyFor navigationResponse: WKNavigationResponse,
+                 decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        // If WebKit can't render this response inline (a PDF, zip, dmg, or any binary asset), turn it
+        // into a download instead of showing a blank page. Userscript *.user.js installs are already
+        // intercepted in navigationAction, so they never reach here.
+        if !navigationResponse.canShowMIMEType {
+            decisionHandler(.download)
+            return
+        }
+        decisionHandler(.allow)
+    }
+
+    func webView(_ webView: WKWebView,
+                 navigationResponse: WKNavigationResponse,
+                 didBecome download: WKDownload) {
+        DownloadManager.shared.begin(download)
+        presentDownloadStartedToast()
+    }
+
+    func webView(_ webView: WKWebView,
+                 navigationAction: WKNavigationAction,
+                 didBecome download: WKDownload) {
+        DownloadManager.shared.begin(download)
+        presentDownloadStartedToast()
+    }
+
+    /// A brief, non-modal confirmation that a download began. Tapping it opens the Downloads list;
+    /// otherwise it fades away after a couple of seconds.
+    private func presentDownloadStartedToast() {
+        var config = UIButton.Configuration.filled()
+        config.title = "Download started — tap to view"
+        config.baseBackgroundColor = BrownBearTheme.Palette.accent
+        config.baseForegroundColor = .white
+        config.cornerStyle = .capsule
+        config.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)
+        var title = AttributeContainer()
+        title.font = .systemFont(ofSize: 13, weight: .semibold)
+        config.attributedTitle = AttributedString("Download started — tap to view", attributes: title)
+        let toast = UIButton(configuration: config, primaryAction: UIAction { [weak self] _ in
+            self?.presentDownloads()
+        })
+        toast.alpha = 0
+        toast.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(toast)
+        NSLayoutConstraint.activate([
+            toast.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            toast.bottomAnchor.constraint(equalTo: toolbar.topAnchor, constant: -12)
+        ])
+        UIView.animate(withDuration: 0.25, animations: { toast.alpha = 1 }) { _ in
+            UIView.animate(withDuration: 0.3, delay: 2.2, options: []) {
+                toast.alpha = 0
+            } completion: { _ in toast.removeFromSuperview() }
+        }
+    }
+
+    private func presentDownloads() {
+        guard presentedViewController == nil else { return }
+        present(DownloadsView.makeHostingController(), animated: true)
+    }
+
     /// Present the install card for a userscript URL, with a "View source" escape that re-loads the
     /// raw file (allowed through the interceptor once).
     private func presentScriptInstall(for url: URL) {
@@ -650,6 +711,8 @@ extension BrownBearBrowserViewController: BrowserMenuDelegate {
             presentBookmarks()
         case .history:
             presentHistory()
+        case .downloads:
+            presentDownloads()
         }
     }
 
