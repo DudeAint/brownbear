@@ -102,6 +102,13 @@ class WebExtensionRuntime {
         contexts[extensionID]?.fireActionClicked(tab: tab)
     }
 
+    /// Deliver chrome.contextMenus.onClicked to an extension's background worker. No-op if the
+    /// extension has no running background context. `info` is the OnClickData object; `tab` is a
+    /// chrome.tabs Tab record (or nil). Chrome fires this event only in the background/event page.
+    func fireContextMenuClicked(extensionID: String, info: [String: Any], tab: [String: Any]?) {
+        contexts[extensionID]?.fireContextMenuClicked(info: info, tab: tab)
+    }
+
     // MARK: - Browser-pushed events (chrome.tabs.* / chrome.webNavigation.*)
 
     /// Register a live extension page (popup/options) to receive browser-pushed events. Held weakly.
@@ -153,6 +160,8 @@ class WebExtensionRuntime {
             context.shutdown()
             contexts.removeValue(forKey: id)
             permissionsByExtension.removeValue(forKey: id)
+            // Drop this extension's context-menu items so stale rows never show after disable/uninstall.
+            BrownBearServices.shared.webExtensionContextMenuStore.forgetExtension(id)
         }
 
         // Spin up newly enabled extensions.
