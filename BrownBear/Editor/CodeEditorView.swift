@@ -9,6 +9,7 @@
 
 import Runestone
 import SwiftUI
+import TreeSitterJavaScriptRunestone
 
 /// A simple auto-closing pair (brackets, quotes) for the editor.
 private struct EditorCharacterPair: CharacterPair {
@@ -23,7 +24,6 @@ struct CodeEditorView: UIViewRepresentable {
     func makeUIView(context: Context) -> Runestone.TextView {
         let textView = Runestone.TextView()
         textView.editorDelegate = context.coordinator
-        textView.theme = BrownBearEditorTheme()
         textView.backgroundColor = BrownBearTheme.Palette.background
         textView.showLineNumbers = true
         textView.isLineWrappingEnabled = false
@@ -43,7 +43,11 @@ struct CodeEditorView: UIViewRepresentable {
             EditorCharacterPair(leading: "'", trailing: "'"),
             EditorCharacterPair(leading: "`", trailing: "`")
         ]
-        textView.text = text
+        // Attach the JavaScript Tree-sitter grammar so the theme's token colors light up. setState
+        // parses off the main thread and applies text + theme + language atomically; subsequent
+        // `.text =` writes re-highlight against this language mode.
+        let state = TextViewState(text: text, theme: BrownBearEditorTheme(), language: .javaScript)
+        textView.setState(state)
         return textView
     }
 

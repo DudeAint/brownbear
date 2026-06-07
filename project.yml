@@ -27,6 +27,11 @@ packages:
   Runestone:
     url: https://github.com/simonbs/Runestone.git
     from: "0.4.0"
+  # MIT — pre-compiled Tree-sitter languages for Runestone. We use the JavaScript grammar to
+  # syntax-highlight the userscript editor (the theme's token colors were already wired for it).
+  TreeSitterLanguages:
+    url: https://github.com/simonbs/TreeSitterLanguages.git
+    from: "0.1.0"
 
 targets:
   BrownBear:
@@ -78,6 +83,8 @@ targets:
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks"
     dependencies:
       - package: Runestone
+      - package: TreeSitterLanguages
+        product: TreeSitterJavaScriptRunestone
 
   BrownBearTests:
     type: bundle.unit-test

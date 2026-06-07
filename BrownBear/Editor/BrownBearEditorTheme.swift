@@ -3,8 +3,8 @@
 //  BrownBear
 //
 //  A Runestone `Theme` in BrownBear's palette: dark, monospaced, amber-accented gutter. Token
-//  (syntax-highlight) colors are wired here too; they take effect once a Tree-sitter JavaScript
-//  language is attached (a planned follow-up — the editor ships with line numbers + this theme).
+//  (syntax-highlight) colors are wired here and active — CodeEditorView attaches the JavaScript
+//  Tree-sitter grammar (TreeSitterJavaScriptRunestone), so these capture-name colors light up.
 //
 
 import Runestone
