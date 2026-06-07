@@ -61,6 +61,71 @@
     globalThis.clearTimeout = function (id) { __bb_clear_timer(id || 0); };
     globalThis.clearInterval = function (id) { __bb_clear_timer(id || 0); };
     globalThis.queueMicrotask = globalThis.queueMicrotask || function (fn) { Promise.resolve().then(fn); };
+
+    // ---------------------------------------------------------------- Web Crypto + importScripts
+    // JavaScriptCore ships neither. ScriptCat-derived service workers and any crypto-using extension
+    // throw "Can't find variable: crypto" / "Can't find variable: importScripts" without these. We
+    // back getRandomValues / randomUUID / subtle.digest with native secure-random + CryptoKit
+    // (__bb_crypto_*), and importScripts with a synchronous fetch of the extension's own packaged
+    // files or an http(s) URL (__bb_import_script), evaluated in global scope.
+    if (!globalThis.crypto || typeof globalThis.crypto.getRandomValues !== 'function') {
+      var digestName = function (algo) {
+        if (typeof algo === 'string') { return algo; }
+        if (algo && typeof algo.name === 'string') { return algo.name; }
+        return '';
+      };
+      globalThis.crypto = {
+        getRandomValues: function (typedArray) {
+          if (!typedArray || typeof typedArray.length !== 'number') {
+            throw new TypeError('getRandomValues expects an integer TypedArray');
+          }
+          if (typedArray.BYTES_PER_ELEMENT === 8) {
+            throw new Error("getRandomValues does not support 64-bit arrays");
+          }
+          var byteLen = typedArray.length * (typedArray.BYTES_PER_ELEMENT || 1);
+          var bytes = __bb_crypto_random(byteLen) || [];
+          var view = new Uint8Array(typedArray.buffer, typedArray.byteOffset || 0, byteLen);
+          for (var i = 0; i < byteLen; i++) { view[i] = bytes[i] & 0xff; }
+          return typedArray;
+        },
+        randomUUID: function () { return __bb_crypto_uuid(); },
+        subtle: {
+          digest: function (algo, data) {
+            return new Promise(function (resolve, reject) {
+              try {
+                var name = digestName(algo);
+                var src;
+                if (data instanceof ArrayBuffer) { src = new Uint8Array(data); }
+                else if (data && data.buffer instanceof ArrayBuffer) {
+                  src = new Uint8Array(data.buffer, data.byteOffset || 0, data.byteLength);
+                } else if (Array.isArray(data)) { src = data; }
+                else { reject(new TypeError('digest expects a BufferSource')); return; }
+                var input = [];
+                for (var i = 0; i < src.length; i++) { input.push(src[i] & 0xff); }
+                var out = __bb_crypto_digest(name, input);
+                if (!out) { reject(new Error('Unsupported digest algorithm: ' + name)); return; }
+                var result = new Uint8Array(out.length);
+                for (var j = 0; j < out.length; j++) { result[j] = out[j] & 0xff; }
+                resolve(result.buffer);
+              } catch (e) { reject(e); }
+            });
+          }
+        }
+      };
+    }
+    if (typeof globalThis.importScripts !== 'function') {
+      globalThis.importScripts = function () {
+        for (var i = 0; i < arguments.length; i++) {
+          var spec = String(arguments[i]);
+          var src = __bb_import_script(spec);
+          if (typeof src === 'string') {
+            (0, eval)(src);
+          } else {
+            throw new Error("importScripts failed to load: " + spec);
+          }
+        }
+      };
+    }
   })();
 
   function makeEvent(list) {

@@ -16,6 +16,7 @@
 //     its own script's namespace.
 //
 
+import CryptoKit
 import Foundation
 import JavaScriptCore
 
@@ -96,7 +97,11 @@ final class HeadlessScriptRunner: @unchecked Sendable {
         installAPIs(into: context, script: script, scratch: scratch, deadline: deadline)
         installPrelude(into: context)
 
-        context.evaluateScript(script.executableBody, withSourceURL: URL(string: "brownbear://\(script.id.uuidString).user.js"))
+        // Wrap in a function so a background script using a top-level `return` (common in ScriptCat
+        // background scripts) is valid — bare top-level `return` is a SyntaxError. The body starts on
+        // line 1 of the wrapper so error line numbers still line up with the script source.
+        let wrappedBody = "(function(){" + script.executableBody + "\n})();"
+        context.evaluateScript(wrappedBody, withSourceURL: URL(string: "brownbear://\(script.id.uuidString).user.js"))
 
         return (HeadlessRunOutcome(scriptID: script.id, error: runError), scratch)
     }
@@ -120,6 +125,43 @@ final class HeadlessScriptRunner: @unchecked Sendable {
           this.console = c;
           this.GM_log = function () { __bbLog('info', joiner.apply(null, arguments)); };
           this.unsafeWindow = this;
+
+          // JavaScriptCore has no Web Crypto; many background scripts (ScriptCat sign-in helpers,
+          // crypto-using libs) reach for crypto.getRandomValues / randomUUID / subtle.digest. Back
+          // them with native secure-random + CryptoKit so those scripts run instead of throwing
+          // "Can't find variable: crypto".
+          if (!this.crypto) {
+            this.crypto = {
+              getRandomValues: function (arr) {
+                var bytes = __bbCryptoRandom((arr && arr.length) || 0);
+                for (var i = 0; i < bytes.length && i < arr.length; i++) { arr[i] = bytes[i]; }
+                return arr;
+              },
+              randomUUID: function () { return __bbCryptoUUID(); },
+              subtle: {
+                digest: function (algo, data) {
+                  var name = (typeof algo === 'string') ? algo : (algo && algo.name) || '';
+                  var view = (data instanceof ArrayBuffer) ? new Uint8Array(data)
+                    : (data && data.buffer ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+                       : new Uint8Array(data || []));
+                  var out = __bbCryptoDigest(name, Array.prototype.slice.call(view));
+                  if (!out) { return Promise.reject(new Error('Unsupported digest: ' + name)); }
+                  return Promise.resolve(new Uint8Array(out).buffer);
+                }
+              }
+            };
+          }
+
+          // ScriptCat-style background scripts load dependencies with importScripts(); back it with a
+          // synchronous @connect-gated native fetch (same budget/gating as GM_xmlhttpRequest here).
+          if (typeof this.importScripts !== 'function') {
+            this.importScripts = function () {
+              for (var i = 0; i < arguments.length; i++) {
+                var src = __bbImportScript(String(arguments[i]));
+                if (src) { (0, eval)(src); }
+              }
+            };
+          }
         })();
         """)
     }
@@ -267,6 +309,58 @@ final class HeadlessScriptRunner: @unchecked Sendable {
             invoke(details, "onload", responseObject)
         }
         context.setObject(xhr, forKeyedSubscript: "GM_xmlhttpRequest" as NSString)
+
+        // --- Web Crypto backing (JavaScriptCore ships none) -------------------------------------
+        // Secure random bytes (SystemRandomNumberGenerator is cryptographically secure on Apple OSes).
+        let cryptoRandom: @convention(block) (Int) -> [Int] = { count in
+            let n = max(0, min(count, 65_536))
+            return (0..<n).map { _ in Int(UInt8.random(in: 0...255)) }
+        }
+        context.setObject(cryptoRandom, forKeyedSubscript: "__bbCryptoRandom" as NSString)
+
+        let cryptoUUID: @convention(block) () -> String = { UUID().uuidString.lowercased() }
+        context.setObject(cryptoUUID, forKeyedSubscript: "__bbCryptoUUID" as NSString)
+
+        // crypto.subtle.digest via CryptoKit — SHA-1/256/384/512. Returns the digest bytes, or nil
+        // (→ a rejected promise on the JS side) for an unsupported algorithm.
+        let cryptoDigest: @convention(block) (String, [Int]) -> [Int]? = { algo, bytes in
+            let data = Data(bytes.map { UInt8(truncatingIfNeeded: $0) })
+            switch algo.lowercased().replacingOccurrences(of: "-", with: "") {
+            case "sha256": return Array(SHA256.hash(data: data)).map { Int($0) }
+            case "sha384": return Array(SHA384.hash(data: data)).map { Int($0) }
+            case "sha512": return Array(SHA512.hash(data: data)).map { Int($0) }
+            case "sha1": return Array(Insecure.SHA1.hash(data: data)).map { Int($0) }
+            default: return nil
+            }
+        }
+        context.setObject(cryptoDigest, forKeyedSubscript: "__bbCryptoDigest" as NSString)
+
+        // --- importScripts (ScriptCat-style background dep loading) -----------------------------
+        // Synchronous @connect-gated fetch (mirrors the synchronous-XHR pattern above; the OS task
+        // budget is the outer bound). Returns the source for the JS side to eval, or nil on
+        // block/failure. The completion fires on a URLSession queue, so the semaphore can't deadlock
+        // the JSContext thread.
+        let importScript: @convention(block) (String) -> String? = { [weak self] urlString in
+            guard let self, let url = URL(string: urlString) else { return nil }
+            guard GMNetworkService.isConnectAllowed(host: url.host, connects: connects, pageHost: nil) else {
+                scratch.logs.append(self.log(script, .warn,
+                    "importScripts blocked by @connect: \(url.host ?? urlString)"))
+                return nil
+            }
+            let semaphore = DispatchSemaphore(value: 0)
+            var source: String?
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 20
+            let task = URLSession.shared.dataTask(with: request) { data, _, _ in
+                if let data { source = String(data: data, encoding: .utf8) }
+                semaphore.signal()
+            }
+            task.delegate = GMRedirectGuard(connects: connects, pageHost: nil)
+            task.resume()
+            semaphore.wait()
+            return source
+        }
+        context.setObject(importScript, forKeyedSubscript: "__bbImportScript" as NSString)
     }
 
     private func log(_ script: UserScript, _ level: LogEntry.Level, _ message: String) -> LogEntry {

@@ -13,6 +13,7 @@
 //  that discipline ourselves.
 //
 
+import CryptoKit
 import Foundation
 import JavaScriptCore
 
@@ -103,7 +104,11 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
             context.setObject(messagesJSON, forKeyedSubscript: "__bbBgMessages" as NSString)
 
             context.evaluateScript(runtimeJS, withSourceURL: URL(string: "brownbear://webext/\(extensionID)/runtime.js"))
-            context.evaluateScript(backgroundSource, withSourceURL: URL(string: "brownbear://webext/\(extensionID)/background.js"))
+            // Wrap in a function so a worker/background script using a top-level `return` (some
+            // ScriptCat-derived bundles do) is valid — a bare top-level `return` is a SyntaxError.
+            // Body starts on line 1 of the wrapper so error line numbers still line up.
+            let wrappedSource = "(function(){" + backgroundSource + "\n})();"
+            context.evaluateScript(wrappedSource, withSourceURL: URL(string: "brownbear://webext/\(extensionID)/background.js"))
 
             // onInstalled fires ONLY on the first-ever boot of this extension (Chrome contract);
             // onStartup fires on every boot. Firing 'install' on each launch/reload would re-run
@@ -199,6 +204,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
         installActionNatives(into: context)
         installWindowsManagementPermissionsNatives(into: context)
         installDNRAndUserScriptNatives(into: context)
+        installCryptoNatives(into: context)
 
         // chrome.tabs from the background worker. Hop to the main actor (TabManager is MainActor),
         // run the op, then call back onto this context's queue with the JSON result.
