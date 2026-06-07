@@ -36,6 +36,7 @@ final class InjectionOrchestrator {
     let valueStore: GMValueStore
     private let network = GMNetworkService()
     private var extensionsObserver: NSObjectProtocol?
+    private var blocklistObserver: NSObjectProtocol?
 
     /// Forwarded to the router so GM_openInTab can reach the browser.
     weak var bridgeHost: ScriptBridgeHost? {
@@ -87,6 +88,7 @@ final class InjectionOrchestrator {
 
     deinit {
         if let extensionsObserver { NotificationCenter.default.removeObserver(extensionsObserver) }
+        if let blocklistObserver { NotificationCenter.default.removeObserver(blocklistObserver) }
     }
 
     // MARK: - Setup
@@ -142,6 +144,15 @@ final class InjectionOrchestrator {
             forName: .brownBearExtensionsDidChange, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.refreshExtensionContentBlockers() }
         }
+
+        // Refresh BrownBear's built-in ad/tracker list from the maintained upstreams (uBlock-style),
+        // then recompile so the larger merged list takes effect. Fire-and-forget; offline keeps the
+        // bundled starter list. Recompile whenever a newer merged list lands.
+        blocklistObserver = NotificationCenter.default.addObserver(
+            forName: .brownBearBlocklistDidUpdate, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.refreshExtensionContentBlockers() }
+        }
+        ContentBlocklistUpdater.shared.updateIfStale()
     }
 
     /// chrome.tabs.sendMessage delivery. Hands off to the shared extension content router, which owns

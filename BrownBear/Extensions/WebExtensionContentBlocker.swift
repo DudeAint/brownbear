@@ -163,10 +163,18 @@ final class WebExtensionContentBlocker {
     /// shields-off hosts injected as a global `unless-domain` so blocking is suppressed there. Returns
     /// nil if the bundled resource is missing or empty (then no built-in list is installed).
     static func builtInBlocklistJSON(excluding hosts: [String]) -> String? {
-        guard let url = Bundle.main.url(forResource: "brownbear-blocklist", withExtension: "json", subdirectory: nil)
+        // Prefer the network-updated merged list (EasyList/EasyPrivacy/Peter Lowe — uBlock-style, kept
+        // fresh by ContentBlocklistUpdater); fall back to the small bundled starter list offline / on
+        // first launch before the first successful fetch.
+        var json: String? = ContentBlocklistUpdater.shared.cachedMergedJSON
+        if json == nil {
+            if let url = Bundle.main.url(forResource: "brownbear-blocklist", withExtension: "json", subdirectory: nil)
                 ?? Bundle.main.url(forResource: "brownbear-blocklist", withExtension: "json", subdirectory: "JS"),
-              let data = try? Data(contentsOf: url) else { return nil }
-        guard let json = String(data: data, encoding: .utf8) else { return nil }
+               let data = try? Data(contentsOf: url) {
+                json = String(data: data, encoding: .utf8)
+            }
+        }
+        guard let json else { return nil }
         let scoped = applyExclusions(to: json, hosts: hosts)
         return scoped == "[]" ? nil : scoped
     }
