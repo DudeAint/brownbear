@@ -29,6 +29,9 @@ final class BrownBearServices {
     // Module 6 — browser extensions.
     let webExtensionStore = WebExtensionStore()
     let webExtensionStorage = WebExtensionStorage()
+    /// Module 6 Phase 3 — chrome.action badge/title/icon/popup state, shared across content/popup/bg
+    /// and surfaced in the browser's overflow menu.
+    let webExtensionActionState = WebExtensionActionState()
     /// Module 6 Phase 2 — headless background service workers + the content↔background message bus.
     let webExtensionRuntime: WebExtensionRuntime
 

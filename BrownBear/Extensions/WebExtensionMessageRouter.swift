@@ -173,6 +173,11 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
         case "notifications.create", "notifications.update", "notifications.clear", "notifications.getAll":
             return try await routeNotifications(api: api, payload: payload, extensionID: extensionID)
 
+        case "action.setBadgeText", "action.setBadgeBackgroundColor", "action.setTitle", "action.setPopup",
+             "action.setIcon", "action.enable", "action.disable",
+             "action.getBadgeText", "action.getTitle", "action.getBadgeBackgroundColor":
+            return routeAction(api: api, payload: payload, extensionID: extensionID)
+
         default:
             guard let result = await routeTabsAndScripting(api: api, payload: payload, extensionID: extensionID) else {
                 throw BrownBearError.bridgeRejected("unsupported extension api '\(api)'")
@@ -272,6 +277,47 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
 
         default:
             throw BrownBearError.bridgeRejected("unsupported notifications api '\(api)'")
+        }
+    }
+
+    // MARK: - chrome.action / chrome.browserAction
+
+    /// chrome.action setters/getters. State lives in the shared WebExtensionActionState (no permission
+    /// needed — Chrome gates it on the manifest action entry; the token was already resolved). A
+    /// tab-less property defaults to the active tab, resolved via the host. All synchronous.
+    private func routeAction(api: String, payload: [String: Any], extensionID: String) -> Any? {
+        let state = BrownBearServices.shared.webExtensionActionState
+        let tabId = (payload["tabId"] as? Int) ?? host?.webExtActionActiveTabId()
+        switch api {
+        case "action.setBadgeText":
+            state.setBadgeText(extensionID: extensionID, tabId: tabId, text: payload["text"] as? String)
+            return NSNull()
+        case "action.setBadgeBackgroundColor":
+            state.setBadgeColor(extensionID: extensionID, tabId: tabId, color: payload["color"] as? String)
+            return NSNull()
+        case "action.setTitle":
+            state.setTitle(extensionID: extensionID, tabId: tabId, title: payload["title"] as? String)
+            return NSNull()
+        case "action.setPopup":
+            state.setPopup(extensionID: extensionID, tabId: tabId, popup: payload["popup"] as? String)
+            return NSNull()
+        case "action.setIcon":
+            state.setIcon(extensionID: extensionID, tabId: tabId, path: WebExtensionActionState.iconPath(from: payload["path"]))
+            return NSNull()
+        case "action.enable":
+            state.setEnabled(extensionID: extensionID, tabId: tabId, true)
+            return NSNull()
+        case "action.disable":
+            state.setEnabled(extensionID: extensionID, tabId: tabId, false)
+            return NSNull()
+        case "action.getBadgeText":
+            return state.badgeText(extensionID: extensionID, tabId: tabId)
+        case "action.getTitle":
+            return state.title(extensionID: extensionID, tabId: tabId)
+        case "action.getBadgeBackgroundColor":
+            return state.badgeColorBytes(extensionID: extensionID, tabId: tabId)
+        default:
+            return NSNull()
         }
     }
 

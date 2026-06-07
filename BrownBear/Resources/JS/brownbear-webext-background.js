@@ -196,19 +196,64 @@
 
   // ---------------------------------------------------------------- assemble + expose
 
-  // Surfaces with no iOS trigger/host yet — stubbed so a worker that touches them doesn't throw.
-  // chrome.commands has no keyboard source on iOS; chrome.action's badge/title are no-ops without
-  // a visible toolbar button. Both fully arrive in Phase 3.
+  // chrome.commands has no keyboard source on iOS — stubbed so a worker that touches it doesn't throw.
   var commands = {
     onCommand: makeEvent([]),
     getAll: function (cb) { if (typeof cb === 'function') { cb([]); } }
   };
-  function noop() {}
+
+  // ---------------------------------------------------------------- chrome.action / chrome.browserAction
+  // Backed by native WebExtensionActionState via __bb_action; onClicked is delivered from the browser
+  // (overflow-menu tap on an action with no popup) through __bbBg.dispatchActionClicked. setIcon
+  // forwards only serializable path data (ImageData isn't bridgeable from JavaScriptCore).
+  var actionClickedListeners = [];
+  function actionCall(method, args) {
+    return new Promise(function (resolve) {
+      __bb_action(method, JSON.stringify(args || {}), function (resJSON) { resolve(parseJSON(resJSON)); });
+    });
+  }
+  function actionSetter(method) {
+    return function (details, cb) {
+      details = details || {};
+      var payload = {};
+      for (var k in details) { if (Object.prototype.hasOwnProperty.call(details, k)) { payload[k] = details[k]; } }
+      return settleBg(actionCall(method, payload).then(function () { return undefined; }), cb);
+    };
+  }
+  function actionGetter(method) {
+    return function (details, cb) {
+      if (typeof details === 'function') { cb = details; details = {}; }
+      return settleBg(actionCall(method, details || {}), cb);
+    };
+  }
+  function actionToggle(method) {
+    return function (tabId, cb) {
+      if (typeof tabId === 'function') { cb = tabId; tabId = undefined; }
+      return settleBg(actionCall(method, { tabId: tabId }).then(function () { return undefined; }), cb);
+    };
+  }
+  function actionSetIcon(details, cb) {
+    details = details || {};
+    var payload = { tabId: details.tabId };
+    if (typeof details.path === 'string') { payload.path = details.path; }
+    else if (details.path && typeof details.path === 'object') {
+      var map = {}; for (var k in details.path) { if (typeof details.path[k] === 'string') { map[k] = details.path[k]; } }
+      payload.path = map;
+    }
+    return settleBg(actionCall('setIcon', payload).then(function () { return undefined; }), cb);
+  }
   var action = {
-    onClicked: makeEvent([]),
-    setBadgeText: noop, setBadgeBackgroundColor: noop, setTitle: noop, setIcon: noop,
-    setPopup: noop, enable: noop, disable: noop,
-    getBadgeText: function (_d, cb) { if (typeof cb === 'function') { cb(''); } }
+    setBadgeText: actionSetter('setBadgeText'),
+    setBadgeBackgroundColor: actionSetter('setBadgeBackgroundColor'),
+    setTitle: actionSetter('setTitle'),
+    setPopup: actionSetter('setPopup'),
+    setIcon: actionSetIcon,
+    enable: actionToggle('enable'),
+    disable: actionToggle('disable'),
+    getBadgeText: actionGetter('getBadgeText'),
+    getTitle: actionGetter('getTitle'),
+    getBadgeBackgroundColor: actionGetter('getBadgeBackgroundColor'),
+    onClicked: makeEvent(actionClickedListeners)
   };
 
   // ---------------------------------------------------------------- chrome.tabs
@@ -450,6 +495,14 @@
       for (var i = 0; i < notificationButtonListeners.length; i++) {
         try { notificationButtonListeners[i](notificationId, buttonIndex | 0); }
         catch (e) { __bb_log('error', 'notifications.onButtonClicked listener threw: ' + (e && e.message ? e.message : e)); }
+      }
+    },
+
+    dispatchActionClicked: function (tabJSON) {
+      var tab = parseJSON(tabJSON);
+      for (var i = 0; i < actionClickedListeners.length; i++) {
+        try { actionClickedListeners[i](tab); }
+        catch (e) { __bb_log('error', 'action.onClicked listener threw: ' + (e && e.message ? e.message : e)); }
       }
     },
 

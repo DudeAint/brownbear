@@ -56,6 +56,13 @@ protocol WebExtensionBridgeHost: AnyObject {
     func webExtNotificationsClear(extensionID: String, notificationID: String) async throws -> Bool
     /// chrome.notifications.getAll — this extension's live notification ids as { id: true }.
     func webExtNotificationsGetAll(extensionID: String) async throws -> [String: Bool]
+
+    /// chrome.action — the chrome tab id of the active tab (`nil` = no tab). Resolves the default tab
+    /// for a tab-less setBadgeText/getTitle/etc.
+    func webExtActionActiveTabId() -> Int?
+    /// chrome.action — the visible click on an extension's overflow-menu action entry: open its popup
+    /// if one is resolved for the active tab, otherwise fire chrome.action.onClicked into the worker.
+    func webExtTriggerAction(extensionID: String)
 }
 
 /// The native side of `chrome.cookies` — the browser implements it over the shared WKHTTPCookieStore

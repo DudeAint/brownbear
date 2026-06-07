@@ -501,6 +501,24 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
                     .map { MenuScript(id: $0.id, name: $0.metadata.displayName,
                                       iconURL: $0.metadata.iconURL, enabled: $0.enabled) }
             }
+            // Surface each enabled extension's chrome.action as a menu row (iOS has no toolbar). The
+            // action state is registered + resolved for the active tab so the badge/title reflect what
+            // the extension set; disabled actions are skipped.
+            var extensionActions: [MenuExtensionAction] = []
+            let actionState = BrownBearServices.shared.webExtensionActionState
+            let actionTabId = webExtActionActiveTabId()
+            for ext in await BrownBearServices.shared.webExtensionStore.enabledExtensions() {
+                guard let action = ext.manifest?.action else { continue }
+                actionState.registerManifestAction(extensionID: ext.id, action: action)
+                let resolved = actionState.resolved(extensionID: ext.id, tabId: actionTabId)
+                guard resolved.enabled else { continue }
+                extensionActions.append(MenuExtensionAction(
+                    extensionID: ext.id,
+                    title: resolved.title.isEmpty ? ext.displayName : resolved.title,
+                    badgeText: resolved.badgeText,
+                    badgeColor: Self.actionBadgeColor(actionState.badgeColorBytes(extensionID: ext.id, tabId: actionTabId)),
+                    iconPath: resolved.iconPath))
+            }
             let menuState = BrowserMenuState(
                 title: state.title,
                 host: state.displayHost,
@@ -510,7 +528,8 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
                 canInstallUserscript: url.map { UserScriptInstaller.isUserScriptURL($0) } ?? false,
                 isBookmarked: isBookmarked,
                 zoomPercent: Int(((tab?.webView.pageZoom ?? 1.0) * 100).rounded()),
-                matchedScripts: matchedScripts)
+                matchedScripts: matchedScripts,
+                extensionActions: extensionActions)
             // The actor hop above defers this present to a later turn; don't stack a second menu if
             // a rapid double-tap already presented one.
             guard presentedViewController == nil else { return }
@@ -901,6 +920,11 @@ extension BrownBearBrowserViewController: BrowserMenuDelegate {
         // Persist the toggle; re-injection happens on the next navigation (no hot re-inject), which
         // matches the engine's existing behavior.
         Task { await BrownBearServices.shared.scriptStore.setEnabled(id: id, enabled) }
+    }
+
+    func browserMenu(_ menu: BrowserMenuViewController, didTapExtensionAction extensionID: String) {
+        // The menu already dismissed itself; open the extension's popup or fire chrome.action.onClicked.
+        webExtTriggerAction(extensionID: extensionID)
     }
 }
 

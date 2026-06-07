@@ -40,6 +40,7 @@ struct BrowserMenuState {
     var isBookmarked: Bool = false  // the current URL is already bookmarked
     var zoomPercent: Int = 100      // active tab's page-zoom level, for the zoom stepper
     var matchedScripts: [MenuScript] = []  // userscripts whose @match/@include matched this page
+    var extensionActions: [MenuExtensionAction] = []  // enabled extensions' chrome.action entries
 }
 
 /// A userscript matching the active page, rendered in the menu's "On this page" section.
@@ -50,10 +51,21 @@ struct MenuScript {
     let enabled: Bool
 }
 
+/// An enabled extension's chrome.action, rendered in the menu's "Extensions" section. Tapping it
+/// opens the extension's popup (if any) or fires chrome.action.onClicked into its background worker.
+struct MenuExtensionAction {
+    let extensionID: String
+    let title: String
+    let badgeText: String
+    let badgeColor: UIColor
+    let iconPath: String?   // resolved relative to the extension package; nil = generic glyph
+}
+
 @MainActor
 protocol BrowserMenuDelegate: AnyObject {
     func browserMenu(_ menu: BrowserMenuViewController, didSelect action: BrowserMenuAction)
     func browserMenu(_ menu: BrowserMenuViewController, didToggleScript id: UUID, enabled: Bool)
+    func browserMenu(_ menu: BrowserMenuViewController, didTapExtensionAction extensionID: String)
 }
 
 @MainActor
@@ -124,6 +136,9 @@ final class BrowserMenuViewController: UIViewController {
         }
         if !state.matchedScripts.isEmpty {
             root.addArrangedSubview(makeScriptsSection())
+        }
+        if !state.extensionActions.isEmpty {
+            root.addArrangedSubview(makeExtensionsSection())
         }
         // Userscripts & Extensions are the headline features — keep them prominent in a Library
         // section near the top, not buried beneath the page actions.
@@ -331,6 +346,116 @@ final class BrowserMenuViewController: UIViewController {
         return row
     }
 
+    // MARK: - Extensions (chrome.action)
+
+    /// iOS has no extension toolbar, so each enabled extension's chrome.action is surfaced as a row in
+    /// the menu. Tapping a row opens the extension's popup (if any) or fires chrome.action.onClicked.
+    private func makeExtensionsSection() -> UIView {
+        let header = UILabel()
+        header.text = "Extensions"
+        header.font = .systemFont(ofSize: 13, weight: .semibold)
+        header.textColor = BrownBearTheme.Palette.textSecondary
+
+        let card = UIView()
+        card.backgroundColor = BrownBearTheme.Palette.cell
+        card.layer.cornerRadius = BrownBearTheme.Metrics.cellCornerRadius
+        card.layer.cornerCurve = .continuous
+
+        let rows = state.extensionActions.map { makeExtensionActionRow($0) }
+        let stack = UIStackView(arrangedSubviews: interleaveSeparators(rows))
+        stack.axis = .vertical
+        stack.spacing = 0
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        card.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: card.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: card.bottomAnchor),
+            stack.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: card.trailingAnchor)
+        ])
+
+        let section = UIStackView(arrangedSubviews: [header, card])
+        section.axis = .vertical
+        section.spacing = 8
+        return section
+    }
+
+    private func makeExtensionActionRow(_ action: MenuExtensionAction) -> UIView {
+        let icon = UIImageView(image: UIImage(systemName: "puzzlepiece.extension.fill"))
+        icon.tintColor = BrownBearTheme.Palette.accent
+        icon.contentMode = .scaleAspectFit
+        icon.backgroundColor = BrownBearTheme.Palette.accent.withAlphaComponent(0.14)
+        icon.layer.cornerRadius = 7
+        icon.layer.cornerCurve = .continuous
+        icon.clipsToBounds = true
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([icon.widthAnchor.constraint(equalToConstant: 28),
+                                     icon.heightAnchor.constraint(equalToConstant: 28)])
+        // Load the extension's own action icon from its package, if it declared one.
+        if let path = action.iconPath {
+            let extensionID = action.extensionID
+            Task { @MainActor in
+                if let data = await BrownBearServices.shared.webExtensionStore.file(extensionID: extensionID, path: path),
+                   let image = UIImage(data: data) {
+                    icon.image = image
+                    icon.contentMode = .scaleAspectFit
+                    icon.backgroundColor = .clear
+                }
+            }
+        }
+
+        let name = UILabel()
+        name.text = action.title
+        name.font = .systemFont(ofSize: 15)
+        name.textColor = BrownBearTheme.Palette.textPrimary
+        name.numberOfLines = 1
+
+        let arranged: [UIView] = action.badgeText.isEmpty
+            ? [icon, name]
+            : [icon, name, makeBadgePill(text: action.badgeText, color: action.badgeColor)]
+        let row = UIStackView(arrangedSubviews: arranged)
+        row.axis = .horizontal
+        row.spacing = 12
+        row.alignment = .center
+        row.isLayoutMarginsRelativeArrangement = true
+        row.layoutMargins = UIEdgeInsets(top: 10, left: 16, bottom: 10, right: 16)
+        row.isUserInteractionEnabled = true
+
+        let button = UIButton(type: .system)
+        button.addAction(UIAction { [weak self] _ in self?.tapExtensionAction(action.extensionID) }, for: .touchUpInside)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        row.addSubview(button)
+        NSLayoutConstraint.activate([
+            button.topAnchor.constraint(equalTo: row.topAnchor),
+            button.bottomAnchor.constraint(equalTo: row.bottomAnchor),
+            button.leadingAnchor.constraint(equalTo: row.leadingAnchor),
+            button.trailingAnchor.constraint(equalTo: row.trailingAnchor)
+        ])
+        return row
+    }
+
+    /// A small badge pill (chrome.action.setBadgeText/Color) shown trailing an extension row.
+    private func makeBadgePill(text: String, color: UIColor) -> UIView {
+        let label = PaddedLabel()
+        label.text = text
+        label.font = .systemFont(ofSize: 11, weight: .semibold)
+        label.textColor = .white
+        label.backgroundColor = color
+        label.layer.cornerRadius = 8
+        label.layer.cornerCurve = .continuous
+        label.clipsToBounds = true
+        label.setContentHuggingPriority(.required, for: .horizontal)
+        label.setContentCompressionResistancePriority(.required, for: .horizontal)
+        return label
+    }
+
+    private func tapExtensionAction(_ extensionID: String) {
+        dismiss(animated: true) { [weak self] in
+            guard let self else { return }
+            self.delegate?.browserMenu(self, didTapExtensionAction: extensionID)
+        }
+    }
+
     // MARK: - Components
 
     private func makeTile(icon: String, title: String, action: BrowserMenuAction, highlighted: Bool = false) -> UIButton {
@@ -368,5 +493,16 @@ final class BrowserMenuViewController: UIViewController {
             guard let self else { return }
             self.delegate?.browserMenu(self, didSelect: action)
         }
+    }
+}
+
+/// A UILabel with horizontal padding, used for the small chrome.action badge pill.
+private final class PaddedLabel: UILabel {
+    private let insets = UIEdgeInsets(top: 2, left: 7, bottom: 2, right: 7)
+    override func drawText(in rect: CGRect) { super.drawText(in: rect.inset(by: insets)) }
+    override var intrinsicContentSize: CGSize {
+        let size = super.intrinsicContentSize
+        return CGSize(width: size.width + insets.left + insets.right,
+                      height: size.height + insets.top + insets.bottom)
     }
 }
