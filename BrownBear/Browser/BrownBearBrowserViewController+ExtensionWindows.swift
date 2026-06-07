@@ -40,21 +40,21 @@ extension BrownBearBrowserViewController {
         windowRecord(populate: populate)
     }
 
-    /// chrome.runtime.openOptionsPage — open the extension's options page for real, in the in-app
-    /// options sheet. Returns false if the extension is unknown or declares no options page (so JS can
-    /// surface lastError).
+    /// chrome.runtime.openOptionsPage — open the extension's options page for real, as a full-screen
+    /// page (the "•••"-menu Options action routes here too). Returns false if the extension is unknown
+    /// or declares no options page (so JS can surface lastError).
     ///
-    /// Note: `options_ui.open_in_tab` is intentionally NOT honored as a real browser tab. Normal tabs
-    /// don't register the chrome-extension:// scheme handler (only the dedicated options/popup web view
-    /// does), so loading the options URL in a tab renders blank. The in-app sheet IS the extension-UI
-    /// surface, so we always use it — same result, never blank.
+    /// Presented via TopViewControllerPresenter (the top-most VC), so it works when invoked from inside
+    /// an already-presented popup — `self.present` would otherwise throw "already presenting" and the
+    /// button would silently do nothing. The dedicated page web view renders chrome-extension:// with
+    /// the full chrome.* bridge (a normal browser tab has neither, so it would be blank).
     @discardableResult
     func webExtOpenOptionsPage(extensionID: String) -> Bool {
         Task { @MainActor in
             guard let ext = await BrownBearServices.shared.webExtensionStore.ext(for: extensionID),
                   let manifest = ext.manifest, let page = manifest.optionsPage, !page.isEmpty else { return }
             let controller = WebExtensionPageViewController(ext: ext, kind: .options)
-            self.present(controller.wrappedForPresentation(), animated: true)
+            TopViewControllerPresenter.present(controller.wrappedAsFullPage())
         }
         // We can't synchronously confirm the page opens (the store is an actor), but a missing options
         // page no-ops in the async task above. Report success optimistically here (Chrome also resolves

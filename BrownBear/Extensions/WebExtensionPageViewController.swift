@@ -282,6 +282,16 @@ final class WebExtensionPageViewController: UIViewController {
         return nav
     }
 
+    /// Wrap as a full-screen page (not a sheet) — for the options page opened from the "•••" menu or
+    /// chrome.runtime.openOptionsPage, which should read as a real, keepable page rather than a card.
+    /// The nav controller carries the Done button to dismiss.
+    func wrappedAsFullPage() -> UIViewController {
+        let nav = UINavigationController(rootViewController: self)
+        nav.navigationBar.prefersLargeTitles = false
+        nav.modalPresentationStyle = .fullScreen
+        return nav
+    }
+
     // MARK: - Helpers
 
     private static func jsonString(_ value: Any) -> String {
