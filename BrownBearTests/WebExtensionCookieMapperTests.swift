@@ -53,8 +53,13 @@ final class WebExtensionCookieMapperTests: XCTestCase {
     }
 
     func testPersistentCookieCarriesExpirationSeconds() throws {
-        let mapped = WebExtensionCookieMapper.chromeCookie(
-            from: makeCookie(expires: Date(timeIntervalSince1970: 2_000_000_000)))
+        // Build the persistent cookie from a real Set-Cookie header: HTTPCookie(properties:[.expires:Date])
+        // does not reliably populate `expiresDate` on the iOS runtime, whereas the header-parse path
+        // (the one WebKit itself uses) does. "Wed, 18 May 2033 03:33:20 GMT" == 2_000_000_000 epoch sec.
+        let url = try XCTUnwrap(URL(string: "https://example.com/"))
+        let header = ["Set-Cookie": "sid=abc; Domain=example.com; Path=/; Expires=Wed, 18 May 2033 03:33:20 GMT"]
+        let cookie = try XCTUnwrap(HTTPCookie.cookies(withResponseHeaderFields: header, for: url).first)
+        let mapped = WebExtensionCookieMapper.chromeCookie(from: cookie)
         XCTAssertEqual(mapped["session"] as? Bool, false)
         let expiry = try XCTUnwrap(mapped["expirationDate"] as? Double)
         XCTAssertEqual(expiry, 2_000_000_000, accuracy: 1.0)
