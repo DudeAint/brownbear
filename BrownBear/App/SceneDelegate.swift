@@ -50,8 +50,17 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         browser.handleExternalURL(context.url)
     }
 
+    func sceneDidBecomeActive(_ scene: UIScene) {
+        // Skip during unit tests (no full app stack booted; see willConnectTo).
+        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
+        // Opportunistic catch-up: iOS background tasks are unreliable, so run any @crontab/@background
+        // script that has come due since its last run whenever the app is opened. This is what makes
+        // scheduled scripts actually run (and get a "last run") on a real device.
+        BrownBearServices.shared.backgroundScheduler.runDueScriptsOnForeground()
+    }
+
     func sceneDidEnterBackground(_ scene: UIScene) {
-        // Ask the OS to wake us to run due @crontab scripts.
+        // Ask the OS to wake us to run due @crontab scripts (best-effort).
         BrownBearServices.shared.backgroundScheduler.scheduleNextRun()
     }
 }
