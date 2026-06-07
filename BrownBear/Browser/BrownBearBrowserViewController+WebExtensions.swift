@@ -9,6 +9,7 @@
 //
 
 import UIKit
+import WebKit
 
 extension BrownBearBrowserViewController: WebExtensionBridgeHost {
 
@@ -68,7 +69,47 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
         resolveTab(extTabId)?.reload()
     }
 
+    // MARK: - chrome.scripting
+
+    func webExtExecuteScript(extTabId: Int?, world: String, code: String) async -> [[String: Any]] {
+        guard let tab = resolveTab(extTabId) else { return [] }
+        let contentWorld: WKContentWorld = (world.uppercased() == "MAIN") ? .page : injection.contentWorld
+        let value: Any? = await withCheckedContinuation { continuation in
+            BBEvaluateJavaScriptForResult(tab.webView, code, contentWorld) { result, _ in
+                continuation.resume(returning: result)
+            }
+        }
+        // One frame on iOS (the main frame); chrome's shape is an array of InjectionResult.
+        return [["result": value ?? NSNull(), "frameId": 0]]
+    }
+
+    func webExtInsertCSS(extTabId: Int?, css: String) {
+        guard let tab = resolveTab(extTabId) else { return }
+        let literal = Self.jsStringLiteral(css)
+        let js = "(function(){var s=document.createElement('style');"
+            + "s.setAttribute('data-brownbear-ext-css','1');s.textContent=\(literal);"
+            + "(document.head||document.documentElement).appendChild(s);})()"
+        BBEvaluateJavaScript(tab.webView, js, .page)
+    }
+
+    func webExtRemoveCSS(extTabId: Int?, css: String) {
+        guard let tab = resolveTab(extTabId) else { return }
+        let literal = Self.jsStringLiteral(css)
+        let js = "(function(){var c=\(literal);"
+            + "var styles=document.querySelectorAll('style[data-brownbear-ext-css=\"1\"]');"
+            + "for(var i=0;i<styles.length;i++){if(styles[i].textContent===c){styles[i].remove();}}})()"
+        BBEvaluateJavaScript(tab.webView, js, .page)
+    }
+
     // MARK: - Helpers
+
+    /// Encode a Swift string as a safe JS string literal (quotes included) via JSON.
+    private static func jsStringLiteral(_ string: String) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: [string], options: []),
+              let json = String(data: data, encoding: .utf8) else { return "\"\"" }
+        // json is `["...escaped..."]`; strip the surrounding brackets to get the bare string literal.
+        return String(json.dropFirst().dropLast())
+    }
 
     /// The chrome.tabs Tab record for a tab (single-window, so windowId is always 1).
     private func tabRecord(_ tab: Tab) -> [String: Any] {

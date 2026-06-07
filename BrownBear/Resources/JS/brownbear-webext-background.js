@@ -246,7 +246,42 @@
       var cb = (a.length && typeof a[a.length - 1] === 'function') ? a.pop() : null;
       return settleBg(Promise.resolve(undefined), cb);   // bg→content delivery: Phase 3
     },
+    executeScript: function (id, details, cb) {
+      if (id !== null && typeof id === 'object') { cb = details; details = id; id = undefined; }
+      details = details || {};
+      return settleBg(scriptingCall('executeScript', { tabId: id, code: details.code, files: details.file ? [details.file] : undefined, world: details.world }), cb);
+    },
+    insertCSS: function (id, details, cb) {
+      if (id !== null && typeof id === 'object') { cb = details; details = id; id = undefined; }
+      details = details || {};
+      return settleBg(scriptingCall('insertCSS', { tabId: id, css: details.code, files: details.file ? [details.file] : undefined }).then(function () { return undefined; }), cb);
+    },
     onUpdated: makeEvent([]), onActivated: makeEvent([]), onCreated: makeEvent([]), onRemoved: makeEvent([])
+  };
+
+  // ---------------------------------------------------------------- chrome.scripting
+  function scriptingCall(method, args) {
+    return new Promise(function (resolve) {
+      __bb_scripting(method, JSON.stringify(args || {}), function (resJSON) { resolve(parseJSON(resJSON)); });
+    });
+  }
+  function serializeInjection(injection) {
+    var payload = { target: injection.target || {}, world: injection.world || 'ISOLATED' };
+    if (injection.files) { payload.files = injection.files; }
+    else if (typeof injection.func === 'function') {
+      payload.code = '(' + injection.func.toString() + ').apply(null, ' + JSON.stringify(injection.args || []) + ')';
+    } else if (typeof injection.code === 'string') { payload.code = injection.code; }
+    return payload;
+  }
+  function cssInjection(injection) {
+    var payload = { target: injection.target || {} };
+    if (injection.files) { payload.files = injection.files; } else { payload.css = injection.css || ''; }
+    return payload;
+  }
+  var scripting = {
+    executeScript: function (injection, cb) { return settleBg(scriptingCall('executeScript', serializeInjection(injection)), cb); },
+    insertCSS: function (injection, cb) { return settleBg(scriptingCall('insertCSS', cssInjection(injection)).then(function () { return undefined; }), cb); },
+    removeCSS: function (injection, cb) { return settleBg(scriptingCall('removeCSS', cssInjection(injection)).then(function () { return undefined; }), cb); }
   };
 
   var chrome = {
@@ -257,6 +292,7 @@
     action: action,
     browserAction: action,
     tabs: tabs,
+    scripting: scripting,
     i18n: { getMessage: getMessage, getUILanguage: function () { return 'en-US'; }, getAcceptLanguages: function (cb) { if (typeof cb === 'function') { cb(['en-US', 'en']); } } },
     extension: { getURL: getURL }
   };
