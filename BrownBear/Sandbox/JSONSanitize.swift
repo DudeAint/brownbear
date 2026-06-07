@@ -14,8 +14,12 @@ import Foundation
 
 enum JSONSanitize {
 
-    /// Recursively replace non-finite floating-point numbers (NaN, +/-Infinity) with NSNull so the
-    /// value is always JSON-serializable. Containers are rebuilt; bools/ints/strings pass through.
+    /// Recursively normalise a JS-bridged value into something `JSONSerialization` can always write:
+    /// non-finite floating-point numbers (NaN, +/-Infinity) become NSNull, and any value that is not a
+    /// JSON-representable type at all (Data, Date, a custom object …) also fails closed to NSNull. The
+    /// latter matters because `data(withJSONObject:)` raises an *uncatchable* Obj-C exception on invalid
+    /// objects, not a Swift error — so we must never hand it one. Containers are rebuilt; bools/ints/
+    /// strings/null pass through; the validity check is per-value, so one bad leaf can't void its siblings.
     static func finite(_ value: Any) -> Any {
         switch value {
         case let dict as [String: Any]:
@@ -30,16 +34,26 @@ enum JSONSanitize {
             return double.isFinite ? double : NSNull()
         case let float as Float:
             return float.isFinite ? float : NSNull()
-        default:
+        case is String, is NSNull:
             return value
+        default:
+            // Anything else: keep it only if it is genuinely JSON-representable, else fail closed to
+            // null. `isValidJSONObject` only inspects structure and never raises (unlike the serializer),
+            // so wrapping the leaf in an array lets us probe a bare value without risking the exception.
+            return JSONSerialization.isValidJSONObject([value]) ? value : NSNull()
         }
     }
 
-    /// Serialize to a JSON string after sanitizing non-finite numbers. Fails closed to "null". The
-    /// default `.fragmentsAllowed` matches the bridge serializers (a bare string/number is valid here).
+    /// Serialize to a JSON string after sanitizing the value. Fails closed to "null". The default
+    /// `.fragmentsAllowed` matches the bridge serializers (a bare string/number is valid here).
     static func string(_ value: Any,
                        options: JSONSerialization.WritingOptions = [.fragmentsAllowed]) -> String {
-        if let data = try? JSONSerialization.data(withJSONObject: finite(value), options: options),
+        let sanitized = finite(value)
+        // Final gate before the serializer: wrap in an array so bare fragments validate too
+        // (`isValidJSONObject` rejects a bare string/number at top level). This catches anything
+        // `finite` could not normalise without ever risking the Obj-C exception we guard against.
+        guard JSONSerialization.isValidJSONObject([sanitized]) else { return "null" }
+        if let data = try? JSONSerialization.data(withJSONObject: sanitized, options: options),
            let string = String(data: data, encoding: .utf8) {
             return string
         }
