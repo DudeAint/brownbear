@@ -415,35 +415,47 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
                                                    webView: webView,
                                                    frameInfo: frameInfo))
             let values = await valueStore.snapshot(scriptID: script.id)
-            result.append(Self.scriptPayload(script, token: token, values: values))
+            // A private/incognito tab is backed by a non-persistent WKWebsiteDataStore
+            // (WebViewConfigurationFactory uses WKWebsiteDataStore.nonPersistent() for private tabs).
+            // Surface it as GM_info.isIncognito so privacy-aware scripts can adapt. Defaults to false
+            // when the web view is gone (shouldn't happen during getScripts, but fail to non-private).
+            let isIncognito = webView.map { $0.configuration.websiteDataStore.isPersistent == false } ?? false
+            result.append(Self.scriptPayload(script, token: token, values: values, isIncognito: isIncognito))
         }
         return result
     }
 
-    private static func scriptPayload(_ script: UserScript, token: String, values: [String: String]) -> [String: Any] {
+    /// The host/app version surfaced as `GM_info.version` (the userscript-manager version, NOT the
+    /// script's own @version — that lives under `GM_info.script.version`). Tampermonkey parity.
+    private static let handlerVersion: String =
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+
+    private static func scriptPayload(_ script: UserScript,
+                                      token: String,
+                                      values: [String: String],
+                                      isIncognito: Bool) -> [String: Any] {
         let meta = script.metadata
         // Honor any per-script override (the "script settings" surface) over the declared directive,
         // so the runtime gates injection and picks the execution world by the effective values and
         // GM_info reflects what actually runs.
         let runAt = script.effectiveRunAt.rawValue
         let injectInto = script.effectiveInjectInto.rawValue
-        let info: [String: Any] = [
-            "scriptHandler": "BrownBear",
-            "version": "0.1.0",
-            "scriptMetaStr": meta.metadataBlock,
-            "script": [
-                "name": meta.name,
-                "namespace": meta.namespace ?? "",
-                "version": meta.version ?? "",
-                "description": meta.descriptionText ?? "",
-                "grant": meta.effectiveGrants,
-                "connects": meta.connects,
-                "runAt": runAt
-            ]
-        ]
+
+        // Whether THIS script will be picked up by the automatic update pass. Mirrors UpdateService
+        // eligibility: a per-script override wins, else the global setting, and only scripts that
+        // actually declare a download/update source are updatable. Surfaced as GM_info.scriptWillUpdate
+        // (Tampermonkey/Violentmonkey parity).
+        let hasUpdateSource = (meta.downloadURL?.isEmpty == false) || (meta.updateURL?.isEmpty == false)
+        let scriptWillUpdate = hasUpdateSource && (script.overrides?.autoUpdate ?? AppSettings.autoUpdateScripts)
+
+        let scriptObject = scriptSubObject(meta, runAt: runAt, scriptWillUpdate: scriptWillUpdate)
+        let info = gmInfo(script, meta: meta, isIncognito: isIncognito, runAt: runAt,
+                          injectInto: injectInto, scriptObject: scriptObject,
+                          scriptWillUpdate: scriptWillUpdate)
         return [
             "token": token,
             "name": meta.name,
+            "uuid": script.id.uuidString,
             "runAt": runAt,
             "grants": meta.effectiveGrants,
             "grantNone": meta.grantsNone,
@@ -454,6 +466,90 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
             "source": script.executableBody,
             "values": values,
             "info": info
+        ]
+    }
+
+    /// The full `GM_info.script` sub-object Tampermonkey/Violentmonkey expose. Empty optionals become
+    /// empty strings (never JS `undefined` over the bridge) so scripts can read fields uniformly.
+    private static func scriptSubObject(_ meta: ScriptMetadata,
+                                        runAt: String,
+                                        scriptWillUpdate: Bool) -> [String: Any] {
+        [
+            "name": meta.name,
+            "namespace": meta.namespace ?? "",
+            "version": meta.version ?? "",
+            "description": meta.descriptionText ?? "",
+            "author": meta.author ?? "",
+            "homepage": meta.homepageURL ?? "",
+            "homepageURL": meta.homepageURL ?? "",
+            "icon": meta.iconURL ?? "",
+            "icon64": meta.iconURL ?? "",
+            "updateURL": meta.updateURL ?? "",
+            "downloadURL": meta.downloadURL ?? "",
+            "supportURL": "",
+            "grant": meta.effectiveGrants,
+            "connects": meta.connects,
+            "connect": meta.connects,
+            "matches": meta.matches,
+            "includes": meta.includes,
+            "excludes": meta.excludes,
+            "excludeMatches": meta.excludeMatches,
+            "requires": meta.requires,
+            "resources": meta.resources.map { ["name": $0.key, "url": $0.value] },
+            "run-at": runAt,
+            "runAt": runAt,
+            "noframes": meta.noFrames,
+            "unwrap": false,
+            "header": meta.metadataBlock,
+            "options": [
+                "check_for_updates": scriptWillUpdate,
+                "comment": NSNull(),
+                "compatopts_for_requires": true,
+                "compat_wrappedjsobject": false,
+                "compat_metadata": false,
+                "run_at": runAt,
+                "override": [
+                    "use_includes": meta.includes,
+                    "use_matches": meta.matches,
+                    "use_excludes": meta.excludes,
+                    "use_connects": meta.connects
+                ]
+            ]
+        ]
+    }
+
+    /// The top-level `GM_info` object. Built entirely from data the script itself declared plus
+    /// app-known facts (handler version, incognito) — no cross-script leakage.
+    private static func gmInfo(_ script: UserScript,
+                               meta: ScriptMetadata,
+                               isIncognito: Bool,
+                               runAt: String,
+                               injectInto: String,
+                               scriptObject: [String: Any],
+                               scriptWillUpdate: Bool) -> [String: Any] {
+        [
+            "uuid": script.id.uuidString,
+            "scriptHandler": "BrownBear",
+            "version": Self.handlerVersion,
+            "scriptMetaStr": meta.metadataBlock,
+            "scriptUpdateURL": meta.updateURL ?? meta.downloadURL ?? "",
+            "scriptWillUpdate": scriptWillUpdate,
+            "scriptSource": script.source,
+            "downloadMode": "native",
+            "isIncognito": isIncognito,
+            "sandboxMode": "js",
+            "injectInto": injectInto,
+            "runAt": runAt,
+            // A private/incognito session uses an ephemeral data store; a normal session shares the
+            // default container. ScriptCat/TM expose `container` so value-store scoping is visible.
+            "container": isIncognito ? "incognito" : "default",
+            "platform": [
+                "arch": "arm64",
+                "browserName": "BrownBear",
+                "browserVersion": Self.handlerVersion,
+                "os": "ios"
+            ],
+            "script": scriptObject
         ]
     }
 

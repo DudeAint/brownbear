@@ -472,8 +472,24 @@
       return { abort: function () {} };
     }
 
+    // GM_info: native supplies the full object (uuid, version, scriptHandler, scriptMetaStr,
+    // scriptWillUpdate, downloadMode, isIncognito, platform, container, sandboxMode, and a complete
+    // `script` sub-object). We deep-freeze it so a hostile page (or the script itself) can't mutate
+    // the identity/metadata other code may trust. `scriptHandler` is asserted defensively in case an
+    // old native payload omits it. Tampermonkey/Violentmonkey/ScriptCat parity.
     var GM_info = data.info || {};
-    GM_info.scriptHandler = "BrownBear";
+    if (!GM_info.scriptHandler) { GM_info.scriptHandler = "BrownBear"; }
+    function deepFreeze(o) {
+      if (o && (typeof o === "object")) {
+        _Object.keys(o).forEach(function (k) {
+          var v = o[k];
+          if (v && typeof v === "object") { deepFreeze(v); }
+        });
+        try { _Object.freeze(o); } catch (e) { /* frozen-already / non-extensible host obj */ }
+      }
+      return o;
+    }
+    deepFreeze(GM_info);
 
     var GM = {
       info: GM_info,
@@ -492,6 +508,7 @@
       openInTab: function (u, o) { return _Promise.resolve(GM_openInTab(u, o)); },
       getResourceText: function (n) { return _Promise.resolve(GM_getResourceText(n)); },
       getResourceUrl: function (n) { return _Promise.resolve(GM_getResourceURL(n)); },
+      getResourceURL: function (n) { return _Promise.resolve(GM_getResourceURL(n)); },
       log: function () { GM_log.apply(null, arguments); return _Promise.resolve(); },
       xmlHttpRequest: function (details) {
         var handle = startXHR(details, token);
