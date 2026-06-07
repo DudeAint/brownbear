@@ -291,4 +291,45 @@ extension BrownBearTabGridController: UICollectionViewDelegate {
               let tab = tabManager.tab(for: tabID) else { return }
         gridDelegate?.tabGrid(self, didSelect: tab)
     }
+
+    /// Per-tab long-press menu (Chrome/Safari pattern): act on a tab without first switching to it.
+    func collectionView(_ collectionView: UICollectionView,
+                        contextMenuConfigurationForItemAt indexPath: IndexPath,
+                        point: CGPoint) -> UIContextMenuConfiguration? {
+        guard let tabID = dataSource.itemIdentifier(for: indexPath),
+              let tab = tabManager.tab(for: tabID) else { return nil }
+        return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
+            guard let self else { return nil }
+            var actions: [UIMenuElement] = []
+            if let url = tab.state.url {
+                actions.append(UIAction(title: "Copy Link", image: UIImage(systemName: "link")) { _ in
+                    UIPasteboard.general.url = url
+                })
+                actions.append(UIAction(title: "Share…", image: UIImage(systemName: "square.and.arrow.up")) { _ in
+                    self.shareTab(url: url, at: indexPath)
+                })
+            }
+            if self.displayedTabs.count > 1 {
+                actions.append(UIAction(title: "Close Other Tabs",
+                                        image: UIImage(systemName: "xmark.circle")) { _ in
+                    self.tabManager.closeOtherTabs(keeping: tabID)
+                    self.reconcileAfterMutation()
+                })
+            }
+            actions.append(UIAction(title: "Close Tab", image: UIImage(systemName: "xmark"),
+                                    attributes: .destructive) { _ in
+                self.closeTab(id: tabID)
+            })
+            return UIMenu(children: actions)
+        }
+    }
+
+    private func shareTab(url: URL, at indexPath: IndexPath) {
+        let activity = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        if let cell = collectionView.cellForItem(at: indexPath) {
+            activity.popoverPresentationController?.sourceView = cell
+            activity.popoverPresentationController?.sourceRect = cell.bounds
+        }
+        present(activity, animated: true)
+    }
 }

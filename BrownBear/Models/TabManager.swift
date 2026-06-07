@@ -155,6 +155,23 @@ final class TabManager {
         }
     }
 
+    /// Close every tab except `id`, which becomes active (the grid's "Close Other Tabs").
+    func closeOtherTabs(keeping id: UUID) {
+        guard tabs.contains(where: { $0.id == id }) else { return }
+        let others = tabs.filter { $0.id != id }
+        guard !others.isEmpty else { return }
+        let removedPrivate = others.contains { $0.isPrivate }
+        let previous = activeTab
+        others.forEach { $0.stopLoading() }
+        tabs.removeAll { $0.id != id }
+        delegate?.tabManager(self, didUpdate: tabs)
+        if removedPrivate, !hasPrivateTabs { wipePrivateDataStore() }
+        if activeTabID != id {
+            activeTabID = id
+            delegate?.tabManager(self, didActivate: tabs.first { $0.id == id }, previous: previous)
+        }
+    }
+
     // MARK: - Private data lifecycle
 
     /// After closing one tab, wipe the private data store if that tab was the last private one, so a
