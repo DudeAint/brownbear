@@ -86,6 +86,13 @@ final class WebExtensionRuntime {
         return await context.deliverRuntimeMessage(message: message, sender: sender)
     }
 
+    /// Deliver chrome.action.onClicked to an extension's background worker (when the action has no
+    /// popup). No-op if the extension has no running background context. `tab` is a chrome.tabs Tab
+    /// record (or nil if there's no active tab).
+    func fireActionClicked(extensionID: String, tab: [String: Any]?) {
+        contexts[extensionID]?.fireActionClicked(tab: tab)
+    }
+
     // MARK: - Reconciliation
 
     /// Bring the running set of background contexts in line with the enabled extensions. Coalesced:

@@ -215,6 +215,54 @@
     };
   }
 
+  // --- chrome.action / chrome.browserAction (extension page) ----------------------------------
+  var actionClickedListeners = [];
+  function actionApi() {
+    function setter(api) {
+      return function (details, callback) {
+        details = details || {};
+        var payload = {};
+        for (var k in details) { if (_Object.prototype.hasOwnProperty.call(details, k)) { payload[k] = details[k]; } }
+        return settle(bridge(api, payload).then(function () { return undefined; }), callback);
+      };
+    }
+    function getter(api) {
+      return function (details, callback) {
+        if (typeof details === "function") { callback = details; details = {}; }
+        return settle(bridge(api, details || {}), callback);
+      };
+    }
+    function toggle(api) {
+      return function (tabId, callback) {
+        if (typeof tabId === "function") { callback = tabId; tabId = undefined; }
+        return settle(bridge(api, { tabId: tabId }).then(function () { return undefined; }), callback);
+      };
+    }
+    function setIcon(details, callback) {
+      details = details || {};
+      var payload = { tabId: details.tabId };
+      if (typeof details.path === "string") { payload.path = details.path; }
+      else if (details.path && typeof details.path === "object") {
+        var map = {}; for (var k in details.path) { if (typeof details.path[k] === "string") { map[k] = details.path[k]; } }
+        payload.path = map;
+      }
+      return settle(bridge("action.setIcon", payload).then(function () { return undefined; }), callback);
+    }
+    return {
+      setBadgeText: setter("action.setBadgeText"),
+      setBadgeBackgroundColor: setter("action.setBadgeBackgroundColor"),
+      setTitle: setter("action.setTitle"),
+      setPopup: setter("action.setPopup"),
+      setIcon: setIcon,
+      enable: toggle("action.enable"),
+      disable: toggle("action.disable"),
+      getBadgeText: getter("action.getBadgeText"),
+      getTitle: getter("action.getTitle"),
+      getBadgeBackgroundColor: getter("action.getBadgeBackgroundColor"),
+      onClicked: makeEvent(actionClickedListeners)
+    };
+  }
+
   var chrome = {
     storage: {
       local: storageArea("local"),
@@ -224,6 +272,8 @@
     },
     cookies: cookiesApi(),
     notifications: notificationsApi(),
+    action: actionApi(),
+    browserAction: actionApi(),
     runtime: {
       id: data.extensionId,
       getManifest: function () { return manifest; },

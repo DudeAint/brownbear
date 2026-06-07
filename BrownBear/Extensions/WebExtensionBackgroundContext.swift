@@ -178,6 +178,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
         installMessagingNatives(into: context)
         installCookiesNatives(into: context)
         installNotificationNatives(into: context)
+        installActionNatives(into: context)
 
         // chrome.tabs from the background worker. Hop to the main actor (TabManager is MainActor),
         // run the op, then call back onto this context's queue with the JSON result.
@@ -682,6 +683,74 @@ extension WebExtensionBackgroundContext {
             default:
                 break
             }
+        }
+    }
+
+    /// chrome.action / chrome.browserAction from the background worker. State writes/reads hop to the
+    /// main actor (WebExtensionActionState is @MainActor), then call back on this context's queue with
+    /// the JSON result. chrome.action needs no permission (Chrome gates it on the manifest action entry).
+    private func installActionNatives(into context: JSContext) {
+        let action: @convention(block) (String, String, JSValue) -> Void = { [weak self] method, argsJSON, callback in
+            guard let self else { return }
+            let args = ((try? JSONSerialization.jsonObject(with: Data(argsJSON.utf8))) as? [String: Any]) ?? [:]
+            let extensionID = self.extensionID
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let result = WebExtensionBackgroundContext.dispatchAction(
+                    state: BrownBearServices.shared.webExtensionActionState,
+                    extensionID: extensionID, method: method, args: args)
+                self.callBack(callback, with: self.jsonString(result))
+            }
+        }
+        context.setObject(action, forKeyedSubscript: "__bb_action" as NSString)
+    }
+
+    /// Map a chrome.action method + args to WebExtensionActionState, returning a JSON-serializable
+    /// value (NSNull for the void setters, the read value for the getters).
+    @MainActor
+    private static func dispatchAction(state: WebExtensionActionState, extensionID: String,
+                                       method: String, args: [String: Any]) -> Any {
+        let tabId = args["tabId"] as? Int
+        switch method {
+        case "setBadgeText":
+            state.setBadgeText(extensionID: extensionID, tabId: tabId, text: args["text"] as? String)
+            return NSNull()
+        case "setBadgeBackgroundColor":
+            state.setBadgeColor(extensionID: extensionID, tabId: tabId, color: args["color"] as? String)
+            return NSNull()
+        case "setTitle":
+            state.setTitle(extensionID: extensionID, tabId: tabId, title: args["title"] as? String)
+            return NSNull()
+        case "setPopup":
+            state.setPopup(extensionID: extensionID, tabId: tabId, popup: args["popup"] as? String)
+            return NSNull()
+        case "setIcon":
+            state.setIcon(extensionID: extensionID, tabId: tabId,
+                          path: WebExtensionActionState.iconPath(from: args["path"]))
+            return NSNull()
+        case "enable":
+            state.setEnabled(extensionID: extensionID, tabId: tabId, true)
+            return NSNull()
+        case "disable":
+            state.setEnabled(extensionID: extensionID, tabId: tabId, false)
+            return NSNull()
+        case "getBadgeText":
+            return state.badgeText(extensionID: extensionID, tabId: tabId)
+        case "getTitle":
+            return state.title(extensionID: extensionID, tabId: tabId)
+        case "getBadgeBackgroundColor":
+            return state.badgeColorBytes(extensionID: extensionID, tabId: tabId)
+        default:
+            return NSNull()
+        }
+    }
+
+    /// Fire chrome.action.onClicked into this worker with a Tab record (or null if no active tab).
+    /// Called from the main actor (the browser's action trigger); hops to `queue` to touch the JS.
+    func fireActionClicked(tab: [String: Any]?) {
+        let tabJSON = jsonString(tab ?? NSNull())
+        queue.async { [self] in
+            fire(method: "dispatchActionClicked", arguments: [tabJSON])
         }
     }
 }
