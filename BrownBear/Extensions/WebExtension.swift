@@ -23,18 +23,25 @@ extension Notification.Name {
 
 struct WebExtension: Codable, Identifiable, Equatable {
 
-    /// A Chrome-style 32-character extension id (lowercase a–p).
+    /// A Chrome-style 32-character extension id (lowercase a–p). Generated locally — it is NOT the
+    /// Chrome Web Store id (which derives from the developer key), so use `storeID` to match a record
+    /// back to a store page.
     let id: String
     /// The verbatim manifest.json, re-parsed on demand.
     var manifestJSON: String
     var enabled: Bool
     var installedAt: Date
+    /// The Chrome Web Store id this was installed from (when installed via the store path), so the
+    /// in-page store button can tell "already added" and offer Remove. `nil` for sideloaded archives.
+    var storeID: String?
 
-    init(id: String, manifestJSON: String, enabled: Bool = true, installedAt: Date = Date()) {
+    init(id: String, manifestJSON: String, enabled: Bool = true,
+         installedAt: Date = Date(), storeID: String? = nil) {
         self.id = id
         self.manifestJSON = manifestJSON
         self.enabled = enabled
         self.installedAt = installedAt
+        self.storeID = storeID
     }
 
     /// The parsed manifest (nil if the stored JSON somehow became invalid).

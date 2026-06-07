@@ -42,6 +42,13 @@ actor WebExtensionStore {
         return extensions.first { $0.id == id }
     }
 
+    /// The installed extension that originated from a given Chrome Web Store id, if any. Lets the
+    /// in-page store button reflect "already added" and offer Remove.
+    func installed(forStoreID storeID: String) -> WebExtension? {
+        loadIfNeeded()
+        return extensions.first { $0.storeID == storeID }
+    }
+
     /// Read a file packaged inside an extension (e.g. a content script or resource). Both the
     /// extension id and the path are contained: the id is the `chrome-extension://` host, which
     /// arrives from untrusted page navigations, so a host like `..` must not relocate the
@@ -67,9 +74,11 @@ actor WebExtensionStore {
 
     // MARK: - Install / manage
 
-    /// Install an extension from a `.crx`/`.zip` package. Returns the stored record.
+    /// Install an extension from a `.crx`/`.zip` package. Returns the stored record. `storeID` is the
+    /// Chrome Web Store id it came from (when installed via the store), recorded so the in-page store
+    /// button can detect "already added"; pass `nil` for a sideloaded archive.
     @discardableResult
-    func install(archive: Data) async throws -> WebExtension {
+    func install(archive: Data, storeID: String? = nil) async throws -> WebExtension {
         loadIfNeeded()
         let files = try WebExtensionArchive.unpack(archive)
         guard let manifestData = files["manifest.json"] else {
@@ -79,10 +88,16 @@ actor WebExtensionStore {
         _ = try WebExtensionManifest.parse(manifestData)
         let manifestJSON = String(decoding: manifestData, as: UTF8.self)
 
+        // Re-installing from the same store page replaces the prior copy rather than duplicating it.
+        if let storeID, let existing = extensions.first(where: { $0.storeID == storeID }) {
+            try? FileManager.default.removeItem(at: directory(for: existing.id))
+            extensions.removeAll { $0.id == existing.id }
+        }
+
         let id = WebExtension.generateID()
         try writeFiles(files, for: id)
 
-        let record = WebExtension(id: id, manifestJSON: manifestJSON)
+        let record = WebExtension(id: id, manifestJSON: manifestJSON, storeID: storeID)
         extensions.append(record)
         persist()
         return record
