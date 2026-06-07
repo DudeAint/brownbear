@@ -22,6 +22,9 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
     private let extensionName: String
     private let storage: WebExtensionStorage
     private let logSink: @Sendable (LogEntry) -> Void
+    /// chrome.tabs bridge to the browser, set by WebExtensionRuntime. Every use hops to the main actor
+    /// (the native block runs on this context's serial queue; tab ops are MainActor/UIKit).
+    weak var host: WebExtensionBridgeHost?
 
     private let queue: DispatchQueue
     private var context: JSContext?
@@ -176,6 +179,47 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
             self.resolveResponse(responseId, payload: dict)
         }
         context.setObject(messageResponse, forKeyedSubscript: "__bb_message_response" as NSString)
+
+        // chrome.tabs from the background worker. Hop to the main actor (TabManager is MainActor),
+        // run the op, then call back onto this context's queue with the JSON result.
+        let tabs: @convention(block) (String, String, JSValue) -> Void = { [weak self] method, argsJSON, callback in
+            guard let self else { return }
+            let args = ((try? JSONSerialization.jsonObject(with: Data(argsJSON.utf8))) as? [String: Any]) ?? [:]
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let result: Any = self.host.map {
+                    WebExtensionBackgroundContext.dispatchTab(host: $0, method: method, args: args)
+                } ?? NSNull()
+                self.callBack(callback, with: self.jsonString(result))
+            }
+        }
+        context.setObject(tabs, forKeyedSubscript: "__bb_tabs" as NSString)
+    }
+
+    /// Map a chrome.tabs method + args to the bridge host, returning a JSON-serializable value.
+    @MainActor
+    private static func dispatchTab(host: WebExtensionBridgeHost, method: String, args: [String: Any]) -> Any {
+        switch method {
+        case "query":
+            return host.webExtQueryTabs(args["query"] as? [String: Any] ?? [:])
+        case "get":
+            return host.webExtTab(extTabId: args["tabId"] as? Int) ?? NSNull()
+        case "create":
+            return host.webExtCreateTab(url: args["url"] as? String, active: (args["active"] as? Bool) ?? true)
+        case "update":
+            return host.webExtUpdateTab(extTabId: args["tabId"] as? Int,
+                                        url: args["url"] as? String,
+                                        active: args["active"] as? Bool) ?? NSNull()
+        case "remove":
+            let ids = (args["tabIds"] as? [Int]) ?? (args["tabId"] as? Int).map { [$0] } ?? []
+            host.webExtRemoveTabs(extTabIds: ids)
+            return NSNull()
+        case "reload":
+            host.webExtReloadTab(extTabId: args["tabId"] as? Int, bypassCache: (args["bypassCache"] as? Bool) ?? false)
+            return NSNull()
+        default:
+            return NSNull()   // getCurrent et al. — undefined in a background worker
+        }
     }
 
     private func installStorageNatives(into context: JSContext) {

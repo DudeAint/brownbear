@@ -18,6 +18,8 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
     private let store: WebExtensionStore
     private let storage: WebExtensionStorage
     private let runtime: WebExtensionRuntime
+    /// Lets chrome.tabs reach the browser's TabManager. Set via InjectionOrchestrator.
+    weak var host: WebExtensionBridgeHost?
     /// token → extension id. Minted per content-script injection / page.
     private var sessions: [String: String] = [:]
     /// Insertion order of tokens, for FIFO eviction once `sessions` exceeds `maxSessions`.
@@ -105,6 +107,44 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
         case "runtime.openOptionsPage":
             // The options page is opened from BrownBear's own UI (dashboard/browser); acknowledge so
             // the page's callback fires without error. (Programmatic navigation isn't wired here.)
+            return NSNull()
+
+        // chrome.tabs — driven through the browser's TabManager via the bridge host. A valid extension
+        // token (resolved above) is required to reach any of these.
+        case "tabs.query":
+            guard let host else { return [] }
+            return host.webExtQueryTabs(payload["query"] as? [String: Any] ?? [:])
+
+        case "tabs.get":
+            guard let host else { return NSNull() }
+            return host.webExtTab(extTabId: payload["tabId"] as? Int) ?? NSNull()
+
+        case "tabs.getCurrent":
+            // Defined as the tab the calling script runs IN — meaningful only for an extension's own
+            // full-page tab, which BrownBear doesn't host; chrome returns undefined elsewhere.
+            return NSNull()
+
+        case "tabs.create":
+            guard let host else { throw BrownBearError.bridgeRejected("no browser to open a tab") }
+            return host.webExtCreateTab(url: payload["url"] as? String,
+                                        active: (payload["active"] as? Bool) ?? true)
+
+        case "tabs.update":
+            guard let host else { return NSNull() }
+            return host.webExtUpdateTab(extTabId: payload["tabId"] as? Int,
+                                        url: payload["url"] as? String,
+                                        active: payload["active"] as? Bool) ?? NSNull()
+
+        case "tabs.remove":
+            guard let host else { return NSNull() }
+            let ids = (payload["tabIds"] as? [Int]) ?? (payload["tabId"] as? Int).map { [$0] } ?? []
+            host.webExtRemoveTabs(extTabIds: ids)
+            return NSNull()
+
+        case "tabs.reload":
+            guard let host else { return NSNull() }
+            host.webExtReloadTab(extTabId: payload["tabId"] as? Int,
+                                 bypassCache: (payload["bypassCache"] as? Bool) ?? false)
             return NSNull()
 
         default:

@@ -210,6 +210,45 @@
     getBadgeText: function (_d, cb) { if (typeof cb === 'function') { cb(''); } }
   };
 
+  // ---------------------------------------------------------------- chrome.tabs
+
+  function settleBg(promise, cb) {
+    if (typeof cb === 'function') { promise.then(function (v) { cb(v); }, function () { cb(undefined); }); return undefined; }
+    return promise;
+  }
+  function tabsCall(method, args) {
+    return new Promise(function (resolve) {
+      __bb_tabs(method, JSON.stringify(args || {}), function (resJSON) { resolve(parseJSON(resJSON)); });
+    });
+  }
+  var tabs = {
+    query: function (q, cb) { return settleBg(tabsCall('query', { query: q || {} }), cb); },
+    get: function (id, cb) { return settleBg(tabsCall('get', { tabId: id }), cb); },
+    getCurrent: function (cb) { return settleBg(tabsCall('getCurrent', {}), cb); },
+    create: function (props, cb) { props = props || {}; return settleBg(tabsCall('create', { url: props.url, active: props.active !== false }), cb); },
+    update: function (id, props, cb) {
+      if (id !== null && typeof id === 'object') { cb = props; props = id; id = undefined; }
+      props = props || {};
+      return settleBg(tabsCall('update', { tabId: id, url: props.url, active: props.active }), cb);
+    },
+    remove: function (ids, cb) {
+      var list = Array.isArray(ids) ? ids : [ids];
+      return settleBg(tabsCall('remove', { tabIds: list }).then(function () { return undefined; }), cb);
+    },
+    reload: function (id, props, cb) {
+      if (typeof id === 'function') { cb = id; id = undefined; props = {}; }
+      else if (id !== null && typeof id === 'object') { cb = props; props = id; id = undefined; }
+      props = props || {};
+      return settleBg(tabsCall('reload', { tabId: id, bypassCache: !!props.bypassCache }).then(function () { return undefined; }), cb);
+    },
+    sendMessage: function () {
+      var a = Array.prototype.slice.call(arguments);
+      var cb = (a.length && typeof a[a.length - 1] === 'function') ? a.pop() : null;
+      return settleBg(Promise.resolve(undefined), cb);   // bg→content delivery: Phase 3
+    },
+    onUpdated: makeEvent([]), onActivated: makeEvent([]), onCreated: makeEvent([]), onRemoved: makeEvent([])
+  };
+
   var chrome = {
     runtime: runtime,
     storage: storage,
@@ -217,6 +256,7 @@
     commands: commands,
     action: action,
     browserAction: action,
+    tabs: tabs,
     i18n: { getMessage: getMessage, getUILanguage: function () { return 'en-US'; }, getAcceptLanguages: function (cb) { if (typeof cb === 'function') { cb(['en-US', 'en']); } } },
     extension: { getURL: getURL }
   };

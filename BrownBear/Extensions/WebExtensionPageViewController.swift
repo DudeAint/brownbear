@@ -53,6 +53,9 @@ final class WebExtensionPageViewController: UIViewController {
         self.router = WebExtensionMessageRouter(store: store, storage: storage, runtime: runtime)
         self.schemeHandler = WebExtensionSchemeHandler(extensionID: ext.id, store: store)
         super.init(nibName: nil, bundle: nil)
+        // The popup runs its own router instance, so give it the same chrome.tabs bridge the runtime
+        // holds (set when the browser VC loaded), or popups couldn't open/query tabs.
+        self.router.host = runtime.host
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }

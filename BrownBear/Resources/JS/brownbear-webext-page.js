@@ -90,6 +90,36 @@
     return text;
   }
 
+  function tabsApi() {
+    function query(queryInfo, callback) { return settle(bridge("tabs.query", { query: queryInfo || {} }), callback); }
+    function get(tabId, callback) { return settle(bridge("tabs.get", { tabId: tabId }), callback); }
+    function getCurrent(callback) { return settle(bridge("tabs.getCurrent", {}), callback); }
+    function create(props, callback) {
+      props = props || {};
+      return settle(bridge("tabs.create", { url: props.url, active: props.active !== false }), callback);
+    }
+    function update(tabId, props, callback) {
+      if (tabId !== null && typeof tabId === "object") { callback = props; props = tabId; tabId = undefined; }
+      props = props || {};
+      return settle(bridge("tabs.update", { tabId: tabId, url: props.url, active: props.active }), callback);
+    }
+    function remove(tabIds, callback) {
+      var ids = _Array.isArray(tabIds) ? tabIds : [tabIds];
+      return settle(bridge("tabs.remove", { tabIds: ids }).then(function () { return undefined; }), callback);
+    }
+    function reload(tabId, props, callback) {
+      if (typeof tabId === "function") { callback = tabId; tabId = undefined; props = {}; }
+      else if (tabId !== null && typeof tabId === "object") { callback = props; props = tabId; tabId = undefined; }
+      props = props || {};
+      return settle(bridge("tabs.reload", { tabId: tabId, bypassCache: !!props.bypassCache }).then(function () { return undefined; }), callback);
+    }
+    var noop = { addListener: function () {}, removeListener: function () {}, hasListener: function () { return false; } };
+    return {
+      query: query, get: get, getCurrent: getCurrent, create: create, update: update, remove: remove, reload: reload,
+      onUpdated: noop, onActivated: noop, onCreated: noop, onRemoved: noop
+    };
+  }
+
   var storageListeners = [];
   var messageListeners = [];
 
@@ -120,6 +150,7 @@
       lastError: null,
       getPlatformInfo: function (cb) { var info = { os: "ios", arch: "arm64", nacl_arch: "arm64" }; if (typeof cb === "function") { cb(info); return undefined; } return _Promise.resolve(info); }
     },
+    tabs: tabsApi(),
     i18n: {
       getMessage: i18nGetMessage,
       getUILanguage: function () { return (W.navigator && W.navigator.language) || "en"; }

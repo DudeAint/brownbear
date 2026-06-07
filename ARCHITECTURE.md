@@ -146,6 +146,12 @@ it reuses the same trust boundary and injection plumbing.
   we implement `GM_*` — a `WKScriptMessageHandler` bridge to native Swift services
   (`storage`, `tabs`, `runtime`, `webRequest`-lite, `scripting`, `i18n`, `alarms`). The existing
   sandbox (Module 3) and background scheduler (Module 4) are the foundation.
+  - `chrome.tabs` (create/query/get/update/remove/reload) reaches `TabManager` via
+    `WebExtensionBridgeHost` (the extension analog of the userscript `ScriptBridgeHost`),
+    implemented by the browser VC and forwarded by `InjectionOrchestrator` to all three surfaces:
+    the content/popup `WebExtensionMessageRouter` and the headless background workers (which hop to
+    the main actor). chrome tab ids are integers, so `WebExtensionTabRegistry` maps `Tab.id` (UUID)
+    to a stable Int. windowId is always 1 (iOS is single-window).
 - **CRX ingestion:** accept `.crx`/`.zip` extension bundles and Chrome Web Store URLs; unpack,
   validate, and store like a script package.
 - **Reality check (iOS constraints):** Apple mandates WebKit, so we cannot run Chromium's
