@@ -40,12 +40,12 @@ final class ChromeWebStoreBannerTests: XCTestCase {
 
     func testNameFromSlug() {
         let detail = url("https://chromewebstore.google.com/detail/dark-reader/\(sampleID)")
-        XCTAssertEqual(BrownBearBrowserViewController.chromeWebStoreName(from: detail), "Dark Reader")
+        XCTAssertEqual(BrownBearBrowserViewController.storeExtensionName(from: detail), "Dark Reader")
     }
 
     func testNameFallsBackWhenNoSlug() {
         // id directly under /detail with no slug component before it.
         let detail = url("https://chromewebstore.google.com/\(sampleID)")
-        XCTAssertEqual(BrownBearBrowserViewController.chromeWebStoreName(from: detail), "this extension")
+        XCTAssertEqual(BrownBearBrowserViewController.storeExtensionName(from: detail), "this extension")
     }
 }
