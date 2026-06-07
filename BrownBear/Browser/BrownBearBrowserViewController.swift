@@ -45,6 +45,7 @@ final class BrownBearBrowserViewController: UIViewController {
         omnibox.delegate = self
         toolbar.delegate = self
         injection.bridgeHost = self
+        DownloadManager.shared.onDownloadStarted = { [weak self] in self?.presentDownloadStartedToast() }
         buildHierarchy()
     }
 
@@ -680,19 +681,19 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
     func webView(_ webView: WKWebView,
                  navigationResponse: WKNavigationResponse,
                  didBecome download: WKDownload) {
+        // begin() sets the delegate; the manager asks the user to confirm before any bytes are
+        // written, and fires onDownloadStarted (→ the toast) only once a download actually begins.
         DownloadManager.shared.begin(download)
-        presentDownloadStartedToast()
     }
 
     func webView(_ webView: WKWebView,
                  navigationAction: WKNavigationAction,
                  didBecome download: WKDownload) {
         DownloadManager.shared.begin(download)
-        presentDownloadStartedToast()
     }
 
-    /// A brief, non-modal confirmation that a download began. Tapping it opens the Downloads list;
-    /// otherwise it fades away after a couple of seconds.
+    /// A brief, non-modal confirmation that a download began (fired post-confirm via the manager's
+    /// onDownloadStarted). Tapping it opens the Downloads list; otherwise it fades after a moment.
     private func presentDownloadStartedToast() {
         var config = UIButton.Configuration.filled()
         config.title = "Download started — tap to view"

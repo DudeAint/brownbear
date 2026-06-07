@@ -44,7 +44,13 @@ struct DownloadsView: View {
                     Button("Done", action: onClose).fontWeight(.semibold)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Clear finished") { manager.clearFinished() }
+                    Button(action: openDownloadsFolder) {
+                        Image(systemName: "folder")
+                    }
+                    .accessibilityLabel("Open Downloads in Files")
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Clear") { manager.clearFinished() }
                         .disabled(!manager.downloads.contains(where: \.isFinished))
                 }
             }
@@ -55,6 +61,20 @@ struct DownloadsView: View {
     private func delete(_ offsets: IndexSet) {
         let ids = offsets.map { manager.downloads[$0].id }
         for id in ids { manager.remove(id: id) }
+    }
+
+    /// Open the app's Downloads folder in the Files app via the shareddocuments scheme. Works because
+    /// the app exposes its Documents directory to Files (UIFileSharingEnabled +
+    /// LSSupportsOpeningDocumentsInPlace in Info.plist).
+    private func openDownloadsFolder() {
+        let fm = FileManager.default
+        guard let docs = try? fm.url(for: .documentDirectory, in: .userDomainMask,
+                                     appropriateFor: nil, create: true) else { return }
+        let downloads = docs.appendingPathComponent("Downloads", isDirectory: true)
+        try? fm.createDirectory(at: downloads, withIntermediateDirectories: true)
+        guard var components = URLComponents(url: downloads, resolvingAgainstBaseURL: false) else { return }
+        components.scheme = "shareddocuments"
+        if let url = components.url { UIApplication.shared.open(url) }
     }
 }
 

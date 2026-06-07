@@ -70,6 +70,10 @@ targets:
           - com.brownbear.processing
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
+        # Expose the app's Documents (incl. Downloads) in the Files app and the on-device Files
+        # browser, so the Downloads screen's "Open in Files" lands on the real folder.
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.brownbear.app

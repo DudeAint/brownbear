@@ -26,6 +26,10 @@ final class DownloadManager: NSObject, ObservableObject {
     private var idsByDownload: [ObjectIdentifier: UUID] = [:]
     private var progressObservations: [UUID: NSKeyValueObservation] = [:]
 
+    /// Called (on the main thread) after the user confirms and a download actually begins, so the
+    /// browser chrome can surface a "downloading…" affordance. Set by the browser controller.
+    var onDownloadStarted: (() -> Void)?
+
     private override init() { super.init() }
 
     /// Attach as the download's delegate. Called from the browser controller when WebKit converts a
@@ -98,11 +102,36 @@ extension DownloadManager: WKDownloadDelegate {
                   suggestedFilename: String,
                   completionHandler: @escaping (URL?) -> Void) {
         let destination = uniqueDestination(in: downloadsDirectory(), fileName: suggestedFilename)
+        // Confirm before saving anything: this app runs untrusted pages, so a navigation turning
+        // into a file download is something the user must explicitly accept. Cancelling passes a nil
+        // destination, which tells WebKit to abort the download (nothing is written).
+        let host = response.url?.host.map { " from \($0)" } ?? ""
+        var size = ""
+        if response.expectedContentLength > 0 {
+            size = "\n" + ByteCountFormatter.string(fromByteCount: response.expectedContentLength, countStyle: .file)
+        }
+        let alert = UIAlertController(
+            title: "Download File?",
+            message: "“\(destination.lastPathComponent)”\(host)\(size)",
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Download", style: .default) { [weak self] _ in
+            self?.startDownload(download, to: destination, completionHandler: completionHandler)
+        })
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in
+            completionHandler(nil)
+        })
+        TopViewControllerPresenter.present(alert)
+    }
+
+    /// Register the confirmed download, begin observing its byte progress, and hand WebKit the
+    /// destination so it starts writing.
+    private func startDownload(_ download: WKDownload,
+                               to destination: URL,
+                               completionHandler: @escaping (URL?) -> Void) {
         let item = DownloadItem(fileName: destination.lastPathComponent, localURL: destination)
         downloads.insert(item, at: 0)
         idsByDownload[ObjectIdentifier(download)] = item.id
-
-        // Observe byte progress; KVO may fire off the main thread, so hop back for @Published.
+        // KVO may fire off the main thread, so hop back for @Published.
         progressObservations[item.id] = download.progress.observe(\.fractionCompleted) { [weak self] progress, _ in
             let fraction = progress.fractionCompleted
             DispatchQueue.main.async {
@@ -110,6 +139,7 @@ extension DownloadManager: WKDownloadDelegate {
             }
         }
         completionHandler(destination)
+        onDownloadStarted?()
     }
 
     func downloadDidFinish(_ download: WKDownload) {
