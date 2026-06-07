@@ -27,6 +27,7 @@ final class WebExtensionContentBlocker {
     }
 
     private let store: WebExtensionStore
+    private let dnrStore: WebExtensionDNRStore
     private let ruleListStore: WKContentRuleListStore?
     private(set) var reports: [Report] = []
     // Single-flight: refresh suspends at every await, and it's fired fire-and-forget from boot AND
@@ -36,8 +37,10 @@ final class WebExtensionContentBlocker {
     private var refreshRequested = false
 
     init(store: WebExtensionStore = BrownBearServices.shared.webExtensionStore,
+         dnrStore: WebExtensionDNRStore = BrownBearServices.shared.webExtensionDNRStore,
          ruleListStore: WKContentRuleListStore? = WKContentRuleListStore.default()) {
         self.store = store
+        self.dnrStore = dnrStore
         self.ruleListStore = ruleListStore
     }
 
@@ -63,38 +66,46 @@ final class WebExtensionContentBlocker {
 
         if let ruleListStore {
             for ext in await store.enabledExtensions() {
-                guard let manifest = ext.manifest, !manifest.declarativeNetRequest.isEmpty else { continue }
-                for ruleset in manifest.declarativeNetRequest where ruleset.enabled {
-                    let identifier = "brownbear-dnr-\(ext.id)-\(ruleset.id)"
+                guard let manifest = ext.manifest else { continue }
+                // Enabled static rulesets = manifest defaults overlaid with updateEnabledRulesets().
+                let manifestDefaults = manifest.declarativeNetRequest.filter(\.enabled).map(\.id)
+                let enabledIDs = await dnrStore.enabledRulesetIDs(extensionID: ext.id, manifestDefaults: manifestDefaults)
+                var staticRules: [[String: Any]] = []
+                for ruleset in manifest.declarativeNetRequest where enabledIDs.contains(ruleset.id) {
+                    guard let data = await store.file(extensionID: ext.id, path: ruleset.path),
+                          let arr = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { continue }
+                    staticRules.append(contentsOf: arr)
+                }
+                let dynamicRules = await dnrStore.getDynamicRules(extensionID: ext.id)
+                let sessionRules = await dnrStore.getSessionRules(extensionID: ext.id)
+                // Nothing to enforce for this extension (no static rulesets AND no runtime rules).
+                if staticRules.isEmpty && dynamicRules.isEmpty && sessionRules.isEmpty { continue }
 
-                    guard let data = await store.file(extensionID: ext.id, path: ruleset.path) else {
-                        newReports.append(Report(extensionID: ext.id, extensionName: ext.displayName,
-                                                 rulesetID: ruleset.id, compiledCount: 0, skippedCount: 0,
-                                                 error: "ruleset file '\(ruleset.path)' not found"))
-                        continue
-                    }
-
-                    let result = DeclarativeNetRequest.compile(rulesetData: data)
-                    guard !result.isEmpty else {
-                        newReports.append(Report(extensionID: ext.id, extensionName: ext.displayName,
-                                                 rulesetID: ruleset.id, compiledCount: 0,
-                                                 skippedCount: result.skippedCount,
-                                                 error: result.warnings.first ?? "no rules compiled"))
-                        continue
-                    }
-
-                    do {
-                        let list = try await compile(store: ruleListStore, identifier: identifier, json: result.json)
-                        compiledLists.append(list)
-                        newReports.append(Report(extensionID: ext.id, extensionName: ext.displayName,
-                                                 rulesetID: ruleset.id, compiledCount: result.compiledCount,
-                                                 skippedCount: result.skippedCount, error: nil))
-                    } catch {
-                        newReports.append(Report(extensionID: ext.id, extensionName: ext.displayName,
-                                                 rulesetID: ruleset.id, compiledCount: 0,
-                                                 skippedCount: result.skippedCount,
-                                                 error: error.localizedDescription))
-                    }
+                // Merge so dynamic/session override static by rule id (Chrome precedence), then compile
+                // ONE rule list per extension.
+                let merged = DeclarativeNetRequestRuleMerge.merge(staticRules: staticRules,
+                                                                  dynamicRules: dynamicRules,
+                                                                  sessionRules: sessionRules)
+                let result = DeclarativeNetRequest.compile(rules: merged)
+                let identifier = "brownbear-dnr-\(ext.id)"
+                guard !result.isEmpty else {
+                    newReports.append(Report(extensionID: ext.id, extensionName: ext.displayName,
+                                             rulesetID: "(merged)", compiledCount: 0,
+                                             skippedCount: result.skippedCount,
+                                             error: result.warnings.first ?? "no rules compiled"))
+                    continue
+                }
+                do {
+                    let list = try await compile(store: ruleListStore, identifier: identifier, json: result.json)
+                    compiledLists.append(list)
+                    newReports.append(Report(extensionID: ext.id, extensionName: ext.displayName,
+                                             rulesetID: "(merged)", compiledCount: result.compiledCount,
+                                             skippedCount: result.skippedCount, error: nil))
+                } catch {
+                    newReports.append(Report(extensionID: ext.id, extensionName: ext.displayName,
+                                             rulesetID: "(merged)", compiledCount: 0,
+                                             skippedCount: result.skippedCount,
+                                             error: error.localizedDescription))
                 }
             }
         }

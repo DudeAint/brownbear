@@ -313,6 +313,66 @@
     };
   }
 
+  // --- chrome.declarativeNetRequest + chrome.userScripts (page/popup) -------------------------
+  function unwrap(result) {
+    if (result && typeof result === "object" && typeof result.error === "string") {
+      return _Promise.reject(new Error(result.error));
+    }
+    return result;
+  }
+  var declarativeNetRequest = {
+    updateDynamicRules: function (options, callback) {
+      return settle(bridge("dnr.updateDynamicRules", options || {}).then(unwrap).then(function () { return undefined; }), callback);
+    },
+    getDynamicRules: function (filter, callback) {
+      if (typeof filter === "function") { callback = filter; filter = null; }
+      return settle(bridge("dnr.getDynamicRules", { ruleIds: (filter && filter.ruleIds) || null }).then(unwrap), callback);
+    },
+    updateSessionRules: function (options, callback) {
+      return settle(bridge("dnr.updateSessionRules", options || {}).then(unwrap).then(function () { return undefined; }), callback);
+    },
+    getSessionRules: function (filter, callback) {
+      if (typeof filter === "function") { callback = filter; filter = null; }
+      return settle(bridge("dnr.getSessionRules", { ruleIds: (filter && filter.ruleIds) || null }).then(unwrap), callback);
+    },
+    updateEnabledRulesets: function (options, callback) {
+      return settle(bridge("dnr.updateEnabledRulesets", options || {}).then(unwrap).then(function () { return undefined; }), callback);
+    },
+    getEnabledRulesets: function (callback) {
+      return settle(bridge("dnr.getEnabledRulesets", {}).then(unwrap), callback);
+    },
+    getMatchedRules: function (filter, callback) {
+      if (typeof filter === "function") { callback = filter; filter = null; }
+      return settle(_Promise.resolve({ rulesMatchedInfo: [] }), callback);
+    },
+    setExtensionActionOptions: function (options, callback) { return settle(_Promise.resolve(undefined), callback); },
+    isRegexSupported: function (regexOptions, callback) { return settle(_Promise.resolve({ isSupported: true }), callback); },
+    onRuleMatchedDebug: { addListener: function () {}, removeListener: function () {}, hasListener: function () { return false; } },
+    MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES: 30000,
+    MAX_NUMBER_OF_ENABLED_STATIC_RULESETS: 50,
+    DYNAMIC_RULESET_ID: "_dynamic",
+    SESSION_RULESET_ID: "_session"
+  };
+  var userScripts = {
+    register: function (scripts, callback) {
+      return settle(bridge("userScripts.register", { scripts: scripts || [] }).then(unwrap).then(function () { return undefined; }), callback);
+    },
+    update: function (scripts, callback) {
+      return settle(bridge("userScripts.update", { scripts: scripts || [] }).then(unwrap).then(function () { return undefined; }), callback);
+    },
+    unregister: function (filter, callback) {
+      if (typeof filter === "function") { callback = filter; filter = null; }
+      return settle(bridge("userScripts.unregister", { filter: filter || null }).then(unwrap).then(function () { return undefined; }), callback);
+    },
+    getScripts: function (filter, callback) {
+      if (typeof filter === "function") { callback = filter; filter = null; }
+      return settle(bridge("userScripts.getScripts", { filter: filter || null }).then(unwrap), callback);
+    },
+    configureWorld: function (properties, callback) {
+      return settle(bridge("userScripts.configureWorld", { properties: properties || {} }).then(unwrap).then(function () { return undefined; }), callback);
+    }
+  };
+
   var chrome = {
     storage: {
       local: storageArea("local"),
@@ -327,6 +387,8 @@
     windows: windowsApi(),
     management: managementApi(),
     permissions: permissionsApi(),
+    declarativeNetRequest: declarativeNetRequest,
+    userScripts: userScripts,
     runtime: {
       id: data.extensionId,
       getManifest: function () { return manifest; },

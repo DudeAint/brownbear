@@ -341,6 +341,68 @@
       };
     }
 
+    // --- chrome.declarativeNetRequest + chrome.userScripts ------------------------------------
+    // A native {error} object becomes a rejected promise (so the callback gets undefined / the promise
+    // throws), preserving Chrome's failure semantics across the bridge.
+    function unwrap(result) {
+      if (result && typeof result === "object" && typeof result.error === "string") {
+        return _Promise.reject(new Error(result.error));
+      }
+      return result;
+    }
+    var declarativeNetRequest = {
+      updateDynamicRules: function (options, callback) {
+        return settle(bridge("dnr.updateDynamicRules", options || {}, token).then(unwrap).then(function () { return undefined; }), callback);
+      },
+      getDynamicRules: function (filter, callback) {
+        if (typeof filter === "function") { callback = filter; filter = null; }
+        return settle(bridge("dnr.getDynamicRules", { ruleIds: (filter && filter.ruleIds) || null }, token).then(unwrap), callback);
+      },
+      updateSessionRules: function (options, callback) {
+        return settle(bridge("dnr.updateSessionRules", options || {}, token).then(unwrap).then(function () { return undefined; }), callback);
+      },
+      getSessionRules: function (filter, callback) {
+        if (typeof filter === "function") { callback = filter; filter = null; }
+        return settle(bridge("dnr.getSessionRules", { ruleIds: (filter && filter.ruleIds) || null }, token).then(unwrap), callback);
+      },
+      updateEnabledRulesets: function (options, callback) {
+        return settle(bridge("dnr.updateEnabledRulesets", options || {}, token).then(unwrap).then(function () { return undefined; }), callback);
+      },
+      getEnabledRulesets: function (callback) {
+        return settle(bridge("dnr.getEnabledRulesets", {}, token).then(unwrap), callback);
+      },
+      getMatchedRules: function (filter, callback) {
+        if (typeof filter === "function") { callback = filter; filter = null; }
+        return settle(_Promise.resolve({ rulesMatchedInfo: [] }), callback);   // no iOS telemetry source
+      },
+      setExtensionActionOptions: function (options, callback) { return settle(_Promise.resolve(undefined), callback); },
+      isRegexSupported: function (regexOptions, callback) { return settle(_Promise.resolve({ isSupported: true }), callback); },
+      onRuleMatchedDebug: noopEvent,
+      MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES: 30000,
+      MAX_NUMBER_OF_ENABLED_STATIC_RULESETS: 50,
+      DYNAMIC_RULESET_ID: "_dynamic",
+      SESSION_RULESET_ID: "_session"
+    };
+    var userScripts = {
+      register: function (scripts, callback) {
+        return settle(bridge("userScripts.register", { scripts: scripts || [] }, token).then(unwrap).then(function () { return undefined; }), callback);
+      },
+      update: function (scripts, callback) {
+        return settle(bridge("userScripts.update", { scripts: scripts || [] }, token).then(unwrap).then(function () { return undefined; }), callback);
+      },
+      unregister: function (filter, callback) {
+        if (typeof filter === "function") { callback = filter; filter = null; }
+        return settle(bridge("userScripts.unregister", { filter: filter || null }, token).then(unwrap).then(function () { return undefined; }), callback);
+      },
+      getScripts: function (filter, callback) {
+        if (typeof filter === "function") { callback = filter; filter = null; }
+        return settle(bridge("userScripts.getScripts", { filter: filter || null }, token).then(unwrap), callback);
+      },
+      configureWorld: function (properties, callback) {
+        return settle(bridge("userScripts.configureWorld", { properties: properties || {} }, token).then(unwrap).then(function () { return undefined; }), callback);
+      }
+    };
+
     var chrome = {
       storage: {
         local: storageArea("local"),
@@ -355,6 +417,8 @@
       windows: windowsApi(),
       management: managementApi(),
       permissions: permissionsApi(),
+      declarativeNetRequest: declarativeNetRequest,
+      userScripts: userScripts,
       runtime: {
         id: data.extensionId,
         getManifest: function () { return manifest; },

@@ -60,6 +60,10 @@ final class ExtensionsViewModel: ObservableObject {
     func remove(_ ext: WebExtension) async {
         await store.remove(id: ext.id)
         await storage.clearAll(extensionID: ext.id)
+        // Purge the runtime stores too so a reinstalled id starts clean (DNR dynamic/session rules,
+        // enabled-ruleset overrides, and registered userScripts).
+        await BrownBearServices.shared.webExtensionDNRStore.clearAll(extensionID: ext.id)
+        await BrownBearServices.shared.webExtensionUserScriptStore.clearAll(extensionID: ext.id)
         await load()
         notifyChanged()
     }
