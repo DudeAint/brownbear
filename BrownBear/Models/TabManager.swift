@@ -26,6 +26,12 @@ final class TabManager {
 
     weak var delegate: TabManagerDelegate?
 
+    /// A closed normal tab the user can reopen (Safari/Chrome "Recently Closed"). Newest first,
+    /// capped. Private tabs are never recorded.
+    struct ClosedTabRecord: Equatable { let url: URL; let title: String }
+    private(set) var recentlyClosed: [ClosedTabRecord] = []
+    private let maxRecentlyClosed = 25
+
     private let configurationFactory: WebViewConfigurationFactory
 
     init(configurationFactory: WebViewConfigurationFactory) {
@@ -104,6 +110,7 @@ final class TabManager {
         let wasActive = (id == activeTabID)
         let removed = tabs.remove(at: removalIndex)
         removed.stopLoading()
+        rememberClosed(removed)
         delegate?.tabManager(self, didUpdate: tabs)
         wipePrivateStoreIfNoPrivateTabsRemain(removed: removed)
 
@@ -125,7 +132,7 @@ final class TabManager {
     func closeAll() {
         let hadPrivate = hasPrivateTabs
         let previous = activeTab
-        tabs.forEach { $0.stopLoading() }
+        tabs.forEach { $0.stopLoading(); rememberClosed($0) }
         tabs.removeAll()
         activeTabID = nil
         delegate?.tabManager(self, didUpdate: tabs)
@@ -140,7 +147,7 @@ final class TabManager {
         guard !toRemove.isEmpty else { return }
         let activeWasRemoved = toRemove.contains { $0.id == activeTabID }
         let previous = activeTab
-        toRemove.forEach { $0.stopLoading() }
+        toRemove.forEach { $0.stopLoading(); rememberClosed($0) }
         tabs.removeAll { $0.isPrivate == isPrivate }
         delegate?.tabManager(self, didUpdate: tabs)
         if isPrivate { wipePrivateDataStore() }
@@ -162,13 +169,24 @@ final class TabManager {
         guard !others.isEmpty else { return }
         let removedPrivate = others.contains { $0.isPrivate }
         let previous = activeTab
-        others.forEach { $0.stopLoading() }
+        others.forEach { $0.stopLoading(); rememberClosed($0) }
         tabs.removeAll { $0.id != id }
         delegate?.tabManager(self, didUpdate: tabs)
         if removedPrivate, !hasPrivateTabs { wipePrivateDataStore() }
         if activeTabID != id {
             activeTabID = id
             delegate?.tabManager(self, didActivate: tabs.first { $0.id == id }, previous: previous)
+        }
+    }
+
+    // MARK: - Recently closed
+
+    /// Record a closed normal tab so it can be reopened. Private tabs leave no trace.
+    private func rememberClosed(_ tab: Tab) {
+        guard !tab.isPrivate, let url = tab.state.url else { return }
+        recentlyClosed.insert(ClosedTabRecord(url: url, title: tab.state.displayTitle), at: 0)
+        if recentlyClosed.count > maxRecentlyClosed {
+            recentlyClosed.removeLast(recentlyClosed.count - maxRecentlyClosed)
         }
     }
 
