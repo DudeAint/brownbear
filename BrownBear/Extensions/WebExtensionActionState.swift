@@ -37,7 +37,9 @@ final class WebExtensionActionState {
 
     /// One layer of action properties. `nil` means "inherit from the layer below" (tab → default →
     /// manifest), so a `setBadgeText({ tabId })` doesn't clobber the global title and vice-versa.
-    private struct Layer {
+    /// `fileprivate` (not `private`) so the same-file LayerCodable mirror + the Layer extension below
+    /// can reach it — `private` confines a nested type to the enclosing class's own body.
+    fileprivate struct Layer {
         var badgeText: String?
         var badgeColor: String?
         var title: String?
