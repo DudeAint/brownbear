@@ -35,6 +35,11 @@ enum WebExtensionCookieMapper {
         let hostOnly = !rawDomain.hasPrefix(".")
         let normalizedDomain = hostOnly ? rawDomain : String(rawDomain.dropFirst())
 
+        // A cookie is a session cookie exactly when it carries no expiry. We key off `expiresDate`,
+        // not `isSessionOnly`: the latter is unreliable across platforms — on the iOS runtime a cookie
+        // built with an Expires can still report `isSessionOnly == true`, which would wrongly drop a
+        // real expiry. `expiresDate` is the chrome-aligned source of truth.
+        let expiry = cookie.expiresDate
         var result: [String: Any] = [
             "name": cookie.name,
             "value": cookie.value,
@@ -45,13 +50,11 @@ enum WebExtensionCookieMapper {
             "secure": cookie.isSecure,
             "httpOnly": cookie.isHTTPOnly,
             "sameSite": sameSiteString(cookie.sameSitePolicy),
-            "session": cookie.isSessionOnly || cookie.expiresDate == nil,
+            "session": expiry == nil,
             "storeId": storeId
         ]
         // Persistent cookies carry an absolute expiry (seconds since the epoch, fractional like Chrome).
-        if !cookie.isSessionOnly, let expiry = cookie.expiresDate {
-            result["expirationDate"] = expiry.timeIntervalSince1970
-        }
+        if let expiry { result["expirationDate"] = expiry.timeIntervalSince1970 }
         return result
     }
 
