@@ -135,6 +135,7 @@ final class WebExtensionPageViewController: UIViewController {
         webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         webView.isOpaque = false
         webView.backgroundColor = BrownBearTheme.Palette.background
+        webView.navigationDelegate = self   // surface load failures instead of a blank sheet
         view.addSubview(webView)
         self.webView = webView
 
@@ -230,8 +231,17 @@ final class WebExtensionPageViewController: UIViewController {
     // MARK: - Missing page
 
     private func showMissing() {
+        showCenteredMessage("This extension has no \(kind.title.lowercased()) page.")
+    }
+
+    /// Replace the (possibly blank) web view with a centered message — used for a missing page and for
+    /// a load failure, so the user sees WHY a page is empty instead of a blank sheet.
+    private func showCenteredMessage(_ text: String) {
+        webView?.isHidden = true
+        view.viewWithTag(Self.messageLabelTag)?.removeFromSuperview()
         let label = UILabel()
-        label.text = "This extension has no \(kind.title.lowercased()) page."
+        label.tag = Self.messageLabelTag
+        label.text = text
         label.textColor = BrownBearTheme.Palette.textSecondary
         label.textAlignment = .center
         label.numberOfLines = 0
@@ -244,6 +254,8 @@ final class WebExtensionPageViewController: UIViewController {
             label.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -32)
         ])
     }
+
+    private static let messageLabelTag = 0xBBEE
 
     // MARK: - Presentation
 
@@ -305,5 +317,17 @@ enum TopViewControllerPresenter {
               var top = window.rootViewController else { return }
         while let presented = top.presentedViewController { top = presented }
         top.present(controller, animated: true)
+    }
+}
+
+// MARK: - WKNavigationDelegate (surface load failures instead of a blank sheet)
+
+extension WebExtensionPageViewController: WKNavigationDelegate {
+    func webView(_ webView: WKWebView, didFailProvisional navigation: WKNavigation!, withError error: Error) {
+        showCenteredMessage("Couldn’t open this \(kind.title.lowercased()) page.\n\(error.localizedDescription)")
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        showCenteredMessage("Couldn’t open this \(kind.title.lowercased()) page.\n\(error.localizedDescription)")
     }
 }
