@@ -32,6 +32,7 @@ struct ScriptDetailView: View {
             VStack(alignment: .leading, spacing: BBTheme.Metric.sectionSpacing) {
                 headerCard
                 if meta.runsInBackground { scheduleCard }
+                ScriptSettingsCard(script: current, model: model)
                 directivesCard
                 storedValuesCard
                 logsCard

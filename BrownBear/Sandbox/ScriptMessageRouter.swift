@@ -375,6 +375,11 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
 
     private static func scriptPayload(_ script: UserScript, token: String, values: [String: String]) -> [String: Any] {
         let meta = script.metadata
+        // Honor any per-script override (the "script settings" surface) over the declared directive,
+        // so the runtime gates injection and picks the execution world by the effective values and
+        // GM_info reflects what actually runs.
+        let runAt = script.effectiveRunAt.rawValue
+        let injectInto = script.effectiveInjectInto.rawValue
         let info: [String: Any] = [
             "scriptHandler": "BrownBear",
             "version": "0.1.0",
@@ -386,17 +391,17 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
                 "description": meta.descriptionText ?? "",
                 "grant": meta.effectiveGrants,
                 "connects": meta.connects,
-                "runAt": meta.runAt.rawValue
+                "runAt": runAt
             ]
         ]
         return [
             "token": token,
             "name": meta.name,
-            "runAt": meta.runAt.rawValue,
+            "runAt": runAt,
             "grants": meta.effectiveGrants,
             "grantNone": meta.grantsNone,
             "noFrames": meta.noFrames,
-            "injectInto": meta.injectInto.rawValue,
+            "injectInto": injectInto,
             "requires": meta.requires,
             "resources": meta.resources,
             "source": script.executableBody,

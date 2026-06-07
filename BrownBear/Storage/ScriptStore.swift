@@ -85,6 +85,19 @@ actor ScriptStore {
         persist()
     }
 
+    /// Apply per-script overrides (injection timing/context, auto-update opt-out). The struct is
+    /// pruned back to `nil` when empty so untouched scripts stay clean in storage. Returns the
+    /// updated record, or `nil` if no script has that id.
+    @discardableResult
+    func setOverrides(id: UUID, _ overrides: ScriptOverrides) async -> UserScript? {
+        loadIfNeeded()
+        guard let index = scripts.firstIndex(where: { $0.id == id }) else { return nil }
+        scripts[index].overrides = overrides.isEmpty ? nil : overrides
+        scripts[index].updatedAt = Date()
+        persist()
+        return scripts[index]
+    }
+
     func remove(id: UUID) async {
         loadIfNeeded()
         scripts.removeAll { $0.id == id }

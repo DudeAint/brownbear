@@ -28,7 +28,7 @@ enum RunAt: String, Codable, CaseIterable {
 }
 
 /// The execution context a script is injected into.
-enum InjectInto: String, Codable {
+enum InjectInto: String, Codable, CaseIterable {
     case auto
     case content
     case page
