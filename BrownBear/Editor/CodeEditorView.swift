@@ -35,6 +35,15 @@ struct CodeEditorView: UIViewRepresentable {
         textView.spellCheckingType = .no
         textView.keyboardType = .asciiCapable
         textView.textContainerInset = UIEdgeInsets(top: 12, left: 4, bottom: 12, right: 8)
+        // Native find-on-page (iOS 16+), invoked from the accessory bar's magnifier.
+        textView.isFindInteractionEnabled = true
+        textView.inputAccessoryView = KeyboardAccessoryBar(
+            onInsert: { [weak textView] in textView?.insertText($0) },
+            onFind: { [weak textView] in
+                textView?.findInteraction?.presentFindNavigator(showingReplace: false)
+            },
+            onDismiss: { [weak textView] in textView?.resignFirstResponder() }
+        )
         textView.characterPairs = [
             EditorCharacterPair(leading: "(", trailing: ")"),
             EditorCharacterPair(leading: "{", trailing: "}"),

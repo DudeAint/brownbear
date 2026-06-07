@@ -119,9 +119,10 @@ per-script settings.
 - `BrownBearDashboardView` (SwiftUI) — installed scripts list with enable/disable toggles,
   per-script detail (matches, grants, last run, next run), and a live log viewer.
 - Background-task monitor showing scheduled jobs and recent executions.
-- `ScriptEditorView` — a UITextView-backed editor (line numbers, JS syntax highlighting,
+- `ScriptEditorView` — a Runestone-backed editor (line numbers, JS syntax highlighting,
   bracket matching) wrapped for SwiftUI, with a save pipeline that re-parses metadata and
-  rejects invalid headers before persisting.
+  rejects invalid headers before persisting. A `KeyboardAccessoryBar` adds quick-insert keys
+  for code punctuation and a Find button (Runestone's `UIFindInteraction`, iOS 16+).
 
 **Reference:** **Runestone** (simonbs/Runestone, MIT) for the code editor — integrate directly
 or mirror its Tree-sitter highlighting + line management; `quoid/userscripts` for the manager
