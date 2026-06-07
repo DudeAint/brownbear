@@ -32,6 +32,9 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
     /// read-only, so the cross-actor read in `cookiePermitted` (on the main actor) is race-free.
     var cookiePermissions: Set<String> = []
     var cookieHostMatcher: (String) -> Bool = { _ in false }
+    /// Granted API permissions, cached by the runtime at boot. Defense-in-depth for event gating (the
+    /// authoritative webNavigation gate lives in WebExtensionRuntime.dispatchEventToAll). On `queue`.
+    private var grantedPermissions: Set<String> = []
 
     private let queue: DispatchQueue
     private var context: JSContext?
@@ -160,6 +163,21 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
         let changesJSON = jsonString(changes)
         queue.async { [self] in
             fire(method: "dispatchStorageChanged", arguments: [area, changesJSON])
+        }
+    }
+
+    /// Cache this worker's granted permissions (runtime sets them right after boot). Defense-in-depth:
+    /// the authoritative webNavigation event gate is in WebExtensionRuntime.dispatchEventToAll.
+    func setGrantedPermissions(_ permissions: Set<String>) {
+        queue.async { [self] in self.grantedPermissions = permissions }
+    }
+
+    /// Fire a browser-pushed chrome.tabs.* / chrome.webNavigation.* event into this worker. `argsJSON`
+    /// is a JSON array of the event arguments (encoded on the main actor); the JS dispatcher parses
+    /// and applies it on this context's serial queue, never touching a JSValue off-thread.
+    func dispatchExtEvent(name: String, argsJSON: String) {
+        queue.async { [self] in
+            fire(method: "dispatchExtEvent", arguments: [name, argsJSON])
         }
     }
 

@@ -65,6 +65,11 @@ final class BrownBearBrowserViewController: UIViewController {
     /// Maps Tab UUIDs to the stable integer ids chrome.tabs exposes. Owned here, used by the
     /// WebExtensionBridgeHost conformance in BrownBearBrowserViewController+WebExtensions.swift.
     let webExtTabRegistry = WebExtensionTabRegistry()
+    /// Turns the tab + navigation lifecycle into chrome.tabs.* / chrome.webNavigation.* events for
+    /// extension workers and popups. Fed from the TabManager + WKNavigation delegate hooks below.
+    private lazy var webExtEvents = WebExtensionEventEmitter(registry: webExtTabRegistry, host: self)
+    /// Last-seen tab id set, so tabManager(_:didUpdate:) can diff to fire tabs.onCreated / onRemoved.
+    private var lastKnownTabIDs: [UUID] = []
 
     // MARK: - Lifecycle
 
@@ -77,6 +82,7 @@ final class BrownBearBrowserViewController: UIViewController {
         injection.bridgeHost = self
         injection.webExtensionBridgeHost = self   // chrome.tabs → TabManager
         injection.webExtensionCookieHost = self   // chrome.cookies → WKHTTPCookieStore
+        webExtEvents.setHost(self)   // chrome.tabs/webNavigation event push uses the tab registry
         DownloadManager.shared.onDownloadStarted = { [weak self] in self?.presentDownloadStartedToast() }
         buildHierarchy()
     }
@@ -387,12 +393,27 @@ extension BrownBearBrowserViewController: TabManagerDelegate {
         toolbar.update(canGoBack: tabManager.activeTab?.state.canGoBack ?? false,
                        canGoForward: tabManager.activeTab?.state.canGoForward ?? false,
                        tabCount: tabs.count)
+        // Diff the tab set to fire chrome.tabs.onCreated / onRemoved. Resolve a removed tab's id
+        // BEFORE forgetting its registry mapping so onRemoved carries the right id.
+        let known = Set(lastKnownTabIDs)
+        let current = Set(tabs.map(\.id))
+        for tab in tabs where !known.contains(tab.id) {
+            webExtEvents.tabCreated(webExtTabRecord(tab))
+        }
+        for removedID in lastKnownTabIDs where !current.contains(removedID) {
+            webExtEvents.tabRemoved(extTabId: webExtTabRegistry.id(for: removedID))
+            webExtTabRegistry.forget(uuid: removedID)
+        }
+        lastKnownTabIDs = tabs.map(\.id)
     }
 
     func tabManager(_ manager: TabManager, didActivate tab: Tab?, previous: Tab?) {
         previous?.refreshSnapshot()
         installActiveWebView()
         refreshChrome()
+        if let tab {
+            webExtEvents.tabActivated(extTabId: webExtTabRegistry.id(for: tab.id))
+        }
         // If the user closed the last tab, open a fresh New Tab page.
         if tab == nil {
             openInitialTabIfNeeded()
@@ -404,6 +425,9 @@ extension BrownBearBrowserViewController: TabManagerDelegate {
 
 extension BrownBearBrowserViewController: TabDelegate {
     func tab(_ tab: Tab, didChange state: NavigationState) {
+        // chrome.tabs.onUpdated fires for EVERY tab (Chrome parity), so emit before the active-tab
+        // guard. The emitter diffs against the last record and only fires on a real change.
+        webExtEvents.tabUpdated(webExtTabRecord(tab))
         guard tab.id == tabManager.activeTabID else { return }
         omnibox.update(with: state)
         toolbar.update(canGoBack: state.canGoBack,
@@ -633,18 +657,36 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         progressBar.show()
         progressBar.setProgress(0.05, animated: false)
+        if let id = extTabId(for: webView) {
+            webExtEvents.webNavBeforeNavigate(extTabId: id, url: webView.url?.absoluteString ?? "")
+        }
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         // The page's main document has started rendering — refresh the security indicator.
         if webView == installedWebView { refreshChrome() }
         applyStoredZoom(for: webView)
+        if let id = extTabId(for: webView) {
+            webExtEvents.webNavCommitted(extTabId: id, url: webView.url?.absoluteString ?? "")
+        }
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         progressBar.complete()
         if webView == installedWebView { refreshChrome() }
         recordHistory(for: webView)
+        // WKWebView gives no separate DOMContentLoaded; fire both at didFinish (DOMContentLoaded first),
+        // which is the common shim behavior — documented in docs/WEB_EXTENSIONS.md.
+        if let id = extTabId(for: webView) {
+            let url = webView.url?.absoluteString ?? ""
+            webExtEvents.webNavDOMContentLoaded(extTabId: id, url: url)
+            webExtEvents.webNavCompleted(extTabId: id, url: url)
+        }
+    }
+
+    /// The chrome tab id for the tab backing `webView`, or nil if none — for webNavigation events.
+    private func extTabId(for webView: WKWebView) -> Int? {
+        tabManager.tabs.first { $0.webView === webView }.map { webExtTabRegistry.id(for: $0.id) }
     }
 
     /// Record a finished main-frame navigation in browsing history. Only real web pages are kept —
@@ -664,6 +706,10 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
                  didFail navigation: WKNavigation!,
                  withError error: Error) {
         progressBar.complete()
+        if let id = extTabId(for: webView) {
+            webExtEvents.webNavErrorOccurred(extTabId: id, url: webView.url?.absoluteString ?? "",
+                                             error: (error as NSError).localizedDescription)
+        }
     }
 
     func webView(_ webView: WKWebView,
@@ -673,6 +719,10 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
         // Ignore user-initiated cancellations (e.g. tapping a new link mid-load).
         let nsError = error as NSError
         guard !(nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled) else { return }
+        if let id = extTabId(for: webView) {
+            webExtEvents.webNavErrorOccurred(extTabId: id, url: webView.url?.absoluteString ?? "",
+                                             error: nsError.localizedDescription)
+        }
     }
 
     func webView(_ webView: WKWebView,
@@ -755,75 +805,6 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
         DownloadManager.shared.begin(download)
     }
 
-    /// A brief, non-modal confirmation that a download began (fired post-confirm via the manager's
-    /// onDownloadStarted). Tapping it opens the Downloads list; otherwise it fades after a moment.
-    private func presentDownloadStartedToast() {
-        var config = UIButton.Configuration.filled()
-        config.title = "Download started — tap to view"
-        config.baseBackgroundColor = BrownBearTheme.Palette.accent
-        config.baseForegroundColor = .white
-        config.cornerStyle = .capsule
-        config.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)
-        var title = AttributeContainer()
-        title.font = .systemFont(ofSize: 13, weight: .semibold)
-        config.attributedTitle = AttributedString("Download started — tap to view", attributes: title)
-        let toast = UIButton(configuration: config, primaryAction: UIAction { [weak self] _ in
-            self?.presentDownloads()
-        })
-        toast.alpha = 0
-        toast.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(toast)
-        NSLayoutConstraint.activate([
-            toast.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            toast.bottomAnchor.constraint(equalTo: toolbar.topAnchor, constant: -12)
-        ])
-        UIView.animate(withDuration: 0.25, animations: { toast.alpha = 1 }) { _ in
-            UIView.animate(withDuration: 0.3, delay: 2.2, options: []) {
-                toast.alpha = 0
-            } completion: { _ in toast.removeFromSuperview() }
-        }
-    }
-
-    private func presentDownloads() {
-        guard presentedViewController == nil else { return }
-        present(DownloadsView.makeHostingController(), animated: true)
-    }
-
-    /// The bundled clean-room article extractor, loaded once.
-    private static let readabilityScript: String = {
-        guard let url = Bundle.main.url(forResource: "brownbear-readability", withExtension: "js")
-                ?? Bundle.main.url(forResource: "brownbear-readability", withExtension: "js", subdirectory: "JS"),
-              let source = try? String(contentsOf: url, encoding: .utf8) else { return "" }
-        return source
-    }()
-
-    /// Extract the active page's article (in the page world) and present the reader, or explain that
-    /// the page isn't article-like. Uses the ObjC result-returning eval so no Swift WebKit overlay links.
-    private func presentReader() {
-        guard let webView = tabManager.activeTab?.webView, !Self.readabilityScript.isEmpty else { return }
-        BBEvaluateJavaScriptForResult(webView, Self.readabilityScript, .page) { [weak self] result, _ in
-            guard let self else { return }
-            guard let dict = result as? [String: Any],
-                  let content = dict["content"] as? String, !content.isEmpty else {
-                self.presentReaderUnavailable()
-                return
-            }
-            let fallbackTitle = self.tabManager.activeTab?.state.displayTitle ?? "Article"
-            let article = ReaderViewController.Article(
-                title: (dict["title"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? fallbackTitle,
-                byline: (dict["byline"] as? String) ?? "",
-                content: content)
-            ReaderViewController.present(article, from: self)
-        }
-    }
-
-    private func presentReaderUnavailable() {
-        let alert = UIAlertController(title: "Reader unavailable",
-                                     message: "This page doesn't look like an article.",
-                                     preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "OK", style: .default))
-        present(alert, animated: true)
-    }
 
     /// Present the install card for a userscript URL, with a "View source" escape that re-loads the
     /// raw file (allowed through the interceptor once).

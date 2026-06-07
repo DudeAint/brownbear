@@ -14,8 +14,10 @@
 
 import Foundation
 
+// Not `final`: WebExtensionEventEmitterTests subclasses it (SpyRuntime) to capture the event fan-out
+// without booting a JSContext. dispatchEventToAll is likewise overridable.
 @MainActor
-final class WebExtensionRuntime {
+class WebExtensionRuntime {
 
     private let store: WebExtensionStore
     private let storage: WebExtensionStorage
@@ -23,6 +25,13 @@ final class WebExtensionRuntime {
 
     private var contexts: [String: WebExtensionBackgroundContext] = [:]
     private var observers: [NSObjectProtocol] = []
+
+    /// Live extension PAGES (popups/options) that want browser-pushed chrome.tabs/webNavigation
+    /// events, held weakly so a dismissed page is skipped (and cleaned up) on the next fan-out.
+    private final class WeakEventReceiver { weak var value: WebExtensionEventReceiver?; init(_ v: WebExtensionEventReceiver) { value = v } }
+    private var eventReceivers: [ObjectIdentifier: WeakEventReceiver] = [:]
+    /// Each running worker's granted permissions, cached so the webNavigation gate is synchronous.
+    private var permissionsByExtension: [String: Set<String>] = [:]
 
     /// chrome.tabs bridge to the browser; pushed to every background context. Set after the browser
     /// view controller loads (contexts may already exist), so propagate to the live ones too.
@@ -93,6 +102,33 @@ final class WebExtensionRuntime {
         contexts[extensionID]?.fireActionClicked(tab: tab)
     }
 
+    // MARK: - Browser-pushed events (chrome.tabs.* / chrome.webNavigation.*)
+
+    /// Register a live extension page (popup/options) to receive browser-pushed events. Held weakly.
+    func registerEventReceiver(_ receiver: WebExtensionEventReceiver) {
+        eventReceivers[ObjectIdentifier(receiver)] = WeakEventReceiver(receiver)
+    }
+
+    func unregisterEventReceiver(_ receiver: WebExtensionEventReceiver) {
+        eventReceivers.removeValue(forKey: ObjectIdentifier(receiver))
+    }
+
+    /// Fan one browser-pushed event out to every background worker and live popup of every enabled
+    /// extension. `argsJSON` is the event's already-encoded argument array. `requiredPermission`
+    /// (e.g. "webNavigation") gates delivery to extensions that declared it; nil = deliver to all
+    /// (chrome.tabs.* needs no permission). Overridable so tests can spy on the fan-out.
+    func dispatchEventToAll(name: String, argsJSON: String, requiredPermission: String? = nil) {
+        for (id, context) in contexts {
+            if let requiredPermission, permissionsByExtension[id]?.contains(requiredPermission) != true { continue }
+            context.dispatchExtEvent(name: name, argsJSON: argsJSON)
+        }
+        for box in eventReceivers.values {
+            guard let receiver = box.value else { continue }
+            if let requiredPermission, !receiver.receiverPermissions.contains(requiredPermission) { continue }
+            receiver.dispatchExtEvent(name: name, argsJSON: argsJSON)
+        }
+    }
+
     // MARK: - Reconciliation
 
     /// Bring the running set of background contexts in line with the enabled extensions. Coalesced:
@@ -116,6 +152,7 @@ final class WebExtensionRuntime {
         for (id, context) in contexts where wanted[id] == nil {
             context.shutdown()
             contexts.removeValue(forKey: id)
+            permissionsByExtension.removeValue(forKey: id)
         }
 
         // Spin up newly enabled extensions.
@@ -160,6 +197,10 @@ final class WebExtensionRuntime {
         }
         context.host = host   // chrome.tabs bridge (may be nil until the browser VC loads)
         context.cookieHost = cookieHost   // chrome.cookies bridge (same lifecycle as host)
+        // Cache this worker's granted permissions for the synchronous webNavigation event gate.
+        let granted = Set(manifest.permissions)
+        permissionsByExtension[ext.id] = granted
+        context.setGrantedPermissions(granted)
         contexts[ext.id] = context
         context.boot(runtimeJS: Self.backgroundRuntimeJS,
                      backgroundSource: source,

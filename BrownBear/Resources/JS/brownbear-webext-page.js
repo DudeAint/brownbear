@@ -132,11 +132,14 @@
       var message = args[1];
       return settle(bridge("tabs.sendMessage", { tabId: tabId, message: (message === undefined ? null : message) }), cb);
     }
-    var noop = { addListener: function () {}, removeListener: function () {}, hasListener: function () { return false; } };
     return {
       query: query, get: get, getCurrent: getCurrent, create: create, update: update, remove: remove, reload: reload,
       executeScript: executeScript, insertCSS: insertCSS, sendMessage: sendMessage,
-      onUpdated: noop, onActivated: noop, onCreated: noop, onRemoved: noop
+      onCreated: makeEvent(tabEventLists["tabs.onCreated"]),
+      onUpdated: makeEvent(tabEventLists["tabs.onUpdated"]),
+      onActivated: makeEvent(tabEventLists["tabs.onActivated"]),
+      onRemoved: makeEvent(tabEventLists["tabs.onRemoved"]),
+      onReplaced: makeEvent([])
     };
   }
 
@@ -163,6 +166,16 @@
 
   var storageListeners = [];
   var messageListeners = [];
+  // Browser-pushed chrome.tabs.* / chrome.webNavigation.* event lists, driven by native via
+  // window.__brownbearExtPage.dispatchExtEvent (extension pages DO receive these events).
+  var tabEventLists = {
+    "tabs.onCreated": [], "tabs.onUpdated": [], "tabs.onActivated": [], "tabs.onRemoved": []
+  };
+  var webNavLists = {
+    "webNavigation.onBeforeNavigate": [], "webNavigation.onCommitted": [],
+    "webNavigation.onDOMContentLoaded": [], "webNavigation.onCompleted": [],
+    "webNavigation.onHistoryStateUpdated": [], "webNavigation.onErrorOccurred": []
+  };
 
   // --- chrome.cookies (live onChanged via the native push surface below) -----------------------
   var cookieChangedListeners = [];
@@ -389,6 +402,16 @@
     permissions: permissionsApi(),
     declarativeNetRequest: declarativeNetRequest,
     userScripts: userScripts,
+    webNavigation: {
+      onBeforeNavigate: makeEvent(webNavLists["webNavigation.onBeforeNavigate"]),
+      onCommitted: makeEvent(webNavLists["webNavigation.onCommitted"]),
+      onDOMContentLoaded: makeEvent(webNavLists["webNavigation.onDOMContentLoaded"]),
+      onCompleted: makeEvent(webNavLists["webNavigation.onCompleted"]),
+      onHistoryStateUpdated: makeEvent(webNavLists["webNavigation.onHistoryStateUpdated"]),
+      onErrorOccurred: makeEvent(webNavLists["webNavigation.onErrorOccurred"]),
+      getFrame: function (details, cb) { if (typeof cb === "function") { cb(null); return undefined; } return _Promise.resolve(null); },
+      getAllFrames: function (details, cb) { if (typeof cb === "function") { cb([]); return undefined; } return _Promise.resolve([]); }
+    },
     runtime: {
       id: data.extensionId,
       getManifest: function () { return manifest; },
@@ -462,6 +485,16 @@
     dispatchNotificationButtonClicked: function (notificationId, buttonIndex) {
       for (var i = 0; i < notificationButtonListeners.length; i++) {
         try { notificationButtonListeners[i](notificationId, buttonIndex | 0); } catch (e) {}
+      }
+    },
+    dispatchExtEvent: function (name, argsJSON) {
+      var args;
+      try { args = _JSON.parse(argsJSON); } catch (e) { args = []; }
+      if (!_Array.isArray(args)) { args = []; }
+      var list = tabEventLists[name] || webNavLists[name];
+      if (!list) { return; }
+      for (var i = 0; i < list.length; i++) {
+        try { list[i].apply(null, args); } catch (e) {}
       }
     }
   };

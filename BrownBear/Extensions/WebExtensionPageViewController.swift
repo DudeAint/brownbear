@@ -97,6 +97,13 @@ final class WebExtensionPageViewController: UIViewController {
 
     @objc private func close() { dismiss(animated: true) }
 
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        // Stop receiving browser-pushed events once the page is gone (the runtime holds receivers
+        // weakly, so this just prunes promptly rather than waiting for the next fan-out to skip a dead box).
+        runtime.unregisterEventReceiver(self)
+    }
+
     // MARK: - Build
 
     private func build(path: String) async {
@@ -132,6 +139,8 @@ final class WebExtensionPageViewController: UIViewController {
         self.webView = webView
 
         observeStorageChanges()
+        // Receive browser-pushed chrome.tabs.* / chrome.webNavigation.* events for this extension.
+        runtime.registerEventReceiver(self)
 
         guard let url = URL(string: "\(WebExtensionSchemeHandler.scheme)://\(ext.id)/\(path)") else {
             showMissing()
@@ -268,6 +277,19 @@ final class WebExtensionPageViewController: UIViewController {
         }
         return source
     }()
+}
+
+extension WebExtensionPageViewController: WebExtensionEventReceiver {
+    var receiverExtensionID: String { ext.id }
+    var receiverPermissions: Set<String> { Set(ext.manifest?.permissions ?? []) }
+
+    /// Deliver a browser-pushed chrome.tabs/webNavigation event into this page's chrome.* surface.
+    func dispatchExtEvent(name: String, argsJSON: String) {
+        guard let webView else { return }
+        let js = "window.__brownbearExtPage && window.__brownbearExtPage.dispatchExtEvent("
+            + "\(Self.jsonString(name)), \(Self.jsonString(argsJSON)));"
+        BBEvaluateJavaScript(webView, js, contentWorld)   // ObjC shim — no Swift WebKit overlay (iOS 16.4).
+    }
 }
 
 /// Presents a UIKit view controller from SwiftUI by walking to the top-most presented controller of

@@ -419,6 +419,14 @@
       permissions: permissionsApi(),
       declarativeNetRequest: declarativeNetRequest,
       userScripts: userScripts,
+      // chrome.tabs.* and chrome.webNavigation.* EVENTS are not delivered to content scripts in Chrome
+      // (those live in background/popup contexts). The namespace exists but is inert so a shared script
+      // can add a listener without throwing; it just never fires.
+      webNavigation: {
+        onBeforeNavigate: noopEvent, onCommitted: noopEvent, onDOMContentLoaded: noopEvent,
+        onCompleted: noopEvent, onHistoryStateUpdated: noopEvent, onErrorOccurred: noopEvent,
+        onReferenceFragmentUpdated: noopEvent, onCreatedNavigationTarget: noopEvent
+      },
       runtime: {
         id: data.extensionId,
         getManifest: function () { return manifest; },
