@@ -180,7 +180,13 @@ final class InjectionOrchestrator {
     /// the next navigation picks up the new rule lists.
     func refreshExtensionContentBlockers() {
         let controller = userContentController
-        Task { await contentBlocker.refresh(into: controller) }
+        Task {
+            // Hosts the user pinned Shields-off for (blockContent == false) are excluded from blocking.
+            let disabled = await BrownBearServices.shared.siteSettingsStore.allHosts()
+                .filter { $0.settings.blockContent == false }
+                .map(\.host)
+            await contentBlocker.refresh(into: controller, shieldsDisabledHosts: disabled)
+        }
     }
 
     private func addBootstrap(resource: String) {

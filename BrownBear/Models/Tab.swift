@@ -63,6 +63,11 @@ final class Tab {
     /// ignored by responsive sites) plus a desktop user-agent.
     var prefersDesktop = false
 
+    /// Whether the user turned JavaScript OFF for this tab's site (per-site Shields). Applied
+    /// per-navigation via the nav delegate's `WKWebpagePreferences.allowsContentJavaScript`. Seeded
+    /// from the host's stored SiteSettings before content loads; defaults to false (JS enabled).
+    var prefersJavaScriptDisabled = false
+
     /// Last rendered thumbnail, used by the tab grid. Refreshed when a tab resigns active.
     private(set) var snapshot: UIImage?
 

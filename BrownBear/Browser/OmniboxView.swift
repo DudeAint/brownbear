@@ -23,6 +23,8 @@ protocol OmniboxViewDelegate: AnyObject {
     func omnibox(_ omnibox: OmniboxView, didChangeText text: String)
     /// Editing ended (the field resigned first responder), so suggestions can be dismissed.
     func omniboxDidEndEditing(_ omnibox: OmniboxView)
+    /// The lock/shield glyph was tapped on a loaded page — open the Site Info + Shields panel.
+    func omniboxDidTapSiteInfo(_ omnibox: OmniboxView)
 }
 
 // Default no-ops so the two suggestion hooks are effectively optional for conformers that don't
@@ -30,6 +32,7 @@ protocol OmniboxViewDelegate: AnyObject {
 extension OmniboxViewDelegate {
     func omnibox(_ omnibox: OmniboxView, didChangeText text: String) {}
     func omniboxDidEndEditing(_ omnibox: OmniboxView) {}
+    func omniboxDidTapSiteInfo(_ omnibox: OmniboxView) {}
 }
 
 /// The rounded address bar — @MainActor-isolated. Owns the display↔edit transition, the two-tone
@@ -57,6 +60,13 @@ final class OmniboxView: UIView {
     private var isLoading = false
 
     var isEditingURL: Bool { textField.isFirstResponder }
+
+    /// The view to anchor the Site Info / Shields popover to — the leading security-glyph slot.
+    var lockGlyphAnchorView: UIView { securityIconContainer }
+
+    /// Whether the lock/shield glyph (not the search glyph) is currently shown — i.e. a page is
+    /// loaded and the bar is at rest. Used to decide whether tapping the glyph opens Site Info.
+    private var isShowingLockGlyph: Bool { !isEditingURL && currentState.url != nil }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -158,10 +168,11 @@ final class OmniboxView: UIView {
             securityIconContainer.widthAnchor.constraint(equalToConstant: 24)
         ])
 
-        // Tapping the icon area focuses the bar, like the URL itself.
+        // Tapping the glyph: when a page is loaded (lock/shield showing) it opens Site Info +
+        // Shields; otherwise (editing, or the search glyph on a blank tab) it focuses the bar.
         securityIconContainer.isUserInteractionEnabled = true
         securityIconContainer.addGestureRecognizer(
-            UITapGestureRecognizer(target: self, action: #selector(handleFieldTap)))
+            UITapGestureRecognizer(target: self, action: #selector(handleSecurityIconTap)))
     }
 
     private func buildField() {
@@ -348,6 +359,15 @@ final class OmniboxView: UIView {
 
     @objc private func handleFieldTap() {
         enterEditMode()
+    }
+
+    /// The leading glyph was tapped: open Site Info + Shields when a page is loaded, else focus.
+    @objc private func handleSecurityIconTap() {
+        if isShowingLockGlyph {
+            delegate?.omniboxDidTapSiteInfo(self)
+        } else {
+            enterEditMode()
+        }
     }
 
     @objc private func didTapAction() {
