@@ -28,13 +28,27 @@ final class BrownBearBrowserViewController: UIViewController {
 
     // MARK: - Chrome
 
-    private let topChrome = UIView()
+    // Not `private`: the chrome layout + scroll-hide logic live in BrownBearBrowserViewController
+    // +Layout.swift / +ScrollChrome.swift (separate files can only reach internal-or-higher members).
+    let topChrome = UIView()
     // Not `private`: the omnibox delegate logic lives in BrownBearBrowserViewController+Omnibox.swift.
     let omnibox = OmniboxView()
-    private let progressBar = ProgressBar()
-    private let contentContainer = UIView()
+    let progressBar = ProgressBar()
+    let contentContainer = UIView()
     // Not `private`: the +Zoom extension (separate file) anchors the zoom HUD above this toolbar.
     let toolbar = BrowserToolbar()
+
+    /// The top-chrome's `top == view.top` constraint, whose constant the scroll-hide animation drives
+    /// (0 shown, negative to slide the omnibox off the top). Built in +Layout, animated in +ScrollChrome.
+    var topChromeTopConstraint: NSLayoutConstraint?
+    /// The omnibox's `top == topChrome.top + (safe-area-top + 8)` constraint. The omnibox is pinned to
+    /// topChrome (not the view's safe area) so the whole bar slides as one unit; this constant tracks the
+    /// safe-area inset (updated in viewSafeAreaInsetsDidChange).
+    var omniboxTopConstraint: NSLayoutConstraint?
+    /// Whether the chrome is currently slid away (scrolled down). Drives idempotent show/hide.
+    var chromeHidden = false
+    /// The scroll offset at the last direction sample, so +ScrollChrome can detect up vs. down.
+    var lastScrollOffsetY: CGFloat = 0
 
     /// The web view currently installed in the content container.
     private weak var installedWebView: WKWebView?
@@ -92,6 +106,19 @@ final class BrownBearBrowserViewController: UIViewController {
         traitCollection.userInterfaceStyle == .dark ? .lightContent : .darkContent
     }
 
+    /// Keep the omnibox's offset inside the top chrome tracking the status-bar safe-area inset (so the
+    /// bar sits just below the status bar, and the scroll-hide distance stays correct after rotation).
+    /// Must live in the main class body — Swift forbids overriding inherited methods from an extension.
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        guard let omniboxTopConstraint else { return }
+        let target = view.safeAreaInsets.top + 8
+        if omniboxTopConstraint.constant != target {
+            omniboxTopConstraint.constant = target
+            if chromeHidden { applyChromeHidden(true, animated: false) }   // re-resolve hide distance
+        }
+    }
+
     // MARK: - Public entry points (called by SceneDelegate)
 
     /// Open the first tab on the branded New Tab page if no tabs exist yet.
@@ -110,69 +137,6 @@ final class BrownBearBrowserViewController: UIViewController {
         refreshChrome()
     }
 
-    // MARK: - Layout
-
-    private func buildHierarchy() {
-        topChrome.backgroundColor = BrownBearTheme.Palette.chrome
-        topChrome.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(topChrome)
-
-        omnibox.translatesAutoresizingMaskIntoConstraints = false
-        topChrome.addSubview(omnibox)
-
-        progressBar.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(progressBar)
-
-        contentContainer.backgroundColor = BrownBearTheme.Palette.background
-        contentContainer.clipsToBounds = true
-        contentContainer.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(contentContainer)
-
-        toolbar.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(toolbar)
-
-        // Suggestions overlay the page between the bar and the toolbar; added last so it sits on top.
-        omniboxSuggestions.delegate = self
-        omniboxSuggestions.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(omniboxSuggestions)
-
-        let inset = BrownBearTheme.Metrics.chromeHorizontalInset
-        let guide = view.safeAreaLayoutGuide
-
-        NSLayoutConstraint.activate([
-            topChrome.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            topChrome.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            topChrome.topAnchor.constraint(equalTo: view.topAnchor),
-            topChrome.bottomAnchor.constraint(equalTo: omnibox.bottomAnchor, constant: 8),
-
-            omnibox.leadingAnchor.constraint(equalTo: guide.leadingAnchor, constant: inset),
-            omnibox.trailingAnchor.constraint(equalTo: guide.trailingAnchor, constant: -inset),
-            omnibox.topAnchor.constraint(equalTo: guide.topAnchor, constant: 8),
-            omnibox.heightAnchor.constraint(equalToConstant: BrownBearTheme.Metrics.omniboxHeight),
-
-            progressBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            progressBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            progressBar.topAnchor.constraint(equalTo: topChrome.bottomAnchor),
-            progressBar.heightAnchor.constraint(equalToConstant: BrownBearTheme.Metrics.progressBarHeight),
-
-            contentContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            contentContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            contentContainer.topAnchor.constraint(equalTo: progressBar.bottomAnchor),
-            contentContainer.bottomAnchor.constraint(equalTo: toolbar.topAnchor),
-
-            toolbar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            toolbar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            toolbar.bottomAnchor.constraint(equalTo: guide.bottomAnchor),
-            toolbar.topAnchor.constraint(equalTo: guide.bottomAnchor,
-                                         constant: -BrownBearTheme.Metrics.toolbarHeight),
-
-            omniboxSuggestions.topAnchor.constraint(equalTo: progressBar.bottomAnchor),
-            omniboxSuggestions.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            omniboxSuggestions.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            omniboxSuggestions.bottomAnchor.constraint(equalTo: toolbar.topAnchor)
-        ])
-    }
-
     // MARK: - Web view hosting
 
     /// Install the active tab's web view into the content container, removing the previous one.
@@ -184,6 +148,10 @@ final class BrownBearBrowserViewController: UIViewController {
         let webView = tab.webView
         webView.navigationDelegate = self
         webView.uiDelegate = self
+        // Observe this tab's scroll so the chrome can slide away on scroll-down (+ScrollChrome). Setting
+        // the scrollView's delegate is supported and doesn't disturb WKWebView's own scrolling.
+        webView.scrollView.delegate = self
+        showChrome(animated: false)   // a freshly shown tab always starts with the bar visible
         webView.translatesAutoresizingMaskIntoConstraints = false
         contentContainer.addSubview(webView)
         NSLayoutConstraint.activate([
@@ -674,6 +642,8 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         progressBar.show()
         progressBar.setProgress(0.05, animated: false)
+        // Reveal the chrome for a new page load — you should never land on a page with the bar hidden.
+        if webView == installedWebView { showChrome(animated: true) }
         if let id = extTabId(for: webView) {
             webExtEvents.webNavBeforeNavigate(extTabId: id, url: webView.url?.absoluteString ?? "")
         }

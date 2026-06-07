@@ -14,6 +14,7 @@ struct SettingsView: View {
 
     @AppStorage(AppSettings.Key.searchEngine) private var searchEngineRaw = SearchEngine.google.rawValue
     @AppStorage(AppSettings.Key.autoUpdateScripts) private var autoUpdateScripts = true
+    @AppStorage(AppSettings.Key.hideBarsOnScroll) private var hideBarsOnScroll = true
     @State private var isClearing = false
     @State private var didClear = false
     @State private var confirmingClear = false
@@ -26,6 +27,13 @@ struct SettingsView: View {
                         Text(engine.title).tag(engine.rawValue)
                     }
                 }
+            }
+
+            Section("Appearance") {
+                Toggle("Hide bar while scrolling", isOn: $hideBarsOnScroll)
+                Text("The address bar slides away as you scroll down a page and returns when you scroll up.")
+                    .font(.caption)
+                    .foregroundStyle(BBTheme.Color.textSecondary)
             }
 
             Section("Userscripts") {
