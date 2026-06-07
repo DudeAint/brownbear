@@ -70,7 +70,12 @@
       function clear(callback) {
         return settle(bridge("storage.clear", { area: area }, token).then(function () { return undefined; }), callback);
       }
-      return { get: get, set: set, remove: remove, clear: clear };
+      // chrome.storage.session.setAccessLevel — no-op (no separate untrusted tier); resolves.
+      function setAccessLevel(_opts, callback) {
+        if (typeof callback === "function") { callback(); return undefined; }
+        return _Promise.resolve();
+      }
+      return { get: get, set: set, remove: remove, clear: clear, setAccessLevel: setAccessLevel };
     }
 
     function getURL(path) {

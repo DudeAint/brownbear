@@ -164,6 +164,15 @@ final class HeadlessScriptRunner: @unchecked Sendable {
           }
         })();
         """)
+
+        // URL / URLSearchParams / performance — web globals JavaScriptCore lacks. Loaded from a
+        // node-validated bundled resource (regex-heavy, so embedding it as a Swift string literal would
+        // be escape-hell and unchecked). Background userscripts otherwise throw "Can't find variable: URL".
+        if let url = Bundle.main.url(forResource: "brownbear-jscore-globals", withExtension: "js")
+            ?? Bundle.main.url(forResource: "brownbear-jscore-globals", withExtension: "js", subdirectory: "JS"),
+           let source = try? String(contentsOf: url, encoding: .utf8) {
+            context.evaluateScript(source, withSourceURL: url)
+        }
     }
 
     private func installAPIs(into context: JSContext, script: UserScript, scratch: Scratch, deadline: Date) {
