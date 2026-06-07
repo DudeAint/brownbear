@@ -187,6 +187,12 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
              "action.getBadgeText", "action.getTitle", "action.getBadgeBackgroundColor":
             return routeAction(api: api, payload: payload, extensionID: extensionID)
 
+        case "dnr.updateDynamicRules", "dnr.updateSessionRules", "dnr.updateEnabledRulesets",
+             "dnr.getDynamicRules", "dnr.getSessionRules", "dnr.getEnabledRulesets",
+             "userScripts.register", "userScripts.update", "userScripts.getScripts",
+             "userScripts.unregister", "userScripts.configureWorld":
+            return try await routeDNRUserScripts(api: api, payload: payload, extensionID: extensionID)
+
         default:
             guard let result = await routeTabsAndScripting(api: api, payload: payload, extensionID: extensionID) else {
                 throw BrownBearError.bridgeRejected("unsupported extension api '\(api)'")
@@ -492,6 +498,32 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
                     "messages": messages
                 ])
             }
+
+            // chrome.userScripts (MV3): runtime-registered scripts inject like content scripts. They
+            // reuse the same per-navigation path + session model, so they get a token and addressable
+            // session exactly as manifest content scripts do (world is stored but iOS runs one world).
+            for userScript in await BrownBearServices.shared.webExtensionUserScriptStore
+                .getScripts(extensionID: ext.id, ids: nil) {
+                if isSubframe && !userScript.allFrames { continue }
+                let matcher = URLMatcher(matches: userScript.matches, includes: userScript.includeGlobs,
+                                         excludes: userScript.excludeGlobs, excludeMatches: userScript.excludeMatches)
+                guard matcher.matches(urlString) else { continue }
+                let token = UUID().uuidString
+                registerSession(token: token,
+                                session: Session(extensionID: ext.id, isContent: true,
+                                                 webView: webView, frameInfo: frameInfo))
+                result.append([
+                    "token": token,
+                    "extensionId": ext.id,
+                    "runAt": userScript.runAt,
+                    "allFrames": userScript.allFrames,
+                    "js": userScript.js,
+                    "css": "",
+                    "manifestJSON": ext.manifestJSON,
+                    "baseURL": ext.baseURLString,
+                    "messages": messages
+                ])
+            }
         }
         return result
     }
@@ -738,5 +770,171 @@ extension WebExtensionMessageRouter {
         default:
             throw BrownBearError.bridgeRejected("unsupported api '\(api)'")
         }
+    }
+
+    // MARK: - chrome.declarativeNetRequest (dynamic/session) + chrome.userScripts (MV3)
+
+    /// declarativeNetRequest runtime rules + chrome.userScripts registration. Both are permission-gated
+    /// (declarativeNetRequest[WithHostAccess] / userScripts). A mutation posts the change notification so
+    /// the content blocker recompiles and userScripts inject on the next navigation.
+    private func routeDNRUserScripts(api: String, payload: [String: Any], extensionID: String) async throws -> Any? {
+        switch api {
+        case "dnr.updateDynamicRules", "dnr.updateSessionRules", "dnr.updateEnabledRulesets":
+            try await requireDNRPermission(extensionID)
+            let dnrStore = BrownBearServices.shared.webExtensionDNRStore
+            if api == "dnr.updateDynamicRules" {
+                try await dnrStore.updateDynamicRules(extensionID: extensionID, update: Self.parseRuleUpdate(payload))
+            } else if api == "dnr.updateSessionRules" {
+                try await dnrStore.updateSessionRules(extensionID: extensionID, update: Self.parseRuleUpdate(payload))
+            } else {
+                let rulesets = await store.ext(for: extensionID)?.manifest?.declarativeNetRequest ?? []
+                try await dnrStore.updateEnabledRulesets(
+                    extensionID: extensionID,
+                    manifestDefaults: rulesets.filter(\.enabled).map(\.id),
+                    allRulesetIDs: rulesets.map(\.id),
+                    disable: (payload["disableRulesetIds"] as? [String]) ?? [],
+                    enable: (payload["enableRulesetIds"] as? [String]) ?? [])
+            }
+            NotificationCenter.default.post(name: .brownBearExtensionsDidChange, object: nil)
+            return NSNull()
+
+        case "dnr.getDynamicRules":
+            try await requireDNRPermission(extensionID)
+            let rules = await BrownBearServices.shared.webExtensionDNRStore.getDynamicRules(extensionID: extensionID)
+            return Self.filterRules(rules, ids: payload["ruleIds"] as? [Int])
+
+        case "dnr.getSessionRules":
+            try await requireDNRPermission(extensionID)
+            let rules = await BrownBearServices.shared.webExtensionDNRStore.getSessionRules(extensionID: extensionID)
+            return Self.filterRules(rules, ids: payload["ruleIds"] as? [Int])
+
+        case "dnr.getEnabledRulesets":
+            try await requireDNRPermission(extensionID)
+            let rulesets = await store.ext(for: extensionID)?.manifest?.declarativeNetRequest ?? []
+            let enabled = await BrownBearServices.shared.webExtensionDNRStore
+                .enabledRulesetIDs(extensionID: extensionID, manifestDefaults: rulesets.filter(\.enabled).map(\.id))
+            return rulesets.map(\.id).filter { enabled.contains($0) }
+
+        case "userScripts.register", "userScripts.update":
+            try await requireUserScriptsPermission(extensionID)
+            let resolved = try await resolveRegisteredScripts(extensionID: extensionID,
+                                                              raw: payload["scripts"] as? [[String: Any]] ?? [])
+            let userScriptStore = BrownBearServices.shared.webExtensionUserScriptStore
+            if api == "userScripts.register" {
+                try await userScriptStore.register(extensionID: extensionID, scripts: resolved)
+            } else {
+                try await userScriptStore.update(extensionID: extensionID, scripts: resolved)
+            }
+            return NSNull()
+
+        case "userScripts.getScripts":
+            try await requireUserScriptsPermission(extensionID)
+            let filter = (payload["filter"] as? [String: Any])?["ids"] as? [String]
+            let scripts = await BrownBearServices.shared.webExtensionUserScriptStore
+                .getScripts(extensionID: extensionID, ids: filter)
+            return scripts.map(Self.userScriptDict)
+
+        case "userScripts.unregister":
+            try await requireUserScriptsPermission(extensionID)
+            let ids = (payload["filter"] as? [String: Any])?["ids"] as? [String]
+            await BrownBearServices.shared.webExtensionUserScriptStore.unregister(extensionID: extensionID, ids: ids)
+            return NSNull()
+
+        case "userScripts.configureWorld":
+            try await requireUserScriptsPermission(extensionID)
+            let properties = payload["properties"] as? [String: Any] ?? [:]
+            let config = WebExtensionUserScriptStore.WorldConfig(
+                worldId: properties["worldId"] as? String,
+                csp: properties["csp"] as? String,
+                messaging: (properties["messaging"] as? Bool) ?? false)
+            await BrownBearServices.shared.webExtensionUserScriptStore.configureWorld(extensionID: extensionID, config: config)
+            return NSNull()
+
+        default:
+            throw BrownBearError.bridgeRejected("unsupported api '\(api)'")
+        }
+    }
+
+    /// declarativeNetRequest is privileged: require the API permission before any read OR write.
+    private func requireDNRPermission(_ extensionID: String) async throws {
+        let perms = await store.ext(for: extensionID)?.manifest?.permissions ?? []
+        guard perms.contains("declarativeNetRequest") || perms.contains("declarativeNetRequestWithHostAccess") else {
+            throw BrownBearError.bridgeRejected("declarativeNetRequest permission not granted")
+        }
+    }
+
+    private func requireUserScriptsPermission(_ extensionID: String) async throws {
+        let perms = await store.ext(for: extensionID)?.manifest?.permissions ?? []
+        guard perms.contains("userScripts") else {
+            throw BrownBearError.bridgeRejected("userScripts permission not granted")
+        }
+    }
+
+    /// Build a RuleUpdate from a chrome update payload (addRules + removeRuleIds).
+    static func parseRuleUpdate(_ payload: [String: Any]) -> WebExtensionDNRStore.RuleUpdate {
+        WebExtensionDNRStore.RuleUpdate(
+            removeRuleIDs: (payload["removeRuleIds"] as? [Int]) ?? [],
+            addRules: (payload["addRules"] as? [[String: Any]]) ?? [])
+    }
+
+    /// chrome's get*Rules takes an optional ruleIds filter.
+    static func filterRules(_ rules: [[String: Any]], ids: [Int]?) -> [[String: Any]] {
+        guard let ids else { return rules }
+        let wanted = Set(ids)
+        return rules.filter { ($0["id"] as? Int).map(wanted.contains) ?? false }
+    }
+
+    static func userScriptDict(_ script: WebExtensionUserScriptStore.RegisteredScript) -> [String: Any] {
+        [
+            "id": script.id,
+            "matches": script.matches,
+            "excludeMatches": script.excludeMatches,
+            "includeGlobs": script.includeGlobs,
+            "excludeGlobs": script.excludeGlobs,
+            "js": [["code": script.js]],   // chrome returns ScriptSource[]; we round-trip resolved code
+            "runAt": script.runAt,
+            "allFrames": script.allFrames,
+            "world": script.world
+        ]
+    }
+
+    /// Resolve register/update ScriptSource[] (each { code } OR { file }) to a flat source string and
+    /// normalize match/run-at fields. A `file` is read from the extension's package (containment-safe).
+    /// Fails closed if a script has neither code nor a readable file, or no matches.
+    private func resolveRegisteredScripts(extensionID: String,
+                                          raw: [[String: Any]]) async throws -> [WebExtensionUserScriptStore.RegisteredScript] {
+        var out: [WebExtensionUserScriptStore.RegisteredScript] = []
+        for entry in raw {
+            guard let id = entry["id"] as? String, !id.isEmpty else {
+                throw BrownBearError.bridgeRejected("userScripts: every script needs an id")
+            }
+            let matches = (entry["matches"] as? [String]) ?? []
+            guard !matches.isEmpty else {
+                throw BrownBearError.bridgeRejected("userScripts: script '\(id)' has no matches")
+            }
+            var source = ""
+            for js in (entry["js"] as? [[String: Any]]) ?? [] {
+                if let code = js["code"] as? String {
+                    source += code + "\n;\n"
+                } else if let file = js["file"] as? String,
+                          let text = await store.text(extensionID: extensionID, path: file) {
+                    source += text + "\n;\n"
+                }
+            }
+            guard !source.isEmpty else {
+                throw BrownBearError.bridgeRejected("userScripts: script '\(id)' has no usable js")
+            }
+            out.append(WebExtensionUserScriptStore.RegisteredScript(
+                id: id,
+                matches: matches,
+                excludeMatches: (entry["excludeMatches"] as? [String]) ?? [],
+                includeGlobs: (entry["includeGlobs"] as? [String]) ?? [],
+                excludeGlobs: (entry["excludeGlobs"] as? [String]) ?? [],
+                js: source,
+                runAt: (entry["runAt"] as? String) ?? "document_idle",
+                allFrames: (entry["allFrames"] as? Bool) ?? false,
+                world: (entry["world"] as? String) ?? "USER_SCRIPT"))
+        }
+        return out
     }
 }

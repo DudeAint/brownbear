@@ -418,6 +418,67 @@
     onAdded: makeEvent([]), onRemoved: makeEvent([])
   };
 
+  // ---------------------------------------------------------------- chrome.declarativeNetRequest
+  // Backed by __bb_dnr(method, argsJSON, cb). A native { error } result rejects the promise.
+  function dnrCall(method, args) {
+    return new Promise(function (resolve, reject) {
+      __bb_dnr(method, JSON.stringify(args || {}), function (resJSON) {
+        var r = parseJSON(resJSON);
+        if (r && typeof r === 'object' && typeof r.error === 'string') { reject(new Error(r.error)); }
+        else { resolve(r); }
+      });
+    });
+  }
+  var declarativeNetRequest = {
+    updateDynamicRules: function (options, cb) { return settleBg(dnrCall('updateDynamicRules', options || {}).then(function () { return undefined; }), cb); },
+    getDynamicRules: function (filter, cb) {
+      if (typeof filter === 'function') { cb = filter; filter = null; }
+      return settleBg(dnrCall('getDynamicRules', { ruleIds: (filter && filter.ruleIds) || null }), cb);
+    },
+    updateSessionRules: function (options, cb) { return settleBg(dnrCall('updateSessionRules', options || {}).then(function () { return undefined; }), cb); },
+    getSessionRules: function (filter, cb) {
+      if (typeof filter === 'function') { cb = filter; filter = null; }
+      return settleBg(dnrCall('getSessionRules', { ruleIds: (filter && filter.ruleIds) || null }), cb);
+    },
+    updateEnabledRulesets: function (options, cb) { return settleBg(dnrCall('updateEnabledRulesets', options || {}).then(function () { return undefined; }), cb); },
+    getEnabledRulesets: function (cb) { return settleBg(dnrCall('getEnabledRulesets', {}), cb); },
+    getMatchedRules: function (filter, cb) {
+      if (typeof filter === 'function') { cb = filter; filter = null; }
+      return settleBg(Promise.resolve({ rulesMatchedInfo: [] }), cb);
+    },
+    setExtensionActionOptions: function (options, cb) { return settleBg(Promise.resolve(undefined), cb); },
+    isRegexSupported: function (regexOptions, cb) { return settleBg(Promise.resolve({ isSupported: true }), cb); },
+    onRuleMatchedDebug: makeEvent([]),
+    MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES: 30000,
+    MAX_NUMBER_OF_ENABLED_STATIC_RULESETS: 50,
+    DYNAMIC_RULESET_ID: '_dynamic',
+    SESSION_RULESET_ID: '_session'
+  };
+
+  // ---------------------------------------------------------------- chrome.userScripts
+  function userScriptsCall(method, args) {
+    return new Promise(function (resolve, reject) {
+      __bb_userscripts(method, JSON.stringify(args || {}), function (resJSON) {
+        var r = parseJSON(resJSON);
+        if (r && typeof r === 'object' && typeof r.error === 'string') { reject(new Error(r.error)); }
+        else { resolve(r); }
+      });
+    });
+  }
+  var userScripts = {
+    register: function (scripts, cb) { return settleBg(userScriptsCall('register', { scripts: scripts || [] }).then(function () { return undefined; }), cb); },
+    update: function (scripts, cb) { return settleBg(userScriptsCall('update', { scripts: scripts || [] }).then(function () { return undefined; }), cb); },
+    unregister: function (filter, cb) {
+      if (typeof filter === 'function') { cb = filter; filter = null; }
+      return settleBg(userScriptsCall('unregister', { filter: filter || null }).then(function () { return undefined; }), cb);
+    },
+    getScripts: function (filter, cb) {
+      if (typeof filter === 'function') { cb = filter; filter = null; }
+      return settleBg(userScriptsCall('getScripts', { filter: filter || null }), cb);
+    },
+    configureWorld: function (properties, cb) { return settleBg(userScriptsCall('configureWorld', { properties: properties || {} }).then(function () { return undefined; }), cb); }
+  };
+
   // ---------------------------------------------------------------- chrome.cookies
 
   function cookiesCall(method, args) {
@@ -478,6 +539,8 @@
     windows: windows,
     management: management,
     permissions: permissions,
+    declarativeNetRequest: declarativeNetRequest,
+    userScripts: userScripts,
     alarms: alarms,
     commands: commands,
     action: action,

@@ -180,6 +180,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
         installNotificationNatives(into: context)
         installActionNatives(into: context)
         installWindowsManagementPermissionsNatives(into: context)
+        installDNRAndUserScriptNatives(into: context)
 
         // chrome.tabs from the background worker. Hop to the main actor (TabManager is MainActor),
         // run the op, then call back onto this context's queue with the JSON result.
@@ -887,5 +888,33 @@ extension WebExtensionBackgroundContext {
         default:
             return NSNull()
         }
+    }
+
+    /// chrome.declarativeNetRequest + chrome.userScripts for the BACKGROUND worker. Pure store ops; each
+    /// native hops to the main actor to reach BrownBearServices.shared, drives the async actor call, then
+    /// callBacks onto this context's queue with the JSON result. Mirrors the __bb_tabs pattern.
+    private func installDNRAndUserScriptNatives(into context: JSContext) {
+        let extensionID = self.extensionID
+        let dnr: @convention(block) (String, String, JSValue) -> Void = { [weak self] method, argsJSON, callback in
+            guard let self else { return }
+            let args = ((try? JSONSerialization.jsonObject(with: Data(argsJSON.utf8))) as? [String: Any]) ?? [:]
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let result = await WebExtensionBackgroundContext.dispatchDNR(extensionID: extensionID, method: method, args: args)
+                self.callBack(callback, with: self.jsonString(result))
+            }
+        }
+        context.setObject(dnr, forKeyedSubscript: "__bb_dnr" as NSString)
+
+        let userScripts: @convention(block) (String, String, JSValue) -> Void = { [weak self] method, argsJSON, callback in
+            guard let self else { return }
+            let args = ((try? JSONSerialization.jsonObject(with: Data(argsJSON.utf8))) as? [String: Any]) ?? [:]
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let result = await WebExtensionBackgroundContext.dispatchUserScripts(extensionID: extensionID, method: method, args: args)
+                self.callBack(callback, with: self.jsonString(result))
+            }
+        }
+        context.setObject(userScripts, forKeyedSubscript: "__bb_userscripts" as NSString)
     }
 }

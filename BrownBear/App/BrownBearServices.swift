@@ -34,6 +34,10 @@ final class BrownBearServices {
     let webExtensionActionState = WebExtensionActionState()
     /// Module 6 Phase 3 — chrome.permissions optional grants + runtime uninstall URL, per extension.
     let webExtensionPermissionGrants = WebExtensionPermissionGrants()
+    /// Module 6 Phase 3 — declarativeNetRequest dynamic/session rules + enabled-ruleset overrides.
+    let webExtensionDNRStore = WebExtensionDNRStore()
+    /// Module 6 Phase 3 — chrome.userScripts (MV3) runtime-registered content scripts, per extension.
+    let webExtensionUserScriptStore = WebExtensionUserScriptStore()
     /// Module 6 Phase 2 — headless background service workers + the content↔background message bus.
     let webExtensionRuntime: WebExtensionRuntime
 
