@@ -21,8 +21,11 @@ struct ScriptDetailView: View {
     @State private var editingKey: String?
     @State private var editingText = ""
     @State private var valueError: String?
+    /// Hosts the user allowed beyond the script's @connect (ScriptCat-style), each revocable here.
+    @State private var grantedHosts: [String] = []
 
     private var meta: ScriptMetadata { script.metadata }
+    private var connectGrantStore: ConnectGrantStore { BrownBearServices.shared.connectGrantStore }
     private var current: UserScript { model.scripts.first { $0.id == script.id } ?? script }
 
     private var valueStore: GMValueStore { BrownBearServices.shared.valueStore }
@@ -34,6 +37,7 @@ struct ScriptDetailView: View {
                 if meta.runsInBackground { scheduleCard }
                 ScriptSettingsCard(script: current, model: model)
                 directivesCard
+                if !grantedHosts.isEmpty { grantedHostsCard }
                 storedValuesCard
                 logsCard
                 deleteButton
@@ -74,6 +78,43 @@ struct ScriptDetailView: View {
         .task {
             logs = await model.logs(for: script.id)
             await reloadStoredValues()
+            await reloadGrantedHosts()
+        }
+    }
+
+    private func reloadGrantedHosts() async {
+        grantedHosts = await connectGrantStore.allowedHosts(scriptID: script.id)
+    }
+
+    /// "Allowed by you" — hosts the user granted at the @connect prompt beyond what the script
+    /// declares. Each is revocable; declared @connect hosts stay as read-only pills in directivesCard.
+    private var grantedHostsCard: some View {
+        BBCard {
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Allowed by you", systemImage: "checkmark.shield")
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(BBTheme.Color.textPrimary)
+                Text("Hosts you let this script connect to beyond its @connect list.")
+                    .font(.caption2).foregroundStyle(BBTheme.Color.textSecondary)
+                ForEach(grantedHosts, id: \.self) { host in
+                    HStack {
+                        Image(systemName: "globe").foregroundStyle(BBTheme.Color.textSecondary)
+                        Text(host).font(.caption.monospaced()).foregroundStyle(BBTheme.Color.textPrimary)
+                        Spacer()
+                        Button(role: .destructive) {
+                            Task { @MainActor in
+                                await connectGrantStore.revoke(scriptID: script.id, host: host)
+                                await reloadGrantedHosts()
+                            }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(BBTheme.Color.textSecondary)
+                        }
+                        .accessibilityLabel("Revoke \(host)")
+                    }
+                    if host != grantedHosts.last {
+                        Divider().overlay(BBTheme.Color.separator.opacity(0.5))
+                    }
+                }
+            }
         }
     }
 

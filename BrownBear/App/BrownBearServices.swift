@@ -22,6 +22,8 @@ final class BrownBearServices {
     let bookmarkStore = BookmarkStore()
     let historyStore = HistoryStore()
     let siteSettingsStore = SiteSettingsStore()
+    /// Per-script user grants for hosts NOT in a script's `@connect` (ScriptCat-style allow-always).
+    let connectGrantStore = ConnectGrantStore()
     let backgroundScheduler: BrownBearBackgroundScheduler
 
     // Module 6 — browser extensions.
