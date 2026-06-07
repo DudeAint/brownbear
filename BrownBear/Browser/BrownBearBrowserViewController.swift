@@ -18,7 +18,9 @@ final class BrownBearBrowserViewController: UIViewController {
     /// Owns the shared userscript runtime (Modules 2–3) plumbed into every tab's configuration.
     let injection = InjectionOrchestrator()
     private lazy var configurationFactory = WebViewConfigurationFactory(injection: injection)
-    private lazy var tabManager = TabManager(configurationFactory: configurationFactory)
+    // Not `private`: the page-zoom logic lives in BrownBearBrowserViewController+Zoom.swift, and a
+    // Swift extension in another file can only reach internal (or higher) members.
+    lazy var tabManager = TabManager(configurationFactory: configurationFactory)
     // Built per submit from the user's chosen search engine (AppSettings), so changing it in
     // Settings takes effect immediately.
 
@@ -28,7 +30,8 @@ final class BrownBearBrowserViewController: UIViewController {
     private let omnibox = OmniboxView()
     private let progressBar = ProgressBar()
     private let contentContainer = UIView()
-    private let toolbar = BrowserToolbar()
+    // Not `private`: the +Zoom extension (separate file) anchors the zoom HUD above this toolbar.
+    let toolbar = BrowserToolbar()
 
     /// The web view currently installed in the content container.
     private weak var installedWebView: WKWebView?
@@ -36,9 +39,10 @@ final class BrownBearBrowserViewController: UIViewController {
     /// `*.user.js` URLs the user chose to view as raw source instead of installing — let through once.
     private var viewSourceAllowOnce: Set<URL> = []
 
-    /// The transient page-zoom control and its live percentage label.
-    private weak var zoomHUD: UIView?
-    private weak var zoomLabel: UILabel?
+    /// The transient page-zoom control and its live percentage label. Not `private`: driven by the
+    /// +Zoom extension in a separate file (stored properties can't move to an extension).
+    weak var zoomHUD: UIView?
+    weak var zoomLabel: UILabel?
 
     // MARK: - Lifecycle
 
