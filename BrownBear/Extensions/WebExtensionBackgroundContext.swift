@@ -179,6 +179,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
         installCookiesNatives(into: context)
         installNotificationNatives(into: context)
         installActionNatives(into: context)
+        installWindowsManagementPermissionsNatives(into: context)
 
         // chrome.tabs from the background worker. Hop to the main actor (TabManager is MainActor),
         // run the op, then call back onto this context's queue with the JSON result.
@@ -751,6 +752,140 @@ extension WebExtensionBackgroundContext {
         let tabJSON = jsonString(tab ?? NSNull())
         queue.async { [self] in
             fire(method: "dispatchActionClicked", arguments: [tabJSON])
+        }
+    }
+
+    /// chrome.windows / chrome.management / chrome.permissions + the real runtime.openOptionsPage and
+    /// runtime.setUninstallURL for the BACKGROUND worker. windows hop to the browser host on the main
+    /// actor; management/permissions read the store + grants actors (off BrownBearServices.shared,
+    /// which is @MainActor) then call back on this context's serial queue.
+    private func installWindowsManagementPermissionsNatives(into context: JSContext) {
+        let windows: @convention(block) (String, String, JSValue) -> Void = { [weak self] method, argsJSON, callback in
+            guard let self else { return }
+            let args = ((try? JSONSerialization.jsonObject(with: Data(argsJSON.utf8))) as? [String: Any]) ?? [:]
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let result: Any = self.host.map {
+                    WebExtensionBackgroundContext.dispatchWindow(host: $0, method: method, args: args)
+                } ?? NSNull()
+                self.callBack(callback, with: self.jsonString(result))
+            }
+        }
+        context.setObject(windows, forKeyedSubscript: "__bb_windows" as NSString)
+
+        let management: @convention(block) (String, String, JSValue) -> Void = { [weak self] method, argsJSON, callback in
+            guard let self else { return }
+            let args = ((try? JSONSerialization.jsonObject(with: Data(argsJSON.utf8))) as? [String: Any]) ?? [:]
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let store = BrownBearServices.shared.webExtensionStore
+                let result = await WebExtensionBackgroundContext.dispatchManagement(
+                    store: store, selfID: self.extensionID, method: method, args: args)
+                self.callBack(callback, with: self.jsonString(result))
+            }
+        }
+        context.setObject(management, forKeyedSubscript: "__bb_management" as NSString)
+
+        let permissions: @convention(block) (String, String, JSValue) -> Void = { [weak self] method, argsJSON, callback in
+            guard let self else { return }
+            let args = ((try? JSONSerialization.jsonObject(with: Data(argsJSON.utf8))) as? [String: Any]) ?? [:]
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let store = BrownBearServices.shared.webExtensionStore
+                let grants = BrownBearServices.shared.webExtensionPermissionGrants
+                let result = await WebExtensionBackgroundContext.dispatchPermissions(
+                    store: store, grants: grants, extensionID: self.extensionID, method: method, args: args)
+                self.callBack(callback, with: self.jsonString(result))
+            }
+        }
+        context.setObject(permissions, forKeyedSubscript: "__bb_permissions" as NSString)
+
+        let openOptions: @convention(block) (JSValue) -> Void = { [weak self] callback in
+            guard let self else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let ok = self.host?.webExtOpenOptionsPage(extensionID: self.extensionID) ?? false
+                self.callBack(callback, with: ok ? "true" : "false")
+            }
+        }
+        context.setObject(openOptions, forKeyedSubscript: "__bb_runtime_open_options" as NSString)
+
+        let setUninstallURL: @convention(block) (String, JSValue) -> Void = { [weak self] url, callback in
+            guard let self else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let grants = BrownBearServices.shared.webExtensionPermissionGrants
+                await grants.setUninstallURL(extensionID: self.extensionID, url: url)
+                self.callBack(callback, with: nil)
+            }
+        }
+        context.setObject(setUninstallURL, forKeyedSubscript: "__bb_runtime_set_uninstall_url" as NSString)
+    }
+
+    /// Map a chrome.windows method + args to the bridge host, returning a JSON-serializable value.
+    @MainActor
+    private static func dispatchWindow(host: WebExtensionBridgeHost, method: String, args: [String: Any]) -> Any {
+        let populate = (args["populate"] as? Bool) ?? false
+        switch method {
+        case "get", "getCurrent", "getLastFocused":
+            return host.webExtWindow(populate: populate)
+        case "getAll":
+            return host.webExtAllWindows(populate: populate)
+        case "create":
+            return host.webExtCreateWindow(url: args["url"] as? String,
+                                           active: (args["focused"] as? Bool) ?? true,
+                                           populate: populate)
+        case "update":
+            return host.webExtUpdateWindow(populate: populate)
+        default:
+            return NSNull()   // remove et al. — no-op on a single, unclosable window
+        }
+    }
+
+    /// chrome.management reads, off the WebExtensionStore actor.
+    private static func dispatchManagement(store: WebExtensionStore, selfID: String,
+                                           method: String, args: [String: Any]) async -> Any {
+        switch method {
+        case "getAll":
+            return WebExtensionManagementInfo.allExtensionInfos(await store.all())
+        case "get":
+            guard let id = args["id"] as? String, let ext = await store.ext(for: id) else { return NSNull() }
+            return WebExtensionManagementInfo.extensionInfo(for: ext)
+        case "getSelf":
+            guard let ext = await store.ext(for: selfID) else { return NSNull() }
+            return WebExtensionManagementInfo.extensionInfo(for: ext)
+        default:
+            return NSNull()
+        }
+    }
+
+    /// chrome.permissions reconciliation, off the store + grant actors.
+    private static func dispatchPermissions(store: WebExtensionStore,
+                                            grants: WebExtensionPermissionGrants,
+                                            extensionID: String, method: String,
+                                            args: [String: Any]) async -> Any {
+        let manifest = await store.ext(for: extensionID)?.manifest
+        let requested = WebExtensionManagementInfo.PermissionSet(payload: args)
+        let granted = await grants.granted(extensionID: extensionID)
+        switch method {
+        case "getAll":
+            return WebExtensionManagementInfo.effective(manifest: manifest, granted: granted).dictionary
+        case "contains":
+            return WebExtensionManagementInfo.contains(requested, manifest: manifest, granted: granted)
+        case "request":
+            guard let toGrant = WebExtensionManagementInfo.resolveRequest(requested, manifest: manifest) else {
+                return false
+            }
+            await grants.grant(extensionID: extensionID, toGrant)
+            return true
+        case "remove":
+            guard let remaining = WebExtensionManagementInfo.resolveRemove(requested, manifest: manifest, granted: granted) else {
+                return false
+            }
+            await grants.setGranted(extensionID: extensionID, remaining)
+            return true
+        default:
+            return NSNull()
         }
     }
 }

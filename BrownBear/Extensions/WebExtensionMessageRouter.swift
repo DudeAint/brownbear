@@ -160,9 +160,18 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
             return response
 
         case "runtime.openOptionsPage":
-            // The options page is opened from BrownBear's own UI (dashboard/browser); acknowledge so
-            // the page's callback fires without error. (Programmatic navigation isn't wired here.)
+            guard let host, await store.ext(for: extensionID)?.manifest?.optionsPage != nil else {
+                throw BrownBearError.bridgeRejected("no options page to open")
+            }
+            _ = host.webExtOpenOptionsPage(extensionID: extensionID)
             return NSNull()
+
+        case "windows.get", "windows.getCurrent", "windows.getLastFocused", "windows.getAll",
+             "windows.create", "windows.update", "windows.remove",
+             "management.getAll", "management.get", "management.getSelf",
+             "permissions.getAll", "permissions.contains", "permissions.request", "permissions.remove",
+             "runtime.setUninstallURL", "runtime.getPlatformInfo":
+            return try await routeWindowsManagementPermissions(api: api, payload: payload, extensionID: extensionID)
 
         // chrome.cookies — gated on the `cookies` API permission plus a host_permission covering the
         // target (reads/writes); getAllCookieStores needs only the cookies permission. The browser's
@@ -183,141 +192,6 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
                 throw BrownBearError.bridgeRejected("unsupported extension api '\(api)'")
             }
             return result
-        }
-    }
-
-    // MARK: - chrome.cookies
-
-    private func routeCookies(api: String, payload: [String: Any], extensionID: String) async throws -> Any? {
-        guard let host = cookieHost else { return NSNull() }
-        let details = (payload["details"] as? [String: Any]) ?? [:]
-        let storeId = details["storeId"] as? String
-        guard try await hasCookiesPermission(extensionID: extensionID) else {
-            throw BrownBearError.bridgeRejected("the \"cookies\" permission is not granted")
-        }
-        switch api {
-        case "cookies.get":
-            guard let url = details["url"] as? String, let name = details["name"] as? String else {
-                throw BrownBearError.bridgeRejected("cookies.get requires url and name")
-            }
-            guard try await cookieHostAllowed(extensionID: extensionID, details: details) else {
-                throw BrownBearError.bridgeRejected("no host permission for \(url)")
-            }
-            return await host.webExtGetCookie(url: url, name: name, storeId: storeId) ?? NSNull()
-        case "cookies.getAll":
-            guard try await cookieHostAllowed(extensionID: extensionID, details: details) else {
-                throw BrownBearError.bridgeRejected("no host permission for this cookies.getAll filter")
-            }
-            return await host.webExtGetAllCookies(filter: details, storeId: storeId)
-        case "cookies.set":
-            guard try await cookieHostAllowed(extensionID: extensionID, details: details) else {
-                throw BrownBearError.bridgeRejected("no host permission for cookies.set")
-            }
-            return await host.webExtSetCookie(details: details, storeId: storeId) ?? NSNull()
-        case "cookies.remove":
-            guard let url = details["url"] as? String, let name = details["name"] as? String else {
-                throw BrownBearError.bridgeRejected("cookies.remove requires url and name")
-            }
-            guard try await cookieHostAllowed(extensionID: extensionID, details: details) else {
-                throw BrownBearError.bridgeRejected("no host permission for \(url)")
-            }
-            return await host.webExtRemoveCookie(url: url, name: name, storeId: storeId) ?? NSNull()
-        case "cookies.getAllCookieStores":
-            return host.webExtGetAllCookieStores()
-        default:
-            throw BrownBearError.bridgeRejected("unsupported cookies api '\(api)'")
-        }
-    }
-
-    private func hasCookiesPermission(extensionID: String) async throws -> Bool {
-        guard let manifest = await store.ext(for: extensionID)?.manifest else { return false }
-        return manifest.permissions.contains("cookies")
-    }
-
-    private func cookieHostAllowed(extensionID: String, details: [String: Any]) async throws -> Bool {
-        guard let manifest = await store.ext(for: extensionID)?.manifest else { return false }
-        let targetURL: String?
-        if let url = details["url"] as? String { targetURL = url }
-        else if let domain = details["domain"] as? String, !domain.isEmpty {
-            let host = domain.hasPrefix(".") ? String(domain.dropFirst()) : domain
-            targetURL = "https://\(host)/"
-        } else { targetURL = nil }
-        guard let targetURL else { return true }
-        let matcher = URLMatcher(matches: manifest.effectiveHostPatterns,
-                                 includes: [], excludes: [], excludeMatches: [])
-        return matcher.matches(targetURL)
-    }
-
-    // MARK: - chrome.notifications
-
-    /// chrome.notifications — UNUserNotificationCenter-backed via the bridge host. `extensionID`
-    /// (resolved from the token above) gates the manifest "notifications" permission in the manager.
-    private func routeNotifications(api: String, payload: [String: Any], extensionID: String) async throws -> Any? {
-        switch api {
-        case "notifications.create":
-            guard let host else { throw BrownBearError.bridgeRejected("no browser for notifications") }
-            return try await host.webExtNotificationsCreate(
-                extensionID: extensionID,
-                notificationID: payload["notificationId"] as? String,
-                options: payload["options"] as? [String: Any] ?? [:])
-
-        case "notifications.update":
-            guard let host, let id = payload["notificationId"] as? String else { return false }
-            return try await host.webExtNotificationsUpdate(
-                extensionID: extensionID, notificationID: id,
-                options: payload["options"] as? [String: Any] ?? [:])
-
-        case "notifications.clear":
-            guard let host, let id = payload["notificationId"] as? String else { return false }
-            return try await host.webExtNotificationsClear(extensionID: extensionID, notificationID: id)
-
-        case "notifications.getAll":
-            guard let host else { return [String: Bool]() }
-            return try await host.webExtNotificationsGetAll(extensionID: extensionID)
-
-        default:
-            throw BrownBearError.bridgeRejected("unsupported notifications api '\(api)'")
-        }
-    }
-
-    // MARK: - chrome.action / chrome.browserAction
-
-    /// chrome.action setters/getters. State lives in the shared WebExtensionActionState (no permission
-    /// needed — Chrome gates it on the manifest action entry; the token was already resolved). A
-    /// tab-less property defaults to the active tab, resolved via the host. All synchronous.
-    private func routeAction(api: String, payload: [String: Any], extensionID: String) -> Any? {
-        let state = BrownBearServices.shared.webExtensionActionState
-        let tabId = (payload["tabId"] as? Int) ?? host?.webExtActionActiveTabId()
-        switch api {
-        case "action.setBadgeText":
-            state.setBadgeText(extensionID: extensionID, tabId: tabId, text: payload["text"] as? String)
-            return NSNull()
-        case "action.setBadgeBackgroundColor":
-            state.setBadgeColor(extensionID: extensionID, tabId: tabId, color: payload["color"] as? String)
-            return NSNull()
-        case "action.setTitle":
-            state.setTitle(extensionID: extensionID, tabId: tabId, title: payload["title"] as? String)
-            return NSNull()
-        case "action.setPopup":
-            state.setPopup(extensionID: extensionID, tabId: tabId, popup: payload["popup"] as? String)
-            return NSNull()
-        case "action.setIcon":
-            state.setIcon(extensionID: extensionID, tabId: tabId, path: WebExtensionActionState.iconPath(from: payload["path"]))
-            return NSNull()
-        case "action.enable":
-            state.setEnabled(extensionID: extensionID, tabId: tabId, true)
-            return NSNull()
-        case "action.disable":
-            state.setEnabled(extensionID: extensionID, tabId: tabId, false)
-            return NSNull()
-        case "action.getBadgeText":
-            return state.badgeText(extensionID: extensionID, tabId: tabId)
-        case "action.getTitle":
-            return state.title(extensionID: extensionID, tabId: tabId)
-        case "action.getBadgeBackgroundColor":
-            return state.badgeColorBytes(extensionID: extensionID, tabId: tabId)
-        default:
-            return NSNull()
         }
     }
 
@@ -636,5 +510,233 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
             }
         }
         return out
+    }
+}
+
+
+// MARK: - chrome.cookies / notifications / action / windows / management / permissions
+//
+// Split into a same-file extension so the primary type body stays under the length limit; a
+// same-file extension still reaches the class's `private` members (store/host/cookieHost/…).
+extension WebExtensionMessageRouter {
+
+    // MARK: - chrome.cookies
+
+    private func routeCookies(api: String, payload: [String: Any], extensionID: String) async throws -> Any? {
+        guard let host = cookieHost else { return NSNull() }
+        let details = (payload["details"] as? [String: Any]) ?? [:]
+        let storeId = details["storeId"] as? String
+        guard try await hasCookiesPermission(extensionID: extensionID) else {
+            throw BrownBearError.bridgeRejected("the \"cookies\" permission is not granted")
+        }
+        switch api {
+        case "cookies.get":
+            guard let url = details["url"] as? String, let name = details["name"] as? String else {
+                throw BrownBearError.bridgeRejected("cookies.get requires url and name")
+            }
+            guard try await cookieHostAllowed(extensionID: extensionID, details: details) else {
+                throw BrownBearError.bridgeRejected("no host permission for \(url)")
+            }
+            return await host.webExtGetCookie(url: url, name: name, storeId: storeId) ?? NSNull()
+        case "cookies.getAll":
+            guard try await cookieHostAllowed(extensionID: extensionID, details: details) else {
+                throw BrownBearError.bridgeRejected("no host permission for this cookies.getAll filter")
+            }
+            return await host.webExtGetAllCookies(filter: details, storeId: storeId)
+        case "cookies.set":
+            guard try await cookieHostAllowed(extensionID: extensionID, details: details) else {
+                throw BrownBearError.bridgeRejected("no host permission for cookies.set")
+            }
+            return await host.webExtSetCookie(details: details, storeId: storeId) ?? NSNull()
+        case "cookies.remove":
+            guard let url = details["url"] as? String, let name = details["name"] as? String else {
+                throw BrownBearError.bridgeRejected("cookies.remove requires url and name")
+            }
+            guard try await cookieHostAllowed(extensionID: extensionID, details: details) else {
+                throw BrownBearError.bridgeRejected("no host permission for \(url)")
+            }
+            return await host.webExtRemoveCookie(url: url, name: name, storeId: storeId) ?? NSNull()
+        case "cookies.getAllCookieStores":
+            return host.webExtGetAllCookieStores()
+        default:
+            throw BrownBearError.bridgeRejected("unsupported cookies api '\(api)'")
+        }
+    }
+
+    private func hasCookiesPermission(extensionID: String) async throws -> Bool {
+        guard let manifest = await store.ext(for: extensionID)?.manifest else { return false }
+        return manifest.permissions.contains("cookies")
+    }
+
+    private func cookieHostAllowed(extensionID: String, details: [String: Any]) async throws -> Bool {
+        guard let manifest = await store.ext(for: extensionID)?.manifest else { return false }
+        let targetURL: String?
+        if let url = details["url"] as? String { targetURL = url }
+        else if let domain = details["domain"] as? String, !domain.isEmpty {
+            let host = domain.hasPrefix(".") ? String(domain.dropFirst()) : domain
+            targetURL = "https://\(host)/"
+        } else { targetURL = nil }
+        guard let targetURL else { return true }
+        let matcher = URLMatcher(matches: manifest.effectiveHostPatterns,
+                                 includes: [], excludes: [], excludeMatches: [])
+        return matcher.matches(targetURL)
+    }
+
+    // MARK: - chrome.notifications
+
+    /// chrome.notifications — UNUserNotificationCenter-backed via the bridge host. `extensionID`
+    /// (resolved from the token above) gates the manifest "notifications" permission in the manager.
+    private func routeNotifications(api: String, payload: [String: Any], extensionID: String) async throws -> Any? {
+        switch api {
+        case "notifications.create":
+            guard let host else { throw BrownBearError.bridgeRejected("no browser for notifications") }
+            return try await host.webExtNotificationsCreate(
+                extensionID: extensionID,
+                notificationID: payload["notificationId"] as? String,
+                options: payload["options"] as? [String: Any] ?? [:])
+
+        case "notifications.update":
+            guard let host, let id = payload["notificationId"] as? String else { return false }
+            return try await host.webExtNotificationsUpdate(
+                extensionID: extensionID, notificationID: id,
+                options: payload["options"] as? [String: Any] ?? [:])
+
+        case "notifications.clear":
+            guard let host, let id = payload["notificationId"] as? String else { return false }
+            return try await host.webExtNotificationsClear(extensionID: extensionID, notificationID: id)
+
+        case "notifications.getAll":
+            guard let host else { return [String: Bool]() }
+            return try await host.webExtNotificationsGetAll(extensionID: extensionID)
+
+        default:
+            throw BrownBearError.bridgeRejected("unsupported notifications api '\(api)'")
+        }
+    }
+
+    // MARK: - chrome.action / chrome.browserAction
+
+    /// chrome.action setters/getters. State lives in the shared WebExtensionActionState (no permission
+    /// needed — Chrome gates it on the manifest action entry; the token was already resolved). A
+    /// tab-less property defaults to the active tab, resolved via the host. All synchronous.
+    private func routeAction(api: String, payload: [String: Any], extensionID: String) -> Any? {
+        let state = BrownBearServices.shared.webExtensionActionState
+        let tabId = (payload["tabId"] as? Int) ?? host?.webExtActionActiveTabId()
+        switch api {
+        case "action.setBadgeText":
+            state.setBadgeText(extensionID: extensionID, tabId: tabId, text: payload["text"] as? String)
+            return NSNull()
+        case "action.setBadgeBackgroundColor":
+            state.setBadgeColor(extensionID: extensionID, tabId: tabId, color: payload["color"] as? String)
+            return NSNull()
+        case "action.setTitle":
+            state.setTitle(extensionID: extensionID, tabId: tabId, title: payload["title"] as? String)
+            return NSNull()
+        case "action.setPopup":
+            state.setPopup(extensionID: extensionID, tabId: tabId, popup: payload["popup"] as? String)
+            return NSNull()
+        case "action.setIcon":
+            state.setIcon(extensionID: extensionID, tabId: tabId, path: WebExtensionActionState.iconPath(from: payload["path"]))
+            return NSNull()
+        case "action.enable":
+            state.setEnabled(extensionID: extensionID, tabId: tabId, true)
+            return NSNull()
+        case "action.disable":
+            state.setEnabled(extensionID: extensionID, tabId: tabId, false)
+            return NSNull()
+        case "action.getBadgeText":
+            return state.badgeText(extensionID: extensionID, tabId: tabId)
+        case "action.getTitle":
+            return state.title(extensionID: extensionID, tabId: tabId)
+        case "action.getBadgeBackgroundColor":
+            return state.badgeColorBytes(extensionID: extensionID, tabId: tabId)
+        default:
+            return NSNull()
+        }
+    }
+
+    // MARK: - chrome.windows / chrome.management / chrome.permissions
+
+    /// chrome.windows (single synthetic window on iOS), chrome.management (read-only), and
+    /// chrome.permissions (optional-grant store) + runtime.setUninstallURL/getPlatformInfo. Split out
+    /// to keep route() under the complexity limit. A valid extension token is already resolved.
+    private func routeWindowsManagementPermissions(api: String, payload: [String: Any],
+                                                   extensionID: String) async throws -> Any? {
+        switch api {
+        case "windows.get", "windows.getCurrent", "windows.getLastFocused":
+            guard let host else { return NSNull() }
+            return host.webExtWindow(populate: (payload["populate"] as? Bool) ?? false)
+
+        case "windows.getAll":
+            guard let host else { return [] }
+            return host.webExtAllWindows(populate: (payload["populate"] as? Bool) ?? false)
+
+        case "windows.create":
+            guard let host else { throw BrownBearError.bridgeRejected("no browser to open a window") }
+            return host.webExtCreateWindow(url: payload["url"] as? String,
+                                           active: (payload["focused"] as? Bool) ?? true,
+                                           populate: (payload["populate"] as? Bool) ?? false)
+
+        case "windows.update":
+            guard let host else { return NSNull() }
+            return host.webExtUpdateWindow(populate: (payload["populate"] as? Bool) ?? false)
+
+        case "windows.remove":
+            return NSNull()   // iOS has one window that can't be closed; acknowledge so JS settles.
+
+        case "management.getAll":
+            return WebExtensionManagementInfo.allExtensionInfos(await store.all())
+
+        case "management.get":
+            guard let id = payload["id"] as? String, let ext = await store.ext(for: id) else {
+                throw BrownBearError.bridgeRejected("no extension with id '\(payload["id"] as? String ?? "")'")
+            }
+            return WebExtensionManagementInfo.extensionInfo(for: ext)
+
+        case "management.getSelf":
+            guard let ext = await store.ext(for: extensionID) else { return NSNull() }
+            return WebExtensionManagementInfo.extensionInfo(for: ext)
+
+        case "permissions.getAll":
+            let manifest = await store.ext(for: extensionID)?.manifest
+            let granted = await BrownBearServices.shared.webExtensionPermissionGrants.granted(extensionID: extensionID)
+            return WebExtensionManagementInfo.effective(manifest: manifest, granted: granted).dictionary
+
+        case "permissions.contains":
+            let manifest = await store.ext(for: extensionID)?.manifest
+            let granted = await BrownBearServices.shared.webExtensionPermissionGrants.granted(extensionID: extensionID)
+            let requested = WebExtensionManagementInfo.PermissionSet(payload: payload)
+            return WebExtensionManagementInfo.contains(requested, manifest: manifest, granted: granted)
+
+        case "permissions.request":
+            let manifest = await store.ext(for: extensionID)?.manifest
+            let grants = BrownBearServices.shared.webExtensionPermissionGrants
+            let requested = WebExtensionManagementInfo.PermissionSet(payload: payload)
+            guard let toGrant = WebExtensionManagementInfo.resolveRequest(requested, manifest: manifest) else { return false }
+            await grants.grant(extensionID: extensionID, toGrant)
+            return true
+
+        case "permissions.remove":
+            let manifest = await store.ext(for: extensionID)?.manifest
+            let grants = BrownBearServices.shared.webExtensionPermissionGrants
+            let granted = await grants.granted(extensionID: extensionID)
+            let requested = WebExtensionManagementInfo.PermissionSet(payload: payload)
+            guard let remaining = WebExtensionManagementInfo.resolveRemove(requested, manifest: manifest, granted: granted) else {
+                return false
+            }
+            await grants.setGranted(extensionID: extensionID, remaining)
+            return true
+
+        case "runtime.setUninstallURL":
+            let url = (payload["url"] as? String) ?? ""
+            await BrownBearServices.shared.webExtensionPermissionGrants.setUninstallURL(extensionID: extensionID, url: url)
+            return NSNull()
+
+        case "runtime.getPlatformInfo":
+            return ["os": "ios", "arch": "arm64", "nacl_arch": "arm64"]
+
+        default:
+            throw BrownBearError.bridgeRejected("unsupported api '\(api)'")
+        }
     }
 }

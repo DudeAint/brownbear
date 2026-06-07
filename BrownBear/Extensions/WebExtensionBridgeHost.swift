@@ -63,6 +63,20 @@ protocol WebExtensionBridgeHost: AnyObject {
     /// chrome.action — the visible click on an extension's overflow-menu action entry: open its popup
     /// if one is resolved for the active tab, otherwise fire chrome.action.onClicked into the worker.
     func webExtTriggerAction(extensionID: String)
+
+    /// chrome.windows.get / getCurrent / getLastFocused — the lone synthetic window (iOS is single-
+    /// window). `populate` includes the tab list in the record.
+    func webExtWindow(populate: Bool) -> [String: Any]
+    /// chrome.windows.getAll — always exactly one window on iOS.
+    func webExtAllWindows(populate: Bool) -> [[String: Any]]
+    /// chrome.windows.create — degrades to a new tab in the lone window; returns that window.
+    func webExtCreateWindow(url: String?, active: Bool, populate: Bool) -> [String: Any]
+    /// chrome.windows.update — geometry/state/focus aren't expressible on iOS; returns the window.
+    func webExtUpdateWindow(populate: Bool) -> [String: Any]
+    /// chrome.runtime.openOptionsPage — open the extension's real options page (tab or sheet). Returns
+    /// false if the extension is unknown or has no options page (so JS can populate lastError).
+    @discardableResult
+    func webExtOpenOptionsPage(extensionID: String) -> Bool
 }
 
 /// The native side of `chrome.cookies` — the browser implements it over the shared WKHTTPCookieStore

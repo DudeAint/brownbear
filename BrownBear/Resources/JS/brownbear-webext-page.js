@@ -263,6 +263,56 @@
     };
   }
 
+  // --- chrome.windows / management / permissions (extension page) -----------------------------
+  var noopEvent = { addListener: function () {}, removeListener: function () {}, hasListener: function () { return false; } };
+  function windowsApi() {
+    function normalize(getInfo, cb) {
+      if (typeof getInfo === "function") { cb = getInfo; getInfo = null; }
+      return { populate: !!(getInfo && getInfo.populate), cb: cb };
+    }
+    function get(windowId, getInfo, cb) {
+      if (typeof windowId === "object" && windowId !== null) { cb = getInfo; getInfo = windowId; }
+      else if (typeof windowId === "function") { cb = windowId; getInfo = null; }
+      var n = normalize(getInfo, cb);
+      return settle(bridge("windows.get", { populate: n.populate }), n.cb);
+    }
+    function getCurrent(getInfo, cb) { var n = normalize(getInfo, cb); return settle(bridge("windows.getCurrent", { populate: n.populate }), n.cb); }
+    function getLastFocused(getInfo, cb) { var n = normalize(getInfo, cb); return settle(bridge("windows.getLastFocused", { populate: n.populate }), n.cb); }
+    function getAll(getInfo, cb) { var n = normalize(getInfo, cb); return settle(bridge("windows.getAll", { populate: n.populate }), n.cb); }
+    function create(createData, cb) {
+      createData = createData || {};
+      var url = createData.url;
+      if (_Array.isArray(url)) { url = url[0]; }
+      return settle(bridge("windows.create", { url: url, focused: createData.focused !== false, populate: false }), cb);
+    }
+    function update(windowId, updateInfo, cb) { return settle(bridge("windows.update", { populate: false }), cb); }
+    function remove(windowId, cb) { return settle(bridge("windows.remove", {}).then(function () { return undefined; }), cb); }
+    return {
+      WINDOW_ID_NONE: -1, WINDOW_ID_CURRENT: -2,
+      get: get, getCurrent: getCurrent, getLastFocused: getLastFocused, getAll: getAll,
+      create: create, update: update, remove: remove,
+      onCreated: noopEvent, onRemoved: noopEvent, onFocusChanged: noopEvent, onBoundsChanged: noopEvent
+    };
+  }
+  function managementApi() {
+    return {
+      getSelf: function (cb) { return settle(bridge("management.getSelf", {}), cb); },
+      get: function (id, cb) { return settle(bridge("management.get", { id: id }), cb); },
+      getAll: function (cb) { return settle(bridge("management.getAll", {}), cb); },
+      onInstalled: noopEvent, onUninstalled: noopEvent, onEnabled: noopEvent, onDisabled: noopEvent
+    };
+  }
+  function permissionsApi() {
+    function perms(p) { p = p || {}; return { permissions: p.permissions || [], origins: p.origins || [] }; }
+    return {
+      getAll: function (cb) { return settle(bridge("permissions.getAll", {}), cb); },
+      contains: function (p, cb) { return settle(bridge("permissions.contains", perms(p)), cb); },
+      request: function (p, cb) { return settle(bridge("permissions.request", perms(p)), cb); },
+      remove: function (p, cb) { return settle(bridge("permissions.remove", perms(p)), cb); },
+      onAdded: noopEvent, onRemoved: noopEvent
+    };
+  }
+
   var chrome = {
     storage: {
       local: storageArea("local"),
@@ -274,6 +324,9 @@
     notifications: notificationsApi(),
     action: actionApi(),
     browserAction: actionApi(),
+    windows: windowsApi(),
+    management: managementApi(),
+    permissions: permissionsApi(),
     runtime: {
       id: data.extensionId,
       getManifest: function () { return manifest; },
@@ -290,7 +343,12 @@
         return settle(promise, cb);
       },
       connect: function () { return { name: "", onMessage: makeEvent([]), onDisconnect: makeEvent([]), postMessage: function () {}, disconnect: function () {} }; },
-      openOptionsPage: function (cb) { bridge("runtime.openOptionsPage", {}).catch(function () {}); if (typeof cb === "function") { cb(); } },
+      openOptionsPage: function (cb) {
+        return settle(bridge("runtime.openOptionsPage", {}).then(function () { return undefined; }), cb);
+      },
+      setUninstallURL: function (url, cb) {
+        return settle(bridge("runtime.setUninstallURL", { url: url || "" }).then(function () { return undefined; }), cb);
+      },
       lastError: null,
       getPlatformInfo: function (cb) { var info = { os: "ios", arch: "arm64", nacl_arch: "arm64" }; if (typeof cb === "function") { cb(info); return undefined; } return _Promise.resolve(info); }
     },
