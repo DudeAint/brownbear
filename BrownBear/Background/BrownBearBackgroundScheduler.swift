@@ -42,6 +42,21 @@ final class BrownBearBackgroundScheduler: @unchecked Sendable {
         }
     }
 
+    /// Opportunistic **foreground** catch-up. iOS background tasks are best-effort and frequently
+    /// never fire (especially on the simulator and for apps used briefly), so relying on them alone
+    /// means scheduled scripts may never run. Whenever the app becomes active we run any
+    /// @crontab/@background script that has come due since its last run — the SAME due logic the
+    /// background task uses — so a missed fire is picked up the next time the app is opened. This is
+    /// what actually gives scheduled scripts a "last run" on a real device. Cheap when nothing is due
+    /// (the due check short-circuits) and self-reschedules the next OS wake.
+    func runDueScriptsOnForeground() {
+        Task {
+            let deadline = Date().addingTimeInterval(25)   // a comfortable foreground budget
+            _ = await self.runDueScripts(deadline: deadline)
+            self.scheduleNextRun()
+        }
+    }
+
     /// Submit the next wake requests. Safe to call repeatedly (each replaces the pending one).
     func scheduleNextRun() {
         Task {
