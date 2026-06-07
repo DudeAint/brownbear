@@ -174,7 +174,15 @@ content-script injection in the isolated world, and `chrome.storage`/`runtime`/`
   requestDomains) are skipped and counted, never approximated.
 - **Background service workers / event pages** run headless in a per-extension `JSContext`
   (`WebExtensionBackgroundContext` + `WebExtensionRuntime` + `brownbear-webext-background.js`) with
-  `chrome.runtime`/`storage`/`alarms`/`i18n`, `console.*`, and `setTimeout`/`setInterval`.
+  `chrome.runtime`/`storage`/`alarms`/`i18n`, `console.*`, `setTimeout`/`setInterval`, web globals
+  (`fetch`/`URL`/`navigator`/`location`/Web Crypto), and **IndexedDB**.
+- **IndexedDB in headless contexts**: JavaScriptCore ships no IndexedDB, so both the extension worker
+  and the userscript background runner load an in-memory engine (`brownbear-indexeddb.js`, a vendored
+  fake-indexeddb IIFE) plus a snapshot/rehydrate layer (`brownbear-idb-persist.js`). The JS side
+  snapshots the store to JSON (debounced on write) and hands it to `BrownBearIDBStore`, which persists
+  it per-namespace under Application Support (one file per extension / per userscript — strict
+  isolation, §5); at boot the last snapshot is replayed through the public IndexedDB API. This lets
+  Dexie/ScriptCat-style background storage work and survive worker restarts.
 - **Messaging**: content → background `runtime.sendMessage`/`onMessage` with sync **and** async
   `sendResponse` (and Promise-returning listeners), over the same native-bound-token bridge.
 - **`chrome.alarms`**, **`storage.onChanged`** (in workers), and **direct Chrome Web Store install**
