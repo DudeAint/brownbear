@@ -168,7 +168,9 @@ content-script injection in the isolated world, and `chrome.storage`/`runtime`/`
 - **Messaging**: content → background `runtime.sendMessage`/`onMessage` with sync **and** async
   `sendResponse` (and Promise-returning listeners), over the same native-bound-token bridge.
 - **`chrome.alarms`**, **`storage.onChanged`** (in workers), and **direct Chrome Web Store install**
-  (`ChromeWebStore` — paste a link or id, fetch the CRX).
+  (`ChromeWebStore` — paste a link or id, fetch the CRX). Surfaced **in-page**: landing on a Chrome
+  Web Store detail page raises an "Add to BrownBear" banner above the toolbar
+  (`BrownBearBrowserViewController+ExtensionInstall`) that runs that same CRX install path in one tap.
 
 **Status — Phase 3 (shipped, final):**
 - **Popup & options pages** render in a real WKWebView over a `chrome-extension://` scheme
