@@ -51,6 +51,11 @@ final class BrownBearBrowserViewController: UIViewController {
     weak var zoomHUD: UIView?
     weak var zoomLabel: UILabel?
 
+    /// The "Add to BrownBear" banner shown on a Chrome Web Store detail page. Not `private`: built in
+    /// BrownBearBrowserViewController+ExtensionInstall.swift (its extension id rides on the view's
+    /// accessibilityIdentifier so we don't rebuild it on every navigation tick for the same page).
+    weak var extensionInstallBanner: UIView?
+
     // MARK: - Lifecycle
 
     override func viewDidLoad() {
@@ -385,6 +390,9 @@ extension BrownBearBrowserViewController: TabDelegate {
                        canGoForward: state.canGoForward,
                        tabCount: tabManager.count)
         syncProgress(for: state)
+        // Catches the Chrome Web Store's in-page (SPA) navigation between extensions, not just full
+        // loads, so the "Add to BrownBear" banner tracks the URL even when didFinish doesn't fire.
+        updateExtensionInstallBanner(url: state.url)
     }
 }
 
