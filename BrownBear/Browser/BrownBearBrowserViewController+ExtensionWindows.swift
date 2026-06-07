@@ -40,21 +40,20 @@ extension BrownBearBrowserViewController {
         windowRecord(populate: populate)
     }
 
-    /// chrome.runtime.openOptionsPage — open the extension's options page for real, as a full-screen
-    /// page (the "•••"-menu Options action routes here too). Returns false if the extension is unknown
-    /// or declares no options page (so JS can surface lastError).
+    /// chrome.runtime.openOptionsPage — open the extension's options page for real, as a genuine browser
+    /// tab (the "•••"-menu Options action and an "open options" button inside a popup both route here).
+    /// Returns false if the extension is unknown or declares no options page (so JS can surface lastError).
     ///
-    /// Presented via TopViewControllerPresenter (the top-most VC), so it works when invoked from inside
-    /// an already-presented popup — `self.present` would otherwise throw "already presenting" and the
-    /// button would silently do nothing. The dedicated page web view renders chrome-extension:// with
-    /// the full chrome.* bridge (a normal browser tab has neither, so it would be blank).
+    /// The options page opens in a NEW TAB (Orion/Gear behaviour) rather than a modal sheet — see
+    /// openExtensionPageTab, which gives that tab the per-extension chrome-extension:// scheme handler and
+    /// the full chrome.* page bridge (a normal browser tab has neither, so it would be blank). Any popup
+    /// presented over the browser is dismissed first so the new tab is actually visible.
     @discardableResult
     func webExtOpenOptionsPage(extensionID: String) -> Bool {
         Task { @MainActor in
             guard let ext = await BrownBearServices.shared.webExtensionStore.ext(for: extensionID),
                   let manifest = ext.manifest, let page = manifest.optionsPage, !page.isEmpty else { return }
-            let controller = WebExtensionPageViewController(ext: ext, kind: .options)
-            TopViewControllerPresenter.present(controller.wrappedAsFullPage())
+            openExtensionPageTab(ext: ext, kind: .options)
         }
         // We can't synchronously confirm the page opens (the store is an actor), but a missing options
         // page no-ops in the async task above. Report success optimistically here (Chrome also resolves
