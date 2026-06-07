@@ -32,6 +32,8 @@ final class BrownBearServices {
     /// Module 6 Phase 3 — chrome.action badge/title/icon/popup state, shared across content/popup/bg
     /// and surfaced in the browser's overflow menu.
     let webExtensionActionState = WebExtensionActionState()
+    /// Module 6 Phase 3 — chrome.permissions optional grants + runtime uninstall URL, per extension.
+    let webExtensionPermissionGrants = WebExtensionPermissionGrants()
     /// Module 6 Phase 2 — headless background service workers + the content↔background message bus.
     let webExtensionRuntime: WebExtensionRuntime
 

@@ -191,6 +191,17 @@
       });
     },
     connect: function () { throw new Error('chrome.runtime.connect (long-lived ports) is not yet supported in BrownBear'); },
+    openOptionsPage: function (cb) {
+      __bb_runtime_open_options(function () { if (typeof cb === 'function') { cb(); } });
+    },
+    setUninstallURL: function (url, cb) {
+      __bb_runtime_set_uninstall_url(String(url || ''), function () { if (typeof cb === 'function') { cb(); } });
+    },
+    getPlatformInfo: function (cb) {
+      var info = { os: 'ios', arch: 'arm64', nacl_arch: 'arm64' };
+      if (typeof cb === 'function') { cb(info); return undefined; }
+      return Promise.resolve(info);
+    },
     get lastError() { return undefined; }
   };
 
@@ -339,6 +350,74 @@
     removeCSS: function (injection, cb) { return settleBg(scriptingCall('removeCSS', cssInjection(injection)).then(function () { return undefined; }), cb); }
   };
 
+  // ---------------------------------------------------------------- chrome.windows
+
+  function windowsCall(method, args) {
+    return new Promise(function (resolve) {
+      __bb_windows(method, JSON.stringify(args || {}), function (resJSON) { resolve(parseJSON(resJSON)); });
+    });
+  }
+  var windows = {
+    WINDOW_ID_NONE: -1,
+    WINDOW_ID_CURRENT: -2,
+    get: function (id, getInfo, cb) {
+      if (typeof id === 'object' && id !== null) { cb = getInfo; getInfo = id; }
+      else if (typeof id === 'function') { cb = id; getInfo = null; }
+      return settleBg(windowsCall('get', { populate: !!(getInfo && getInfo.populate) }), cb);
+    },
+    getCurrent: function (getInfo, cb) {
+      if (typeof getInfo === 'function') { cb = getInfo; getInfo = null; }
+      return settleBg(windowsCall('getCurrent', { populate: !!(getInfo && getInfo.populate) }), cb);
+    },
+    getLastFocused: function (getInfo, cb) {
+      if (typeof getInfo === 'function') { cb = getInfo; getInfo = null; }
+      return settleBg(windowsCall('getLastFocused', { populate: !!(getInfo && getInfo.populate) }), cb);
+    },
+    getAll: function (getInfo, cb) {
+      if (typeof getInfo === 'function') { cb = getInfo; getInfo = null; }
+      return settleBg(windowsCall('getAll', { populate: !!(getInfo && getInfo.populate) }), cb);
+    },
+    create: function (createData, cb) {
+      createData = createData || {};
+      var url = createData.url;
+      if (Array.isArray(url)) { url = url[0]; }
+      return settleBg(windowsCall('create', { url: url, focused: createData.focused !== false, populate: false }), cb);
+    },
+    update: function (id, updateInfo, cb) { return settleBg(windowsCall('update', { populate: false }), cb); },
+    remove: function (id, cb) { return settleBg(windowsCall('remove', {}).then(function () { return undefined; }), cb); },
+    onCreated: makeEvent([]), onRemoved: makeEvent([]), onFocusChanged: makeEvent([]), onBoundsChanged: makeEvent([])
+  };
+
+  // ---------------------------------------------------------------- chrome.management
+
+  function managementCall(method, args) {
+    return new Promise(function (resolve) {
+      __bb_management(method, JSON.stringify(args || {}), function (resJSON) { resolve(parseJSON(resJSON)); });
+    });
+  }
+  var management = {
+    getSelf: function (cb) { return settleBg(managementCall('getSelf', {}), cb); },
+    get: function (id, cb) { return settleBg(managementCall('get', { id: id }), cb); },
+    getAll: function (cb) { return settleBg(managementCall('getAll', {}), cb); },
+    onInstalled: makeEvent([]), onUninstalled: makeEvent([]), onEnabled: makeEvent([]), onDisabled: makeEvent([])
+  };
+
+  // ---------------------------------------------------------------- chrome.permissions
+
+  function permissionsCall(method, args) {
+    return new Promise(function (resolve) {
+      __bb_permissions(method, JSON.stringify(args || {}), function (resJSON) { resolve(parseJSON(resJSON)); });
+    });
+  }
+  function permObj(p) { p = p || {}; return { permissions: p.permissions || [], origins: p.origins || [] }; }
+  var permissions = {
+    getAll: function (cb) { return settleBg(permissionsCall('getAll', {}), cb); },
+    contains: function (p, cb) { return settleBg(permissionsCall('contains', permObj(p)), cb); },
+    request: function (p, cb) { return settleBg(permissionsCall('request', permObj(p)), cb); },
+    remove: function (p, cb) { return settleBg(permissionsCall('remove', permObj(p)), cb); },
+    onAdded: makeEvent([]), onRemoved: makeEvent([])
+  };
+
   // ---------------------------------------------------------------- chrome.cookies
 
   function cookiesCall(method, args) {
@@ -396,6 +475,9 @@
     storage: storage,
     cookies: cookies,
     notifications: notifications,
+    windows: windows,
+    management: management,
+    permissions: permissions,
     alarms: alarms,
     commands: commands,
     action: action,

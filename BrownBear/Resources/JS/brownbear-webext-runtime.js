@@ -292,6 +292,55 @@
       };
     }
 
+    // --- chrome.windows / management / permissions (iOS is single-window; window id 1) ----------
+    function windowsApi() {
+      function normalize(getInfo, cb) {
+        if (typeof getInfo === "function") { cb = getInfo; getInfo = null; }
+        return { populate: !!(getInfo && getInfo.populate), cb: cb };
+      }
+      function get(windowId, getInfo, cb) {
+        if (typeof windowId === "object" && windowId !== null) { cb = getInfo; getInfo = windowId; }
+        else if (typeof windowId === "function") { cb = windowId; getInfo = null; }
+        var n = normalize(getInfo, cb);
+        return settle(bridge("windows.get", { populate: n.populate }, token), n.cb);
+      }
+      function getCurrent(getInfo, cb) { var n = normalize(getInfo, cb); return settle(bridge("windows.getCurrent", { populate: n.populate }, token), n.cb); }
+      function getLastFocused(getInfo, cb) { var n = normalize(getInfo, cb); return settle(bridge("windows.getLastFocused", { populate: n.populate }, token), n.cb); }
+      function getAll(getInfo, cb) { var n = normalize(getInfo, cb); return settle(bridge("windows.getAll", { populate: n.populate }, token), n.cb); }
+      function create(createData, cb) {
+        createData = createData || {};
+        var url = createData.url;
+        if (_Array.isArray(url)) { url = url[0]; }   // multi-URL create -> first url in our single tab
+        return settle(bridge("windows.create", { url: url, focused: createData.focused !== false, populate: false }, token), cb);
+      }
+      function update(windowId, updateInfo, cb) { return settle(bridge("windows.update", { populate: false }, token), cb); }
+      function remove(windowId, cb) { return settle(bridge("windows.remove", {}, token).then(function () { return undefined; }), cb); }
+      return {
+        WINDOW_ID_NONE: -1, WINDOW_ID_CURRENT: -2,
+        get: get, getCurrent: getCurrent, getLastFocused: getLastFocused, getAll: getAll,
+        create: create, update: update, remove: remove,
+        onCreated: noopEvent, onRemoved: noopEvent, onFocusChanged: noopEvent, onBoundsChanged: noopEvent
+      };
+    }
+    function managementApi() {
+      return {
+        getSelf: function (cb) { return settle(bridge("management.getSelf", {}, token), cb); },
+        get: function (id, cb) { return settle(bridge("management.get", { id: id }, token), cb); },
+        getAll: function (cb) { return settle(bridge("management.getAll", {}, token), cb); },
+        onInstalled: noopEvent, onUninstalled: noopEvent, onEnabled: noopEvent, onDisabled: noopEvent
+      };
+    }
+    function permissionsApi() {
+      function perms(p) { p = p || {}; return { permissions: p.permissions || [], origins: p.origins || [] }; }
+      return {
+        getAll: function (cb) { return settle(bridge("permissions.getAll", {}, token), cb); },
+        contains: function (p, cb) { return settle(bridge("permissions.contains", perms(p), token), cb); },
+        request: function (p, cb) { return settle(bridge("permissions.request", perms(p), token), cb); },
+        remove: function (p, cb) { return settle(bridge("permissions.remove", perms(p), token), cb); },
+        onAdded: noopEvent, onRemoved: noopEvent
+      };
+    }
+
     var chrome = {
       storage: {
         local: storageArea("local"),
@@ -303,10 +352,19 @@
       notifications: notificationsApi(),
       action: actionApi(),
       browserAction: actionApi(),
+      windows: windowsApi(),
+      management: managementApi(),
+      permissions: permissionsApi(),
       runtime: {
         id: data.extensionId,
         getManifest: function () { return manifest; },
         getURL: getURL,
+        openOptionsPage: function (cb) {
+          return settle(bridge("runtime.openOptionsPage", {}, token).then(function () { return undefined; }), cb);
+        },
+        setUninstallURL: function (url, cb) {
+          return settle(bridge("runtime.setUninstallURL", { url: url || "" }, token).then(function () { return undefined; }), cb);
+        },
         sendMessage: function () {
           // Overloaded like Chrome: (extensionId?, message, options?, callback?). We deliver to
           // this extension's own background worker and resolve with the listener's response value.

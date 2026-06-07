@@ -26,11 +26,11 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
             let matcher = URLMatcher(matches: patterns, includes: [], excludes: [], excludeMatches: [])
             tabs = tabs.filter { tab in tab.state.url.map { matcher.matches($0.absoluteString) } ?? false }
         }
-        return tabs.map(tabRecord)
+        return tabs.map(webExtTabRecord)
     }
 
     func webExtTab(extTabId: Int?) -> [String: Any]? {
-        resolveTab(extTabId).map(tabRecord)
+        resolveTab(extTabId).map(webExtTabRecord)
     }
 
     func webExtCreateTab(url: String?, active: Bool) -> [String: Any] {
@@ -42,7 +42,7 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
         } else {
             tab.loadPendingURLIfNeeded()
         }
-        return tabRecord(tab)
+        return webExtTabRecord(tab)
     }
 
     func webExtUpdateTab(extTabId: Int?, url: String?, active: Bool?) -> [String: Any]? {
@@ -54,7 +54,7 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
         if active == true {
             tabManager.setActiveTab(tab)
         }
-        return tabRecord(tab)
+        return webExtTabRecord(tab)
     }
 
     func webExtRemoveTabs(extTabIds: [Int]) {
@@ -125,7 +125,7 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
     }
 
     /// The chrome.tabs Tab record for a tab (single-window, so windowId is always 1).
-    private func tabRecord(_ tab: Tab) -> [String: Any] {
+    func webExtTabRecord(_ tab: Tab) -> [String: Any] {
         let index = tabManager.tabs.firstIndex { $0.id == tab.id } ?? 0
         let isActive = tab.id == tabManager.activeTabID
         return [
