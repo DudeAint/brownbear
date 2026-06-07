@@ -764,16 +764,7 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
                     webView.customUserAgent = tab.prefersDesktop ? Self.desktopSafariUserAgent : nil
                 }
             }
-            // Apply the per-site JavaScript switch (Shields) to THIS navigation. The tab's flag is
-            // seeded from the host's stored SiteSettings just below for the main frame, and persists
-            // for the tab's subsequent loads until the user flips it again.
-            preferences.allowsContentJavaScript = !tab.prefersJavaScriptDisabled
-            // Main-frame navigation to a new host: refresh the tab's cached per-site prefs (JS +
-            // desktop) for the next load. Best-effort + async; the flag applied above stays in force
-            // for this navigation, and the reload triggered when a toggle changes re-evaluates here.
-            if (navigationAction.targetFrame?.isMainFrame ?? true), let destination, !isStore {
-                seedSiteSettings(for: tab, url: destination)
-            }
+            applyShields(to: tab, preferences: preferences, navigationAction: navigationAction, destination: destination, isStore: isStore)
         }
         if let url = navigationAction.request.url {
             // Open external app schemes (mailto:, tel:, etc.) via the system.

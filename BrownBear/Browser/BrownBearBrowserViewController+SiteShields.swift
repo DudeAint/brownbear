@@ -133,13 +133,11 @@ extension BrownBearBrowserViewController {
     /// flag applied by `decidePolicyFor` for THIS navigation reflects the tab's last-known state; the
     /// store read here is async, so on the first cold visit to a JS-disabled host the flag flips after
     /// the policy decision — when that happens we reload ONCE so the remembered "JavaScript off" choice
-    /// is honored (no blanket double-load: the reload fires only on a real mismatch). Private tabs never
-    /// read or write per-site prefs. Called from `decidePolicyFor` for the main frame.
+    /// is honored (no blanket double-load: the reload fires only on a real mismatch). Per-site prefs
+    /// apply in private tabs too (product decision). Called from `decidePolicyFor` for the main frame.
     func seedSiteSettings(for tab: Tab, url: URL) {
-        guard !tab.isPrivate else {
-            tab.prefersJavaScriptDisabled = false
-            return
-        }
+        // Private tabs read/write per-site prefs the same as normal tabs (product decision), so a host's
+        // remembered Shields/JS/desktop choice applies in private browsing too.
         let wasJavaScriptDisabled = tab.prefersJavaScriptDisabled
         Task { @MainActor in
             let stored = await BrownBearServices.shared.siteSettingsStore.settings(for: url)
@@ -158,6 +156,17 @@ extension BrownBearBrowserViewController {
             if nowJavaScriptDisabled, !wasJavaScriptDisabled, tab === tabManager.activeTab {
                 tab.webView.load(URLRequest(url: url))
             }
+        }
+    }
+
+    /// Per-site Shields applied at navigation-policy time: set this navigation's JavaScript switch from
+    /// the tab's flag, and (main-frame, non-store) re-seed the tab's per-host prefs for the next load.
+    /// Kept here (not inline in decidePolicyFor) to keep the main controller under the length limit.
+    func applyShields(to tab: Tab, preferences: WKWebpagePreferences,
+                      navigationAction: WKNavigationAction, destination: URL?, isStore: Bool) {
+        preferences.allowsContentJavaScript = !tab.prefersJavaScriptDisabled
+        if (navigationAction.targetFrame?.isMainFrame ?? true), let destination, !isStore {
+            seedSiteSettings(for: tab, url: destination)
         }
     }
 }
