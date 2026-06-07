@@ -205,6 +205,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
         installWindowsManagementPermissionsNatives(into: context)
         installDNRAndUserScriptNatives(into: context)
         installCryptoNatives(into: context)
+        installFetchNative(into: context)
 
         // chrome.tabs from the background worker. Hop to the main actor (TabManager is MainActor),
         // run the op, then call back onto this context's queue with the JSON result.
@@ -539,7 +540,9 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
     }
 
     /// Invoke a stored JS callback on `queue` with an optional single JSON-string argument.
-    private func callBack(_ callback: JSValue, with argument: String?) {
+    // `internal` (not `private`) so the same-module +Fetch extension file can hop a native result back
+    // onto this context's queue; the splitting is only to keep this file under the length limit.
+    func callBack(_ callback: JSValue, with argument: String?) {
         queue.async { [weak self] in
             guard let self, self.isAlive else { return }
             if let argument {
@@ -550,7 +553,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
         }
     }
 
-    private func jsonString(_ value: Any) -> String {
+    func jsonString(_ value: Any) -> String {
         if let data = try? JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed]),
            let string = String(data: data, encoding: .utf8) {
             return string

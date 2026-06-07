@@ -128,6 +128,243 @@
     }
   })();
 
+  // ---------------------------------------------------------------- service-worker web globals
+  // JavaScriptCore is not a browser: it ships no `self`, no base64 (atob/btoa), no TextEncoder/
+  // TextDecoder, and no fetch. MV3 service workers and ScriptCat-derived background bundles assume all
+  // of them, throwing "Can't find variable: self / TextEncoder", "undefined is not an object
+  // (evaluating '…fetch.bind')". We provide pure-JS implementations plus a native-backed fetch
+  // (__bb_fetch, host_permissions-gated on the Swift side).
+  (function () {
+    // `self` is the service-worker global alias.
+    if (typeof globalThis.self === 'undefined') { globalThis.self = globalThis; }
+
+    var B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    function btoa(str) {
+      str = String(str);
+      var out = '', i = 0;
+      while (i < str.length) {
+        var c1 = str.charCodeAt(i++) & 0xff;
+        var c2 = i < str.length ? str.charCodeAt(i++) & 0xff : NaN;
+        var c3 = i < str.length ? str.charCodeAt(i++) & 0xff : NaN;
+        var e1 = c1 >> 2;
+        var e2 = ((c1 & 3) << 4) | (c2 >> 4);
+        var e3 = isNaN(c2) ? 64 : (((c2 & 15) << 2) | (c3 >> 6));
+        var e4 = isNaN(c3) ? 64 : (c3 & 63);
+        out += B64.charAt(e1) + B64.charAt(e2) +
+               (e3 === 64 ? '=' : B64.charAt(e3)) + (e4 === 64 ? '=' : B64.charAt(e4));
+      }
+      return out;
+    }
+    function atob(input) {
+      var str = String(input).replace(/[^A-Za-z0-9+/=]/g, '').replace(/=+$/, '');
+      var output = '';
+      for (var bc = 0, bs = 0, buffer, i = 0; (buffer = str.charAt(i++)); ) {
+        buffer = B64.indexOf(buffer);
+        if (buffer === -1) { continue; }
+        bs = bc % 4 ? bs * 64 + buffer : buffer;
+        if (bc++ % 4) { output += String.fromCharCode(255 & (bs >> ((-2 * bc) & 6))); }
+      }
+      return output;
+    }
+    if (typeof globalThis.btoa !== 'function') { globalThis.btoa = btoa; }
+    if (typeof globalThis.atob !== 'function') { globalThis.atob = atob; }
+
+    function TextEncoder() {}
+    TextEncoder.prototype.encoding = 'utf-8';
+    TextEncoder.prototype.encode = function (str) {
+      str = String(str === undefined ? '' : str);
+      var bytes = [];
+      for (var i = 0; i < str.length; i++) {
+        var code = str.charCodeAt(i);
+        if (code < 0x80) { bytes.push(code); }
+        else if (code < 0x800) { bytes.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f)); }
+        else if (code >= 0xd800 && code <= 0xdbff) {
+          var lo = str.charCodeAt(++i);
+          var cp = 0x10000 + ((code - 0xd800) << 10) + (lo - 0xdc00);
+          bytes.push(0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3f), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
+        } else { bytes.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f)); }
+      }
+      return new Uint8Array(bytes);
+    };
+    function TextDecoder(label) { this.encoding = String(label || 'utf-8').toLowerCase(); this.fatal = false; }
+    TextDecoder.prototype.decode = function (input) {
+      if (!input) { return ''; }
+      var bytes;
+      if (input instanceof Uint8Array) { bytes = input; }
+      else if (input instanceof ArrayBuffer) { bytes = new Uint8Array(input); }
+      else if (input.buffer instanceof ArrayBuffer) { bytes = new Uint8Array(input.buffer, input.byteOffset || 0, input.byteLength); }
+      else { bytes = new Uint8Array(input); }
+      var out = '', i = 0, len = bytes.length;
+      while (i < len) {
+        var b1 = bytes[i++];
+        if (b1 < 0x80) { out += String.fromCharCode(b1); }
+        else if (b1 >= 0xc0 && b1 < 0xe0) { out += String.fromCharCode(((b1 & 0x1f) << 6) | (bytes[i++] & 0x3f)); }
+        else if (b1 >= 0xe0 && b1 < 0xf0) {
+          var c2 = bytes[i++] & 0x3f, c3 = bytes[i++] & 0x3f;
+          out += String.fromCharCode(((b1 & 0x0f) << 12) | (c2 << 6) | c3);
+        } else {
+          var d2 = bytes[i++] & 0x3f, d3 = bytes[i++] & 0x3f, d4 = bytes[i++] & 0x3f;
+          var cp = (((b1 & 0x07) << 18) | (d2 << 12) | (d3 << 6) | d4) - 0x10000;
+          out += String.fromCharCode(0xd800 + (cp >> 10), 0xdc00 + (cp & 0x3ff));
+        }
+      }
+      return out;
+    };
+    if (typeof globalThis.TextEncoder !== 'function') { globalThis.TextEncoder = TextEncoder; }
+    if (typeof globalThis.TextDecoder !== 'function') { globalThis.TextDecoder = TextDecoder; }
+
+    // --- fetch (native-backed via __bb_fetch; host_permissions-gated on the Swift side) ----------
+    function Headers(map) {
+      this._m = {};
+      if (!map) { return; }
+      var self = this;
+      if (map._m) {   // another Headers shim instance
+        for (var hk in map._m) { if (Object.prototype.hasOwnProperty.call(map._m, hk)) { this._m[hk] = map._m[hk]; } }
+      } else if (typeof map.forEach === 'function') {   // a Map (or real Headers)
+        map.forEach(function (v, k) { self._m[String(k).toLowerCase()] = String(v); });
+      } else {   // a plain object
+        for (var k in map) { if (Object.prototype.hasOwnProperty.call(map, k)) { this._m[String(k).toLowerCase()] = String(map[k]); } }
+      }
+    }
+    Headers.prototype.get = function (n) { var v = this._m[String(n).toLowerCase()]; return v === undefined ? null : v; };
+    Headers.prototype.has = function (n) { return Object.prototype.hasOwnProperty.call(this._m, String(n).toLowerCase()); };
+    Headers.prototype.set = function (n, v) { this._m[String(n).toLowerCase()] = String(v); };
+    Headers.prototype.append = function (n, v) { var k = String(n).toLowerCase(); this._m[k] = this._m[k] ? this._m[k] + ', ' + v : String(v); };
+    Headers.prototype['delete'] = function (n) { delete this._m[String(n).toLowerCase()]; };
+    Headers.prototype.forEach = function (cb, thisArg) { for (var k in this._m) { if (Object.prototype.hasOwnProperty.call(this._m, k)) { cb.call(thisArg, this._m[k], k, this); } } };
+    Headers.prototype.keys = function () { return Object.keys(this._m); };
+    Headers.prototype.entries = function () { var e = []; this.forEach(function (v, k) { e.push([k, v]); }); return e; };
+
+    function bytesFromBase64(b64) {
+      var bin = atob(b64 || '');
+      var bytes = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) { bytes[i] = bin.charCodeAt(i) & 0xff; }
+      return bytes;
+    }
+    function Response(result) {
+      result = result || {};
+      this.ok = !!result.ok;
+      this.status = result.status || 0;
+      this.statusText = result.statusText || '';
+      this.url = result.url || '';
+      this.headers = new Headers(result.headers || {});
+      this.redirected = false;
+      this.type = 'basic';
+      this.bodyUsed = false;
+      this._b64 = result.bodyBase64 || '';
+    }
+    Response.prototype.arrayBuffer = function () { this.bodyUsed = true; return Promise.resolve(bytesFromBase64(this._b64).buffer); };
+    Response.prototype.text = function () { this.bodyUsed = true; return Promise.resolve(new TextDecoder('utf-8').decode(bytesFromBase64(this._b64))); };
+    Response.prototype.json = function () { return this.text().then(function (t) { return JSON.parse(t); }); };
+    Response.prototype.clone = function () {
+      return new Response({ ok: this.ok, status: this.status, statusText: this.statusText,
+                            url: this.url, headers: this.headers._m, bodyBase64: this._b64 });
+    };
+    if (typeof globalThis.Headers !== 'function') { globalThis.Headers = Headers; }
+    if (typeof globalThis.Response !== 'function') { globalThis.Response = Response; }
+
+    function fetch(input, init) {
+      init = init || {};
+      var url, method = 'GET', headers = {}, body = null, bodyEncoding = 'utf8';
+      if (input && typeof input === 'object' && input.url) { url = String(input.url); method = input.method || method; }
+      else { url = String(input); }
+      if (init.method) { method = init.method; }
+      if (init.headers) {
+        if (init.headers._m) { headers = init.headers._m; }                       // our Headers instance
+        else if (typeof init.headers.forEach === 'function') {                    // a Map
+          init.headers.forEach(function (v, k) { headers[k] = v; });
+        } else { headers = init.headers; }                                        // a plain object
+      }
+      if (init.body != null) {
+        if (typeof init.body === 'string') { body = init.body; bodyEncoding = 'utf8'; }
+        else if (init.body instanceof ArrayBuffer || (init.body.buffer instanceof ArrayBuffer)) {
+          var u8 = init.body instanceof ArrayBuffer ? new Uint8Array(init.body)
+                 : new Uint8Array(init.body.buffer, init.body.byteOffset || 0, init.body.byteLength);
+          var bin = '';
+          for (var i = 0; i < u8.length; i++) { bin += String.fromCharCode(u8[i]); }
+          body = btoa(bin); bodyEncoding = 'base64';
+        } else {
+          try { body = JSON.stringify(init.body); } catch (e) { body = String(init.body); }
+          bodyEncoding = 'utf8';
+        }
+      }
+      var reqJSON = JSON.stringify({ url: url, method: method, headers: headers, body: body, bodyEncoding: bodyEncoding });
+      return new Promise(function (resolve, reject) {
+        if (typeof __bb_fetch !== 'function') { reject(new TypeError('fetch is unavailable')); return; }
+        try {
+          __bb_fetch(reqJSON, function (resJSON) {
+            var r;
+            try { r = JSON.parse(resJSON); } catch (e) { reject(new TypeError('Failed to fetch')); return; }
+            if (r.error) { reject(new TypeError('Failed to fetch: ' + r.error)); return; }
+            resolve(new Response(r));
+          });
+        } catch (e) { reject(e); }
+      });
+    }
+    if (typeof globalThis.fetch !== 'function') { globalThis.fetch = fetch; }
+
+    // --- ServiceWorkerGlobalScope event surface --------------------------------------------------
+    // MV3 service workers register lifecycle handlers via self.addEventListener('install'|'activate').
+    // JSC has no addEventListener on the global, so that throws. We provide one and synthetically fire
+    // install+activate once, AFTER the background source's top-level code has registered its handlers
+    // (deferred via the timer shim, which runs after this synchronous boot completes). Other event
+    // types (message/fetch/push/sync) are stored so registration never throws; we don't synthesize
+    // those (extensions receive messages via chrome.runtime.onMessage, the authoritative path).
+    if (typeof globalThis.addEventListener !== 'function') {
+      var swListeners = {};
+      globalThis.addEventListener = function (type, listener) {
+        if (typeof listener !== 'function') { return; }
+        (swListeners[type] = swListeners[type] || []).push(listener);
+      };
+      globalThis.removeEventListener = function (type, listener) {
+        var arr = swListeners[type];
+        if (!arr) { return; }
+        var idx = arr.indexOf(listener);
+        if (idx >= 0) { arr.splice(idx, 1); }
+      };
+      globalThis.dispatchEvent = function (event) {
+        var arr = swListeners[event && event.type];
+        if (!arr) { return true; }
+        arr.slice().forEach(function (l) {
+          try { l(event); } catch (e) {
+            __bb_log('error', 'event listener (' + (event && event.type) + ') threw: ' + (e && e.message ? e.message : e));
+          }
+        });
+        return !(event && event.defaultPrevented);
+      };
+      var fireLifecycle = function () {
+        ['install', 'activate'].forEach(function (type) {
+          globalThis.dispatchEvent({ type: type, waitUntil: function () {}, preventDefault: function () {} });
+        });
+      };
+      // Runs after the synchronous boot (runtime + background source) completes.
+      setTimeout(fireLifecycle, 0);
+    }
+    if (typeof globalThis.skipWaiting !== 'function') { globalThis.skipWaiting = function () { return Promise.resolve(); }; }
+
+    // Minimal Clients / ServiceWorkerRegistration so the universal `self.clients.claim()` /
+    // `self.registration` in SW activate handlers don't throw. There is one headless context per
+    // extension and no controllable window clients on iOS, so matchAll resolves empty.
+    if (typeof globalThis.clients === 'undefined') {
+      globalThis.clients = {
+        claim: function () { return Promise.resolve(); },
+        matchAll: function () { return Promise.resolve([]); },
+        get: function () { return Promise.resolve(undefined); },
+        openWindow: function () { return Promise.resolve(null); }
+      };
+    }
+    if (typeof globalThis.registration === 'undefined') {
+      globalThis.registration = {
+        scope: baseURL,
+        active: null, installing: null, waiting: null,
+        unregister: function () { return Promise.resolve(true); },
+        update: function () { return Promise.resolve(); },
+        showNotification: function () { return Promise.resolve(); },
+        getNotifications: function () { return Promise.resolve([]); }
+      };
+    }
+  })();
+
   function makeEvent(list) {
     return {
       addListener: function (fn) { if (typeof fn === 'function' && list.indexOf(fn) < 0) { list.push(fn); } },
@@ -238,6 +475,16 @@
 
   var runtime = {
     id: extId,
+    // Chrome exposes these enums on chrome.runtime; extensions read them directly (e.g. an onInstalled
+    // listener comparing details.reason === chrome.runtime.OnInstalledReason.INSTALL). Missing them
+    // throws "undefined is not an object (evaluating 'chrome.runtime.OnInstalledReason.INSTALL')".
+    OnInstalledReason: { INSTALL: 'install', UPDATE: 'update', CHROME_UPDATE: 'chrome_update', SHARED_MODULE_UPDATE: 'shared_module_update' },
+    OnRestartRequiredReason: { APP_UPDATE: 'app_update', OS_UPDATE: 'os_update', PERIODIC: 'periodic' },
+    PlatformOs: { MAC: 'mac', WIN: 'win', ANDROID: 'android', CROS: 'cros', LINUX: 'linux', OPENBSD: 'openbsd', FUCHSIA: 'fuchsia' },
+    PlatformArch: { ARM: 'arm', ARM64: 'arm64', X86_32: 'x86-32', X86_64: 'x86-64', MIPS: 'mips', MIPS64: 'mips64' },
+    PlatformNaclArch: { ARM: 'arm', X86_32: 'x86-32', X86_64: 'x86-64', MIPS: 'mips', MIPS64: 'mips64' },
+    RequestUpdateCheckStatus: { THROTTLED: 'throttled', NO_UPDATE: 'no_update', UPDATE_AVAILABLE: 'update_available' },
+    ContextType: { TAB: 'TAB', POPUP: 'POPUP', BACKGROUND: 'BACKGROUND', OFFSCREEN_DOCUMENT: 'OFFSCREEN_DOCUMENT', SIDE_PANEL: 'SIDE_PANEL' },
     getManifest: function () { return deepClone(manifest); },
     getURL: getURL,
     onMessage: makeEvent(messageListeners),
