@@ -46,6 +46,23 @@ protocol WebExtensionBridgeHost: AnyObject {
     func webExtSendMessageToTab(extensionID: String, extTabId: Int?, message: Any, frameId: Int?) async -> Any?
 }
 
+/// The native side of `chrome.cookies` — the browser implements it over the shared WKHTTPCookieStore
+/// (BrownBearBrowserViewController+Cookies). Kept separate from `WebExtensionBridgeHost` so the cookie
+/// surface can be wired (and gated) independently of the tab surface. iOS exposes one cookie store.
+@MainActor
+protocol WebExtensionCookieBridgeHost: AnyObject {
+    /// chrome.cookies.get — the single cookie matching `name` that would be sent to `url`, or nil.
+    func webExtGetCookie(url: String, name: String, storeId: String?) async -> [String: Any]?
+    /// chrome.cookies.getAll — every cookie matching the (already-validated) filter dictionary.
+    func webExtGetAllCookies(filter: [String: Any], storeId: String?) async -> [[String: Any]]
+    /// chrome.cookies.set — create/overwrite a cookie from the chrome setDetails; returns the result.
+    func webExtSetCookie(details: [String: Any], storeId: String?) async -> [String: Any]?
+    /// chrome.cookies.remove — delete the cookie matching `name`+`url`; returns the removal details.
+    func webExtRemoveCookie(url: String, name: String, storeId: String?) async -> [String: Any]?
+    /// chrome.cookies.getAllCookieStores — iOS has exactly one store ("0").
+    func webExtGetAllCookieStores() -> [[String: Any]]
+}
+
 /// Stable bidirectional `UUID (Tab.id) ↔ Int (chrome tab id)` map. chrome.tabs ids must be integers
 /// and stable for a tab's lifetime; we mint a monotonic counter the first time a tab is exposed.
 @MainActor

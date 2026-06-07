@@ -39,6 +39,8 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
     private let contentWorld: WKContentWorld
     /// Lets chrome.tabs reach the browser's TabManager. Set via InjectionOrchestrator.
     weak var host: WebExtensionBridgeHost?
+    /// Lets chrome.cookies reach the browser's WKHTTPCookieStore. Set via InjectionOrchestrator.
+    weak var cookieHost: WebExtensionCookieBridgeHost?
     /// token → session. Minted per content-script injection / page.
     private var sessions: [String: Session] = [:]
     /// Insertion order of tokens, for FIFO eviction once `sessions` exceeds `maxSessions`.
@@ -162,12 +164,80 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
             // the page's callback fires without error. (Programmatic navigation isn't wired here.)
             return NSNull()
 
+        // chrome.cookies — gated on the `cookies` API permission plus a host_permission covering the
+        // target (reads/writes); getAllCookieStores needs only the cookies permission. The browser's
+        // WKHTTPCookieStore is reached through the bridge host.
+        case "cookies.get", "cookies.getAll", "cookies.set", "cookies.remove", "cookies.getAllCookieStores":
+            return try await routeCookies(api: api, payload: payload, extensionID: extensionID)
+
         default:
             guard let result = await routeTabsAndScripting(api: api, payload: payload, extensionID: extensionID) else {
                 throw BrownBearError.bridgeRejected("unsupported extension api '\(api)'")
             }
             return result
         }
+    }
+
+    // MARK: - chrome.cookies
+
+    private func routeCookies(api: String, payload: [String: Any], extensionID: String) async throws -> Any? {
+        guard let host = cookieHost else { return NSNull() }
+        let details = (payload["details"] as? [String: Any]) ?? [:]
+        let storeId = details["storeId"] as? String
+        guard try await hasCookiesPermission(extensionID: extensionID) else {
+            throw BrownBearError.bridgeRejected("the \"cookies\" permission is not granted")
+        }
+        switch api {
+        case "cookies.get":
+            guard let url = details["url"] as? String, let name = details["name"] as? String else {
+                throw BrownBearError.bridgeRejected("cookies.get requires url and name")
+            }
+            guard try await cookieHostAllowed(extensionID: extensionID, details: details) else {
+                throw BrownBearError.bridgeRejected("no host permission for \(url)")
+            }
+            return await host.webExtGetCookie(url: url, name: name, storeId: storeId) ?? NSNull()
+        case "cookies.getAll":
+            guard try await cookieHostAllowed(extensionID: extensionID, details: details) else {
+                throw BrownBearError.bridgeRejected("no host permission for this cookies.getAll filter")
+            }
+            return await host.webExtGetAllCookies(filter: details, storeId: storeId)
+        case "cookies.set":
+            guard try await cookieHostAllowed(extensionID: extensionID, details: details) else {
+                throw BrownBearError.bridgeRejected("no host permission for cookies.set")
+            }
+            return await host.webExtSetCookie(details: details, storeId: storeId) ?? NSNull()
+        case "cookies.remove":
+            guard let url = details["url"] as? String, let name = details["name"] as? String else {
+                throw BrownBearError.bridgeRejected("cookies.remove requires url and name")
+            }
+            guard try await cookieHostAllowed(extensionID: extensionID, details: details) else {
+                throw BrownBearError.bridgeRejected("no host permission for \(url)")
+            }
+            return await host.webExtRemoveCookie(url: url, name: name, storeId: storeId) ?? NSNull()
+        case "cookies.getAllCookieStores":
+            return host.webExtGetAllCookieStores()
+        default:
+            throw BrownBearError.bridgeRejected("unsupported cookies api '\(api)'")
+        }
+    }
+
+    private func hasCookiesPermission(extensionID: String) async throws -> Bool {
+        guard let manifest = await store.ext(for: extensionID)?.manifest else { return false }
+        return manifest.permissions.contains("cookies")
+    }
+
+    private func cookieHostAllowed(extensionID: String, details: [String: Any]) async throws -> Bool {
+        guard let manifest = await store.ext(for: extensionID)?.manifest else { return false }
+        let targetURL: String?
+        if let url = details["url"] as? String { targetURL = url }
+        else if let domain = details["domain"] as? String, !domain.isEmpty {
+            let host = domain.hasPrefix(".") ? String(domain.dropFirst()) : domain
+            targetURL = "https://\(host)/"
+        } else { targetURL = nil }
+        guard let targetURL else { return true }
+        let matcher = URLMatcher(matches: manifest.effectiveHostPatterns,
+                                 includes: [], excludes: [], excludeMatches: [])
+        return matcher.matches(targetURL)
     }
 
     /// chrome.tabs + chrome.scripting routing — driven through the browser's TabManager via the bridge

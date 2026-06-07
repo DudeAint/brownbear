@@ -52,6 +52,17 @@ final class WebViewConfigurationFactory {
         return config
     }
 
+    /// The WKHTTPCookieStore for a chrome.cookies store id. iOS exposes a single store ("0"), backed by
+    /// the persistent default jar normal tabs share; a nil id resolves it, any other id yields nil
+    /// (chrome rejects an unknown storeId). Private tabs' non-persistent jar is intentionally NOT
+    /// exposed to extensions — it has no chrome store id and is wiped on last-private-tab close.
+    func httpCookieStore(forStoreId id: String?) -> WKHTTPCookieStore? {
+        switch id {
+        case nil, WebExtensionCookieMapper.storeId: return websiteDataStore.httpCookieStore
+        default: return nil
+        }
+    }
+
     /// Erase all data (cookies, cache, local storage) from the private store. Called when the last
     /// private tab closes so a private session leaves nothing behind, even though the store object
     /// itself is reused for the app's lifetime.
