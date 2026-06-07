@@ -109,8 +109,19 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
             // the page's callback fires without error. (Programmatic navigation isn't wired here.)
             return NSNull()
 
-        // chrome.tabs — driven through the browser's TabManager via the bridge host. A valid extension
-        // token (resolved above) is required to reach any of these.
+        default:
+            guard let result = await routeTabsAndScripting(api: api, payload: payload, extensionID: extensionID) else {
+                throw BrownBearError.bridgeRejected("unsupported extension api '\(api)'")
+            }
+            return result
+        }
+    }
+
+    /// chrome.tabs + chrome.scripting routing — driven through the browser's TabManager via the bridge
+    /// host. Split out so route() stays under the complexity limit. Returns nil for an api it doesn't
+    /// handle (route() then rejects it). A valid extension token is already resolved by route().
+    private func routeTabsAndScripting(api: String, payload: [String: Any], extensionID: String) async -> Any? {
+        switch api {
         case "tabs.query":
             guard let host else { return [] }
             return host.webExtQueryTabs(payload["query"] as? [String: Any] ?? [:])
@@ -120,12 +131,10 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
             return host.webExtTab(extTabId: payload["tabId"] as? Int) ?? NSNull()
 
         case "tabs.getCurrent":
-            // Defined as the tab the calling script runs IN — meaningful only for an extension's own
-            // full-page tab, which BrownBear doesn't host; chrome returns undefined elsewhere.
-            return NSNull()
+            return NSNull()   // meaningful only for an extension's own full-page tab (none on iOS)
 
         case "tabs.create":
-            guard let host else { throw BrownBearError.bridgeRejected("no browser to open a tab") }
+            guard let host else { return NSNull() }
             return host.webExtCreateTab(url: payload["url"] as? String,
                                         active: (payload["active"] as? Bool) ?? true)
 
@@ -147,9 +156,66 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
                                  bypassCache: (payload["bypassCache"] as? Bool) ?? false)
             return NSNull()
 
+        // chrome.scripting (MV3) + chrome.tabs.executeScript/insertCSS (MV2). `func`/`args` are
+        // serialized to `code` by the JS shim; `files` are read from the extension's own package here.
+        case "scripting.executeScript":
+            guard let host else { return [] }
+            let target = payload["target"] as? [String: Any] ?? [:]
+            let code = await resolveInjectedCode(payload: payload, extensionID: extensionID, separator: "\n;\n")
+            guard !code.isEmpty else { return [] }
+            return await host.webExtExecuteScript(extTabId: target["tabId"] as? Int,
+                                                  world: (payload["world"] as? String) ?? "ISOLATED", code: code)
+
+        case "scripting.insertCSS", "scripting.removeCSS":
+            guard let host else { return NSNull() }
+            let target = payload["target"] as? [String: Any] ?? [:]
+            let css = await resolveInjectedCSS(payload: payload, extensionID: extensionID)
+            if api == "scripting.insertCSS" { host.webExtInsertCSS(extTabId: target["tabId"] as? Int, css: css) }
+            else { host.webExtRemoveCSS(extTabId: target["tabId"] as? Int, css: css) }
+            return NSNull()
+
+        case "tabs.executeScript":
+            guard let host else { return [] }
+            var code = payload["code"] as? String ?? ""
+            if code.isEmpty, let file = payload["file"] as? String,
+               let text = await store.text(extensionID: extensionID, path: file) { code = text }
+            guard !code.isEmpty else { return [] }
+            let results = await host.webExtExecuteScript(extTabId: payload["tabId"] as? Int,
+                                                         world: (payload["world"] as? String) ?? "ISOLATED", code: code)
+            return results.map { $0["result"] ?? NSNull() }   // MV2 returns the raw results array
+
+        case "tabs.insertCSS":
+            guard let host else { return NSNull() }
+            var css = payload["code"] as? String ?? ""
+            if css.isEmpty, let file = payload["file"] as? String,
+               let text = await store.text(extensionID: extensionID, path: file) { css = text }
+            host.webExtInsertCSS(extTabId: payload["tabId"] as? Int, css: css)
+            return NSNull()
+
         default:
-            throw BrownBearError.bridgeRejected("unsupported extension api '\(api)'")
+            return nil
         }
+    }
+
+    /// The JS to inject for chrome.scripting/tabs.executeScript: an explicit `code` string (the shim
+    /// serializes `func`+`args` into one), else the named `files` read from the extension's package.
+    private func resolveInjectedCode(payload: [String: Any], extensionID: String, separator: String) async -> String {
+        if let code = payload["code"] as? String, !code.isEmpty { return code }
+        var out = ""
+        for path in (payload["files"] as? [String] ?? []) {
+            if let text = await store.text(extensionID: extensionID, path: path) { out += text + separator }
+        }
+        return out
+    }
+
+    /// The CSS for chrome.scripting.insertCSS/removeCSS: an explicit `css` string, else `files`.
+    private func resolveInjectedCSS(payload: [String: Any], extensionID: String) async -> String {
+        if let css = payload["css"] as? String, !css.isEmpty { return css }
+        var out = ""
+        for path in (payload["files"] as? [String] ?? []) {
+            if let text = await store.text(extensionID: extensionID, path: path) { out += text + "\n" }
+        }
+        return out
     }
 
     private func resolve(_ token: String?) async throws -> String {
