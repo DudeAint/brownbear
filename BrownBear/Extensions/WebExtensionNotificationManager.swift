@@ -369,6 +369,16 @@ private final class DelegateForwarder: NSObject, UNUserNotificationCenterDelegat
         let composite = response.notification.request.identifier
         let actionID = response.actionIdentifier
         Task { @MainActor [weak manager] in
+            // This forwarder owns the single UN delegate (claimed unconditionally at launch), so it also
+            // routes USERSCRIPT GM_notification taps — UN allows only one center delegate (see
+            // UserScriptNotificationManager's delegate-collision note). Userscript ids are namespaced, so
+            // ownership is unambiguous. The ownership check + dispatch run here, on the main actor, since
+            // UserScriptNotificationManager is @MainActor-isolated.
+            if UserScriptNotificationManager.owns(compositeID: composite) {
+                UserScriptNotificationManager.shared.routeResponse(composite: composite, actionID: actionID)
+                completionHandler()
+                return
+            }
             guard let manager else { completionHandler(); return }
             switch actionID {
             case UNNotificationDefaultActionIdentifier:

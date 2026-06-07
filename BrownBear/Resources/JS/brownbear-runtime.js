@@ -55,6 +55,51 @@
   // --- GM_xmlhttpRequest streaming ------------------------------------------------------------
   var xhrCallbacks = _Object.create(null);
 
+  // --- GM_notification onclick/onclose routing -----------------------------------------------
+  // token -> { byId: { notifId -> { onclick, ondone, onclose } } } so a tap native pushes back can
+  // find the right script's callbacks. Keyed by token so one script can't see another's callbacks.
+  var notifEnvByToken = _Object.create(null);
+
+  // Published so native can route a notification tap/dismiss back in. Payload is a JSON string
+  // { id, kind } where kind is "click" | "close". Native already delivered into the right isolated
+  // world + frame, so we search every env's byId for the id (ids are script-unique in practice and
+  // the env map is this world's own — isolation holds).
+  function dispatchNotification(payloadJSON) {
+    var p = safeParse(payloadJSON);
+    if (!p || typeof p.id !== "string") { return; }
+    var tokens = _Object.keys(notifEnvByToken);
+    for (var i = 0; i < tokens.length; i += 1) {
+      var env = notifEnvByToken[tokens[i]];
+      var entry = env && env.byId[p.id];
+      if (!entry) { continue; }
+      if (p.kind === "click") { safeCall(entry.onclick, undefined); }
+      else if (p.kind === "close") { safeCall(entry.ondone, undefined); safeCall(entry.onclose, undefined); }
+      return;
+    }
+  }
+
+  // --- GM_download streaming -----------------------------------------------------------------
+  var downloadCallbacks = _Object.create(null);
+
+  // Published so native can stream GM_download lifecycle events back in.
+  function dispatchDownload(requestId, type, payload) {
+    var entry = downloadCallbacks[requestId];
+    if (!entry) { return; }
+    var d = entry.details;
+    switch (type) {
+      case "progress": safeCall(d.onprogress, payload); break;
+      case "timeout": safeCall(d.ontimeout, payload); settleDownload(entry, "reject", payload); delete downloadCallbacks[requestId]; break;
+      case "error": safeCall(d.onerror, payload); settleDownload(entry, "reject", payload); delete downloadCallbacks[requestId]; break;
+      case "load": safeCall(d.onload, payload); settleDownload(entry, "resolve", payload); delete downloadCallbacks[requestId]; break;
+      default: break;
+    }
+  }
+  function settleDownload(entry, kind, payload) {
+    if (kind === "resolve" && entry.resolve) { entry.resolve(payload); }
+    if (kind === "reject" && entry.reject) { entry.reject(payload); }
+    entry.resolve = null; entry.reject = null;
+  }
+
   function safeCall(fn, arg) {
     if (typeof fn !== "function") { return; }
     try { fn(arg); } catch (e) { _console.error("[BrownBear] callback error:", e); }
@@ -342,6 +387,91 @@
     }
     function GM_xmlhttpRequest(details) { return startXHR(details, token); }
 
+    // --- GM_notification (TM/VM: details OR (text, title, image, onclick)) ---------------------
+    var notifEnv = { byId: _Object.create(null) };
+    notifEnvByToken[token] = notifEnv;
+    function normalizeNotification(arg1, arg2, arg3, arg4) {
+      if (arg1 && typeof arg1 === "object") {
+        var d = arg1;
+        return {
+          title: d.title, text: (d.text != null ? d.text : d.message), image: d.image,
+          silent: !!d.silent, timeout: d.timeout, id: d.id,
+          onclick: d.onclick, ondone: d.ondone, onclose: d.onclose, oncreate: d.oncreate
+        };
+      }
+      return { text: arg1, title: arg2, image: arg3, onclick: arg4 };
+    }
+    function GM_notification(arg1, arg2, arg3, arg4) {
+      var n = normalizeNotification(arg1, arg2, arg3, arg4);
+      var details = { title: n.title, text: n.text, silent: n.silent };
+      var wantClick = (typeof n.onclick === "function") || (typeof n.ondone === "function")
+        || (typeof n.onclose === "function");
+      var control = { remove: function () { return _Promise.resolve(); } };
+      call("GM_notification", { details: details, id: n.id || null, wantClick: wantClick })
+        .then(function (res) {
+          var id = res && res.id;
+          if (!id) { return; }
+          notifEnv.byId[id] = { onclick: n.onclick, ondone: n.ondone, onclose: n.onclose };
+          control.remove = function () {
+            delete notifEnv.byId[id];
+            return call("GM_notificationClear", { id: id });
+          };
+          safeCall(n.oncreate, id);
+        })
+        .catch(function () {});
+      return control;
+    }
+
+    // --- GM_cookie / GM.cookie.list|set|delete (VM signature) ----------------------------------
+    function cookieCall(action, details) {
+      return call("GM_cookie", { action: action, details: details || {} });
+    }
+    var GM_cookie = {
+      list: function (details, cb) {
+        var p = cookieCall("list", details);
+        if (typeof cb === "function") { p.then(function (r) { cb(r, undefined); }, function (e) { cb(undefined, String(e)); }); }
+        return p;
+      },
+      set: function (details, cb) {
+        var p = cookieCall("set", details);
+        if (typeof cb === "function") { p.then(function () { cb(undefined); }, function (e) { cb(String(e)); }); }
+        return p;
+      },
+      delete: function (details, cb) {
+        var p = cookieCall("delete", details);
+        if (typeof cb === "function") { p.then(function () { cb(undefined); }, function (e) { cb(String(e)); }); }
+        return p;
+      }
+    };
+
+    // --- GM_download (TM/VM: details OR (url, name)) -------------------------------------------
+    function normalizeDownload(arg1, arg2) {
+      if (arg1 && typeof arg1 === "object") { return arg1; }
+      return { url: arg1, name: arg2 };
+    }
+    function GM_download(arg1, arg2) {
+      var d = normalizeDownload(arg1, arg2);
+      var requestId = genId("dl");
+      var entry = { details: d, resolve: null, reject: null };
+      downloadCallbacks[requestId] = entry;
+      var payload = {
+        requestId: requestId,
+        url: typeof d.url === "string" ? d.url : String(d.url),
+        name: d.name || "",
+        headers: d.headers || {},
+        saveAs: !!d.saveAs
+      };
+      if (d.timeout) { payload.timeout = d.timeout; }
+      call("GM_download", payload).catch(function (err) {
+        var p = { error: String(err) };
+        safeCall(d.onerror, p);
+        settleDownload(entry, "reject", p);
+        delete downloadCallbacks[requestId];
+      });
+      // Server-side fetch is fire-and-forget; abort is a best-effort no-op (documented limit).
+      return { abort: function () {} };
+    }
+
     var GM_info = data.info || {};
     GM_info.scriptHandler = "BrownBear";
 
@@ -371,6 +501,18 @@
         });
         promise.abort = handle.abort;
         return promise;
+      },
+      notification: function () { return GM_notification.apply(null, arguments); },
+      cookie: GM_cookie,
+      download: function (details) {
+        var d = (details && typeof details === "object") ? details : { url: details };
+        var promise = new _Promise(function (resolve, reject) {
+          var userLoad = d.onload, userErr = d.onerror;
+          d.onload = function (p) { safeCall(userLoad, p); resolve(p); };
+          d.onerror = function (p) { safeCall(userErr, p); reject(p); };
+        });
+        GM_download(d);
+        return promise;
       }
     };
 
@@ -383,7 +525,8 @@
         GM_getResourceText: GM_getResourceText, GM_getResourceURL: GM_getResourceURL,
         GM_addValueChangeListener: GM_addValueChangeListener,
         GM_removeValueChangeListener: GM_removeValueChangeListener,
-        GM_xmlhttpRequest: GM_xmlhttpRequest
+        GM_xmlhttpRequest: GM_xmlhttpRequest,
+        GM_notification: GM_notification, GM_cookie: GM_cookie, GM_download: GM_download
       },
       GM: GM,
       GM_info: GM_info
@@ -486,7 +629,12 @@
 
   // Only these are exposed; bridge/getScripts/run remain private to this closure. applyValueChange
   // is reachable from native (in this isolated world) to deliver cross-frame/tab value changes.
-  W.__brownbear = { dispatchXHR: dispatchXHR, applyValueChange: applyRemoteValueChange };
+  W.__brownbear = {
+    dispatchXHR: dispatchXHR,
+    applyValueChange: applyRemoteValueChange,
+    dispatchNotification: dispatchNotification,
+    dispatchDownload: dispatchDownload
+  };
 
   loadAndRun();
 })();
