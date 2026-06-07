@@ -13,6 +13,7 @@ import WebKit
 struct SettingsView: View {
 
     @AppStorage(AppSettings.Key.searchEngine) private var searchEngineRaw = SearchEngine.google.rawValue
+    @AppStorage(AppSettings.Key.autoUpdateScripts) private var autoUpdateScripts = true
     @State private var isClearing = false
     @State private var didClear = false
     @State private var confirmingClear = false
@@ -25,6 +26,13 @@ struct SettingsView: View {
                         Text(engine.title).tag(engine.rawValue)
                     }
                 }
+            }
+
+            Section("Userscripts") {
+                Toggle("Update scripts automatically", isOn: $autoUpdateScripts)
+                Text("Checks each script's @updateURL/@downloadURL for a newer @version and reinstalls it.")
+                    .font(.caption)
+                    .foregroundStyle(BBTheme.Color.textSecondary)
             }
 
             Section("Privacy") {

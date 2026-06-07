@@ -47,6 +47,10 @@ struct ScriptMetadata: Codable, Equatable {
     var author: String?
     var homepageURL: String?
     var iconURL: String?
+    /// `@updateURL` — where to check for a newer @version (metadata-only fetch in Tampermonkey, but we
+    /// treat it as a full-source URL fallback). `@downloadURL` — where to re-download the full script.
+    var updateURL: String?
+    var downloadURL: String?
     /// Localized names keyed by locale, e.g. `@name:zh-CN` → ["zh-CN": "…"].
     var localizedNames: [String: String]
 
@@ -84,6 +88,8 @@ struct ScriptMetadata: Codable, Equatable {
          author: String? = nil,
          homepageURL: String? = nil,
          iconURL: String? = nil,
+         updateURL: String? = nil,
+         downloadURL: String? = nil,
          localizedNames: [String: String] = [:],
          matches: [String] = [],
          includes: [String] = [],
@@ -106,6 +112,8 @@ struct ScriptMetadata: Codable, Equatable {
         self.author = author
         self.homepageURL = homepageURL
         self.iconURL = iconURL
+        self.updateURL = updateURL
+        self.downloadURL = downloadURL
         self.localizedNames = localizedNames
         self.matches = matches
         self.includes = includes

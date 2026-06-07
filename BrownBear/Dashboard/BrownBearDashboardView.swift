@@ -46,7 +46,10 @@ struct BrownBearDashboardView: View {
                 .tag(DashboardTab.settings)
         }
         .tint(BBTheme.Color.accent)
-        .task { await model.load() }
+        .task {
+            await model.load()
+            await model.checkForScriptUpdates(auto: true)
+        }
         .sheet(isPresented: $addingScript) {
             ScriptEditorScreen(model: model, existing: nil)
         }
@@ -129,10 +132,23 @@ struct BrownBearDashboardView: View {
                         Button { addingScript = true } label: { Label("New script", systemImage: "plus") }
                         Button { urlPrompt = true } label: { Label("Import from URL…", systemImage: "link") }
                         Button { importFromClipboard() } label: { Label("Import from clipboard", systemImage: "doc.on.clipboard") }
+                        Divider()
+                        Button {
+                            Task { await model.checkForScriptUpdates(auto: false) }
+                        } label: { Label("Check for updates", systemImage: "arrow.triangle.2.circlepath") }
+                            .disabled(model.isCheckingUpdates)
                     } label: {
                         Image(systemName: "plus")
                     }
                 }
+            }
+            .alert("Script updates", isPresented: Binding(
+                get: { model.updateMessage != nil },
+                set: { if !$0 { model.updateMessage = nil } }
+            )) {
+                Button("OK") { model.updateMessage = nil }
+            } message: {
+                Text(model.updateMessage ?? "")
             }
             .alert("Couldn’t install", isPresented: Binding(
                 get: { model.errorMessage != nil },
