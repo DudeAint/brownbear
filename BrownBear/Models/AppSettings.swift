@@ -61,6 +61,18 @@ enum AppSettings {
         static let searchEngine = "bbSearchEngine"
         static let autoUpdateScripts = "bbAutoUpdateScripts"
         static let lastScriptUpdateCheck = "bbLastScriptUpdateCheck"
+        static let hideBarsOnScroll = "bbHideBarsOnScroll"
+    }
+
+    /// Whether the browser chrome (the omnibox bar) slides away as you scroll the page down and returns
+    /// when you scroll up — the Safari/Chrome immersive-reading behaviour. Default ON; the Settings
+    /// toggle uses @AppStorage on the same key, so `object(forKey:) == nil` means "unset" → treat as true.
+    static var hideBarsOnScroll: Bool {
+        get {
+            UserDefaults.standard.object(forKey: Key.hideBarsOnScroll) == nil
+                ? true : UserDefaults.standard.bool(forKey: Key.hideBarsOnScroll)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: Key.hideBarsOnScroll) }
     }
 
     static var searchEngine: SearchEngine {
