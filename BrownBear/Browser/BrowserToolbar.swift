@@ -19,6 +19,11 @@ protocol BrowserToolbarDelegate: AnyObject {
     func toolbarDidTapNewTab(_ toolbar: BrowserToolbar)
     func toolbarDidTapTabs(_ toolbar: BrowserToolbar)
     func toolbarDidTapMenu(_ toolbar: BrowserToolbar)
+    /// Long-press affordances (Firefox/Brave pattern): back/forward show the per-tab history list;
+    /// the new-tab button offers New Private Tab.
+    func toolbarDidLongPressBack(_ toolbar: BrowserToolbar)
+    func toolbarDidLongPressForward(_ toolbar: BrowserToolbar)
+    func toolbarDidLongPressNewTab(_ toolbar: BrowserToolbar)
 }
 
 @MainActor
@@ -87,6 +92,21 @@ final class BrowserToolbar: UIView {
         configure(forwardButton, symbol: "chevron.forward", label: "Forward", action: #selector(tapForward))
         configure(newTabButton, symbol: "plus", label: "New Tab", action: #selector(tapNewTab))
         configure(menuButton, symbol: "ellipsis", label: "More", action: #selector(tapMenu))
+
+        // Wire the long-press affordances ToolbarButton already supports (back/forward history list,
+        // new-tab options) — previously defined but never assigned.
+        backButton.longPressHandler = { [weak self] in
+            guard let self else { return }
+            self.delegate?.toolbarDidLongPressBack(self)
+        }
+        forwardButton.longPressHandler = { [weak self] in
+            guard let self else { return }
+            self.delegate?.toolbarDidLongPressForward(self)
+        }
+        newTabButton.longPressHandler = { [weak self] in
+            guard let self else { return }
+            self.delegate?.toolbarDidLongPressNewTab(self)
+        }
 
         buildTabsButton()
 
