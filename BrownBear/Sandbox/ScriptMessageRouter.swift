@@ -56,7 +56,9 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
     static let handlerName = "brownbear"
 
     /// The native-bound identity behind a token. Created in getScripts, looked up on every call.
-    private struct ScriptSession {
+    /// `fileprivate` (not `private`) so the same-file GM-handler extension can name it in the signatures
+    /// of its `fileprivate` handlers (a `fileprivate` method may not take a `private`-typed parameter).
+    fileprivate struct ScriptSession {
         let id: UUID
         /// The script's display name, for attributing log lines.
         let name: String
@@ -126,6 +128,12 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         "GM_getTab": ["GM_getTab", "GM.getTab"],
         "GM_saveTab": ["GM_saveTab", "GM.saveTab"],
         "GM_listTabs": ["GM_listTabs", "GM.listTabs"]
+    ]
+
+    /// The menu/tab APIs, dispatched as a group in route() (before the main switch) so the switch's
+    /// cyclomatic complexity doesn't grow with each one. Keep in sync with routeMenuOrTab.
+    private static let menuTabAPIs: Set<String> = [
+        "GM_registerMenuCommand", "GM_unregisterMenuCommand", "GM_getTab", "GM_saveTab", "GM_listTabs"
     ]
 
     init(scriptStore: ScriptStore,
@@ -200,6 +208,12 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         let session = try resolveSession(token)
         try ensureGranted(api: api, session: session)
 
+        // The menu/tab APIs are dispatched here, before the main switch, so route() stays within its
+        // cyclomatic-complexity budget as the GM surface grows (they all share one sub-dispatch).
+        if Self.menuTabAPIs.contains(api) {
+            return try routeMenuOrTab(api: api, payload: payload, token: token, session: session, webView: webView)
+        }
+
         switch api {
         case "GM_getValue":
             guard let key = payload["key"] as? String else { throw BrownBearError.bridgeRejected("missing key") }
@@ -266,21 +280,6 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
                                            message: message,
                                            context: .foreground))
             return NSNull()
-
-        case "GM_registerMenuCommand":
-            return try handleRegisterMenuCommand(payload: payload, token: token, session: session, webView: webView)
-
-        case "GM_unregisterMenuCommand":
-            return handleUnregisterMenuCommand(payload: payload, token: token, session: session, webView: webView)
-
-        case "GM_getTab":
-            return try handleGetTab(session: session, webView: webView)
-
-        case "GM_saveTab":
-            return try handleSaveTab(payload: payload, session: session, webView: webView)
-
-        case "GM_listTabs":
-            return handleListTabs(session: session)
 
         case "GM_xmlhttpRequest":
             try await handleXHR(payload: payload, session: session, frameURL: frameURL, webView: webView)
@@ -715,6 +714,27 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
 // Kept in a same-file extension so they can reach the router's private store/contentWorld while not
 // inflating the main type body. Every payload field is validated; missing/oversized input fails closed.
 extension ScriptMessageRouter {
+
+    /// Sub-dispatch for the five menu/tab APIs, collapsed under one `route()` case to keep that
+    /// function's cyclomatic complexity within the SwiftLint budget. All five have already passed
+    /// resolveSession + ensureGranted in route().
+    fileprivate func routeMenuOrTab(api: String, payload: [String: Any], token: String?,
+                                    session: ScriptSession, webView: WKWebView?) throws -> Any? {
+        switch api {
+        case "GM_registerMenuCommand":
+            return try handleRegisterMenuCommand(payload: payload, token: token, session: session, webView: webView)
+        case "GM_unregisterMenuCommand":
+            return handleUnregisterMenuCommand(payload: payload, token: token, session: session, webView: webView)
+        case "GM_getTab":
+            return try handleGetTab(session: session, webView: webView)
+        case "GM_saveTab":
+            return try handleSaveTab(payload: payload, session: session, webView: webView)
+        case "GM_listTabs":
+            return handleListTabs(session: session)
+        default:
+            return NSNull()
+        }
+    }
 
     fileprivate func handleRegisterMenuCommand(payload: [String: Any],
                                                token: String?,
