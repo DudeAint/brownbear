@@ -556,11 +556,9 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
     }
 
     func jsonString(_ value: Any) -> String {
-        if let data = try? JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed]),
-           let string = String(data: data, encoding: .utf8) {
-            return string
-        }
-        return "null"
+        // Sanitize NaN/Infinity first — JSONSerialization throws an uncatchable Obj-C exception on
+        // those, and a content script's message / tab record can carry one (CLAUDE.md §5: fail closed).
+        JSONSanitize.string(value)
     }
 
     private func makeLog(_ level: LogEntry.Level, _ message: String) -> LogEntry {
