@@ -25,6 +25,7 @@ enum BrowserMenuAction {
     case toggleBookmark
     case bookmarks
     case history
+    case downloads
 }
 
 /// A snapshot of the active tab the menu renders against.
@@ -194,7 +195,8 @@ final class BrowserMenuViewController: UIViewController {
             makeRow(icon: "scroll", title: "Userscripts", action: .userscripts),
             makeRow(icon: "puzzlepiece.extension", title: "Extensions", action: .extensions),
             makeRow(icon: "bookmark", title: "Bookmarks", action: .bookmarks),
-            makeRow(icon: "clock.arrow.circlepath", title: "History", action: .history)
+            makeRow(icon: "clock.arrow.circlepath", title: "History", action: .history),
+            makeRow(icon: "arrow.down.circle", title: "Downloads", action: .downloads)
         ])
         let section = UIStackView(arrangedSubviews: [header, card])
         section.axis = .vertical
