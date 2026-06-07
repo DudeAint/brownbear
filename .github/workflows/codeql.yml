@@ -1,14 +1,15 @@
 name: CodeQL
 
-# Static security analysis. This app runs untrusted JavaScript, so we scan both our Swift and
-# the injected JS runtime for vulnerabilities on every push, PR, and weekly.
+# Static security analysis. This app runs untrusted JavaScript, so we scan both our Swift and the
+# injected JS runtime for vulnerabilities. NOT on pull_request: the Swift CodeQL job is a second
+# full macOS build that competes with the gating "Build & Test" for the scarce macOS runner pool,
+# badly slowing PR turnaround. It still runs on every push to main + weekly + on demand.
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
   schedule:
     - cron: "0 6 * * 1"   # Monday 06:00 UTC
+  workflow_dispatch:
 
 permissions:
   contents: read
