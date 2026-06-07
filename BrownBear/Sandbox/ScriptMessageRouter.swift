@@ -22,6 +22,21 @@ import WebKit
 @MainActor
 protocol ScriptBridgeHost: AnyObject {
     func bridgeOpenInTab(url: URL, active: Bool)
+
+    /// GM_notification in-app fallback: show a brief banner when the OS suppressed the notification
+    /// (UN authorization denied). Best-effort UX so the notification isn't silently dropped.
+    func bridgeShowNotificationFallback(title: String, body: String)
+
+    /// GM.cookie.list — cookies matching the (already @connect-gated) chrome-shaped filter dict.
+    func bridgeListCookies(filter: [String: Any]) async -> [[String: Any]]
+    /// GM.cookie.set — create/overwrite a cookie from chrome setDetails; returns the stored cookie.
+    func bridgeSetCookie(details: [String: Any]) async -> [String: Any]?
+    /// GM.cookie.delete — delete the cookie matching name+url; returns the removal details, or nil.
+    func bridgeDeleteCookie(url: String, name: String) async -> [String: Any]?
+
+    /// GM_download — write `data` into the Downloads list under a unique destination; optionally
+    /// present a share/save sheet (`presentSheet`). Returns the on-disk URL, or nil on write failure.
+    func bridgeSaveDownload(data: Data, suggestedName: String, presentSheet: Bool) async -> URL?
 }
 
 @MainActor
@@ -43,6 +58,13 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         /// the SAME script in another frame/tab into this one's content world (weak: don't pin a tab).
         weak var webView: WKWebView?
         var frameInfo: WKFrameInfo?
+
+        /// A value-type projection handed to the same-module +Privileged extension (which cannot name
+        /// this private type). Carries only what the privileged handlers need.
+        var privileged: ScriptMessageRouter.PrivilegedSession {
+            ScriptMessageRouter.PrivilegedSession(id: id, name: name, connects: connects,
+                                                  webView: webView, frameInfo: frameInfo)
+        }
     }
 
     private let scriptStore: ScriptStore
@@ -80,7 +102,10 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         "GM_setClipboard": ["GM_setClipboard", "GM.setClipboard"],
         "GM_openInTab": ["GM_openInTab", "GM.openInTab"],
         "GM_log": ["GM_log", "GM.log"],
-        "GM_xmlhttpRequest": ["GM_xmlhttpRequest", "GM.xmlHttpRequest"]
+        "GM_xmlhttpRequest": ["GM_xmlhttpRequest", "GM.xmlHttpRequest"],
+        "GM_notification": ["GM_notification", "GM.notification"],
+        "GM_cookie": ["GM_cookie", "GM.cookie", "GM.cookie.list", "GM.cookie.set", "GM.cookie.delete"],
+        "GM_download": ["GM_download", "GM.download"]
     ]
 
     init(scriptStore: ScriptStore,
@@ -224,6 +249,20 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
 
         case "GM_xmlhttpRequest":
             try await handleXHR(payload: payload, session: session, frameURL: frameURL, webView: webView)
+            return NSNull()
+
+        case "GM_notification":
+            return try await handleNotification(payload: payload, session: session.privileged)
+
+        case "GM_notificationClear":
+            return handleNotificationClear(payload: payload, session: session.privileged)
+
+        case "GM_cookie":
+            return try await handleCookie(payload: payload, session: session.privileged, frameURL: frameURL)
+
+        case "GM_download":
+            try await handleDownload(payload: payload, session: session.privileged,
+                                     frameURL: frameURL, webView: webView)
             return NSNull()
 
         case "fetchResource":
@@ -496,5 +535,41 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         let result = await task.value
         pendingGrantDecisions[key] = nil
         return result
+    }
+
+    // MARK: - Privileged-extension bridging shims
+    //
+    // The host-reaching GM apis (GM_notification / GM_cookie / GM_download) live in
+    // ScriptMessageRouter+Privileged.swift (kept separate so this type stays under the
+    // type_body_length limit). A cross-file extension cannot touch `private` members, so we expose
+    // exactly what it needs here as `internal`, and nothing more.
+
+    /// A flattened, value-type view of a ScriptSession for the privileged extension (which can't name
+    /// the private `ScriptSession` type).
+    struct PrivilegedSession {
+        let id: UUID
+        let name: String
+        let connects: [String]
+        weak var webView: WKWebView?
+        var frameInfo: WKFrameInfo?
+    }
+
+    /// The content world all BrownBear injection runs in — for pushing notification/download events
+    /// back into the exact isolated world the script lives in.
+    var privilegedContentWorld: WKContentWorld { contentWorld }
+
+    /// The browser host — cookie I/O, the download save sheet, and the notification fallback toast.
+    var privilegedHost: ScriptBridgeHost? { host }
+
+    /// Append a foreground log line (used when @connect blocks a privileged host).
+    func privilegedLog(scriptID: UUID, scriptName: String, message: String) async {
+        await logStore.append(LogEntry(scriptID: scriptID, scriptName: scriptName,
+                                       level: .warn, message: message, context: .foreground))
+    }
+
+    /// Reuse the XHR @connect decision (prompt-once + persist always-allow) for the cookie/download
+    /// host gate.
+    func resolvePrivilegedConnectDecision(scriptID: UUID, scriptName: String, host: String) async -> Bool {
+        await resolveConnectDecision(scriptID: scriptID, scriptName: scriptName, host: host)
     }
 }

@@ -86,6 +86,26 @@ final class DownloadManager: NSObject, ObservableObject {
         idsByDownload = idsByDownload.filter { !finishedIDs.contains($0.value) }
     }
 
+    /// Register a file BrownBear already fetched (GM_download) into the Downloads list and write it to
+    /// the app's Downloads directory under a non-colliding name. Returns the on-disk URL, or nil if
+    /// the bytes couldn't be written. Marked finished immediately (the bytes are already in hand).
+    @discardableResult
+    func registerLocalDownload(data: Data, suggestedName: String) -> URL? {
+        let destination = uniqueDestination(in: downloadsDirectory(), fileName: suggestedName)
+        do {
+            try data.write(to: destination, options: .atomic)
+        } catch {
+            return nil
+        }
+        let item = DownloadItem(fileName: destination.lastPathComponent,
+                                localURL: destination,
+                                state: .finished,
+                                fractionCompleted: 1)
+        downloads.insert(item, at: 0)
+        onDownloadStarted?()
+        return destination
+    }
+
     private func updateState(for download: WKDownload, _ apply: (inout DownloadItem) -> Void) {
         guard let id = idsByDownload[ObjectIdentifier(download)],
               let index = downloads.firstIndex(where: { $0.id == id }) else { return }
