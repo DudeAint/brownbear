@@ -135,10 +135,20 @@ enum DeclarativeNetRequest {
             return .skip("rule \(ruleID(rule)): requestMethods has no content-rule-list equivalent")
         }
         if let domains = condition["requestDomains"] as? [String], !domains.isEmpty {
-            return .skip("rule \(ruleID(rule)): requestDomains can't be mapped to if-domain (it filters the page, not the request)")
+            return .skip("rule \(ruleID(rule)): requestDomains filters the REQUEST's domain, which WebKit's "
+                + "if-domain (page/initiator domain only) can't express")
         }
         if let excluded = condition["excludedRequestDomains"] as? [String], !excluded.isEmpty {
             return .skip("rule \(ruleID(rule)): excludedRequestDomains has no content-rule-list equivalent")
+        }
+        // The MV2-style `domains` / `excludedDomains` (no such field in the DNR schema) filter the
+        // REQUEST URL's domain — NOT the page. WebKit's if-domain is page/initiator-domain only, so
+        // mapping them onto if-domain would block the WRONG origin. Skip the rule rather than misroute.
+        if let domains = condition["domains"] as? [String], !domains.isEmpty {
+            return .skip("rule \(ruleID(rule)): 'domains' filters the request URL; WebKit if-domain is page-domain only")
+        }
+        if let excluded = condition["excludedDomains"] as? [String], !excluded.isEmpty {
+            return .skip("rule \(ruleID(rule)): 'excludedDomains' filters the request URL; no if-domain equivalent")
         }
 
         var trigger: [String: Any] = [:]
@@ -167,8 +177,8 @@ enum DeclarativeNetRequest {
 
         // Initiator (page) domains → if-domain / unless-domain. WebKit forbids both in one trigger,
         // so an inclusion list wins over an exclusion list (and we note the dropped exclusion).
-        let initiator = (condition["initiatorDomains"] as? [String]) ?? (condition["domains"] as? [String])
-        let excludedInitiator = (condition["excludedInitiatorDomains"] as? [String]) ?? (condition["excludedDomains"] as? [String])
+        let initiator = condition["initiatorDomains"] as? [String]
+        let excludedInitiator = condition["excludedInitiatorDomains"] as? [String]
         if let initiator, !initiator.isEmpty {
             trigger["if-domain"] = initiator.map(domainEntry)
         } else if let excludedInitiator, !excludedInitiator.isEmpty {
