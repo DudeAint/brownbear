@@ -19,6 +19,21 @@ enum WebExtensionCookieMapper {
     /// The only cookie store id iOS exposes (Chrome's default store). Both factory stores fold into it.
     static let storeId = "0"
 
+    /// Whether a chrome.cookies call's target is within the extension's host permissions. The gate
+    /// must key on the cookie's EFFECTIVE domain: an explicit `details.domain` is authoritative for a
+    /// write (cookies.set) and scopes a read, so it is checked FIRST — gating on `details.url` alone
+    /// would let an extension permitted for host A write/read cookies for an unrelated domain B by
+    /// passing `{ url: A, domain: B }` (the mapper writes the cookie for B). `hostMatches` answers
+    /// "does this extension hold a host_permission covering this https URL". Fail closed.
+    static func scopeAllowed(details: [String: Any], hostMatches: (String) -> Bool) -> Bool {
+        if let domainRaw = details["domain"] as? String, !domainRaw.isEmpty {
+            let domain = domainRaw.hasPrefix(".") ? String(domainRaw.dropFirst()) : domainRaw
+            return !domain.isEmpty && hostMatches("https://\(domain)/")
+        }
+        if let url = details["url"] as? String { return hostMatches(url) }
+        return true   // unscoped (e.g. getAll with no filter) — the API-permission gate still applies.
+    }
+
     // MARK: - HTTPCookie → chrome Cookie
 
     /// Build the chrome.cookies `Cookie` dictionary for an `HTTPCookie`.
@@ -94,11 +109,16 @@ enum WebExtensionCookieMapper {
         let value = (details["value"] as? String) ?? ""
 
         // Domain: an explicit `domain` wins and is treated as a domain cookie (leading dot) so it
-        // matches subdomains, mirroring chrome; otherwise the URL host (a host-only cookie).
+        // matches subdomains, mirroring chrome; otherwise the URL host (a host-only cookie). Chrome
+        // (CreateSanitizedCookie) requires the cookie domain to domain-match the url's host — the
+        // host must equal or be a subdomain of the cookie domain. Without this an extension could set
+        // a cookie for an UNRELATED domain via a url it controls (session fixation); fail closed.
         let explicitDomain = (details["domain"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         let domainForCookie: String
         if let explicitDomain {
-            domainForCookie = explicitDomain.hasPrefix(".") ? explicitDomain : "." + explicitDomain
+            let bare = explicitDomain.hasPrefix(".") ? String(explicitDomain.dropFirst()) : explicitDomain
+            guard !bare.isEmpty, host == bare || host.hasSuffix("." + bare) else { return nil }
+            domainForCookie = "." + bare
         } else {
             domainForCookie = host
         }

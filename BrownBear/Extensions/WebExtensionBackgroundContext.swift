@@ -593,12 +593,9 @@ extension WebExtensionBackgroundContext {
         guard cookiePermissions.contains("cookies") else { return false }
         if method == "getAllCookieStores" { return true }
         let details = (args["details"] as? [String: Any]) ?? [:]
-        if let urlString = details["url"] as? String { return cookieHostMatcher(urlString) }
-        if let domain = details["domain"] as? String, !domain.isEmpty {
-            let host = domain.hasPrefix(".") ? String(domain.dropFirst()) : domain
-            return cookieHostMatcher("https://\(host)/")
-        }
-        return true   // an unscoped getAll — the cookies permission gate above still applies.
+        // Gate on the cookie's EFFECTIVE domain (an explicit `domain` wins over `url`) — the same
+        // gate the foreground router uses, closing the cross-domain cookies.set bypass here too.
+        return WebExtensionCookieMapper.scopeAllowed(details: details, hostMatches: cookieHostMatcher)
     }
 
     /// Map a chrome.cookies method + args to the cookie host, returning a JSON-serializable value.

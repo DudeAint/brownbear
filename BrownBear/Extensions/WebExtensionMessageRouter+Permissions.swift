@@ -100,15 +100,10 @@ extension WebExtensionMessageRouter {
 
     func cookieHostAllowed(extensionID: String, details: [String: Any]) async throws -> Bool {
         guard let manifest = await store.ext(for: extensionID)?.manifest else { return false }
-        let targetURL: String?
-        if let url = details["url"] as? String { targetURL = url }
-        else if let domain = details["domain"] as? String, !domain.isEmpty {
-            let host = domain.hasPrefix(".") ? String(domain.dropFirst()) : domain
-            targetURL = "https://\(host)/"
-        } else { targetURL = nil }
-        guard let targetURL else { return true }
         let matcher = URLMatcher(matches: manifest.effectiveHostPatterns,
                                  includes: [], excludes: [], excludeMatches: [])
-        return matcher.matches(targetURL)
+        // Gate on the cookie's EFFECTIVE domain (an explicit `domain` wins over `url`) — see
+        // WebExtensionCookieMapper.scopeAllowed. Closes the cross-domain cookies.set bypass.
+        return WebExtensionCookieMapper.scopeAllowed(details: details) { matcher.matches($0) }
     }
 }
