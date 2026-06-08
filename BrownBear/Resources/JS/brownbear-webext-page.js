@@ -54,12 +54,20 @@
         if (typeof orig === "function") { try { orig.apply(c, arguments); } catch (e) {} }
       };
     });
+    // Capture phase (true) so FAILED SUB-RESOURCE loads are caught too — a 404'd `<script type=
+    // module>` import is the classic "blank page" cause and only surfaces as a non-bubbling error
+    // on the element.
     W.addEventListener("error", function (e) {
+      var t = e && e.target;
+      if (t && t !== W && t.tagName) {
+        emit("error", ["Failed to load " + String(t.tagName).toLowerCase() + ": " + (t.src || t.href || "")]);
+        return;
+      }
       var msg = (e && e.message) ? e.message : "script error";
       if (e && e.filename) { msg += " (" + e.filename + ":" + (e.lineno || 0) + ")"; }
       if (e && e.error && e.error.stack) { msg += "\n" + e.error.stack; }
       emit("error", [msg]);
-    });
+    }, true);
     W.addEventListener("unhandledrejection", function (e) {
       var r = e && e.reason;
       emit("error", ["Unhandled promise rejection: " + ((r && r.message) ? r.message : String(r))]);
