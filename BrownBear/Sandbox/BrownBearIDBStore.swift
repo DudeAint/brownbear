@@ -48,10 +48,16 @@ final class BrownBearIDBStore: @unchecked Sendable {
 
     // MARK: - Install into a JS context
 
-    /// Install the IndexedDB engine + persistence into a headless `JSContext` for `namespace`, then
-    /// rehydrate it from the last on-disk snapshot. MUST be called on the context's own thread (the JS
-    /// engine is single-threaded), BEFORE the extension/userscript source runs so `indexedDB` exists.
-    func install(into context: JSContext, namespace: Namespace) {
+    /// Install the IndexedDB engine + persistence into a headless `JSContext` for `namespace`. MUST be
+    /// called on the context's own thread (the JS engine is single-threaded), BEFORE the
+    /// extension/userscript source runs so `indexedDB` exists.
+    ///
+    /// `rehydrate` defaults to true (replay the snapshot here). A caller whose context defines the web
+    /// globals a persisted value needs (Blob/File) only AFTER this install — e.g. an extension worker,
+    /// whose Blob/File come from the background runtime loaded after the engine — must pass
+    /// `rehydrate: false` and call ``rehydrate(into:namespace:)`` once those globals exist, or a
+    /// persisted Blob/File would revive as a raw tagged record instead of a real object.
+    func install(into context: JSContext, namespace: Namespace, rehydrate shouldRehydrate: Bool = true) {
         // Native sink for snapshots the JS side produces (already debounced in JS); persist off-thread.
         let save: @convention(block) (String) -> Void = { [weak self] json in
             self?.save(json, namespace: namespace)
@@ -65,13 +71,18 @@ final class BrownBearIDBStore: @unchecked Sendable {
             context.evaluateScript(persist, withSourceURL: URL(string: "brownbear://idb/persist.js"))
         }
 
-        // Rehydrate: inject the saved snapshot and replay it through the public IndexedDB API. The
-        // microtask-scheduled engine drains this before evaluateScript returns, so the data is present
-        // by the time the extension/userscript code runs.
-        if let snapshot = load(namespace: namespace), !snapshot.isEmpty {
-            context.setObject(snapshot, forKeyedSubscript: "__bbIDBInitialSnapshot" as NSString)
-            context.evaluateScript("try { __bbIDBRestore(__bbIDBInitialSnapshot); } catch (e) {}")
-        }
+        if shouldRehydrate { rehydrate(into: context, namespace: namespace) }
+    }
+
+    /// Replay the last on-disk snapshot through the public IndexedDB API. Call AFTER the context's web
+    /// globals (Blob/File) exist, so a persisted Blob/File revives as a real object rather than a raw
+    /// tagged record. The microtask-scheduled engine drains the replay before evaluateScript returns,
+    /// so the data is present by the time the extension/userscript source runs. No-op if no snapshot.
+    func rehydrate(into context: JSContext?, namespace: Namespace) {
+        guard let context else { return }
+        guard let snapshot = load(namespace: namespace), !snapshot.isEmpty else { return }
+        context.setObject(snapshot, forKeyedSubscript: "__bbIDBInitialSnapshot" as NSString)
+        context.evaluateScript("try { __bbIDBRestore(__bbIDBInitialSnapshot); } catch (e) {}")
     }
 
     /// Force the JS side to snapshot now and persist it — used when a context is shutting down (the
