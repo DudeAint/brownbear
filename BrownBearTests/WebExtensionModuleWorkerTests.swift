@@ -64,6 +64,18 @@ final class WebExtensionModuleWorkerTests: XCTestCase {
         var all: [String] { lock.lock(); defer { lock.unlock() }; return lines }
     }
 
+    /// Poll (deterministically) until a log line matches or the timeout elapses. A fixed sleep flaked
+    /// on loaded CI runners — the boot → link → exceptionHandler → logSink chain hops actors/queues.
+    private func waitForLog(_ logs: LogCollector, timeout: TimeInterval = 5,
+                            matching: @escaping (String) -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if logs.all.contains(where: matching) { return true }
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        return logs.all.contains(where: matching)
+    }
+
     // MARK: - Happy path: a real module graph links and integrates with chrome.runtime
 
     func testModuleGraphLinksAndAnswersViaRuntimeMessage() async throws {
@@ -139,10 +151,8 @@ final class WebExtensionModuleWorkerTests: XCTestCase {
         // No listener should have registered (the import threw before addListener ran).
         let response = await context.deliverRuntimeMessage(message: ["q": "go"], sender: [:])
         XCTAssertNil(response?["value"], "a worker whose graph failed to link must not answer messages")
-        // Give the serial queue a beat to flush the exception log, then assert it was reported.
-        try await Task.sleep(nanoseconds: 50_000_000)
-        XCTAssertTrue(logs.all.contains { $0.contains("module not found") || $0.lowercased().contains("uncaught") },
-                      "expected a 'module not found' error in the log; got: \(logs.all)")
+        let found = await waitForLog(logs) { $0.contains("module not found") || $0.lowercased().contains("uncaught") }
+        XCTAssertTrue(found, "expected a 'module not found' error in the log; got: \(logs.all)")
     }
 
     func testParseErrorFailsClosedWithLog() async throws {
@@ -151,8 +161,7 @@ final class WebExtensionModuleWorkerTests: XCTestCase {
             "sw.js": "export const = ;"   // syntactically invalid
         ], logs: logs)
         defer { context.shutdown() }
-        try await Task.sleep(nanoseconds: 50_000_000)
-        XCTAssertTrue(logs.all.contains { $0.lowercased().contains("parse error") || $0.lowercased().contains("uncaught") },
-                      "expected a parse error in the log; got: \(logs.all)")
+        let found = await waitForLog(logs) { $0.lowercased().contains("parse error") || $0.lowercased().contains("uncaught") }
+        XCTAssertTrue(found, "expected a parse error in the log; got: \(logs.all)")
     }
 }
