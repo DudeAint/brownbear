@@ -29,6 +29,12 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
         let isContent: Bool
         weak var webView: WKWebView?
         var frameInfo: WKFrameInfo?
+        /// chrome.runtime.MessageSender.frameId — 0 for the main frame, a minted positive int per
+        /// subframe. Identifies the frame the content script runs in for the receiver's reply routing.
+        var frameId: Int = 0
+        /// chrome.runtime.MessageSender.documentId — a stable per-document id (one per frame load),
+        /// shared by every content script injected into that document, matching Chrome.
+        var documentId: String = ""
     }
 
     let store: WebExtensionStore   // internal: the +ContextMenus / +Ports extension files reach it
@@ -45,6 +51,8 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
     private var sessions: [String: Session] = [:]
     /// Insertion order of tokens, for FIFO eviction once `sessions` exceeds `maxSessions`.
     private var tokenOrder: [String] = []
+    /// Monotonic source of MessageSender.frameId for subframes (the main frame is always 0).
+    private var frameIdCounter = 0
     /// Correlates a native→content message push with the content script's eventual sendResponse.
     private let responseTable = WebExtContentResponseTable()
     private var storageObserver: NSObjectProtocol?
@@ -192,9 +200,11 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
         case "runtime.sendMessage":
             // Content script / page → its extension's other contexts (background worker + open pages).
             // `message` is any JSON. `token` (the sender) is passed so a page never gets its own message.
+            // The sender carries the full Chrome MessageSender shape so a background listener can reply
+            // via chrome.tabs.sendMessage(sender.tab.id, …) — see buildMessageSender.
             let message = payload["message"] ?? NSNull()
-            var sender: [String: Any] = ["id": extensionID]
-            if let url = payload["url"] as? String { sender["url"] = url }
+            let sender = buildMessageSender(token: token, extensionID: extensionID,
+                                            url: payload["url"] as? String, webView: webView, frameInfo: frameInfo)
             guard let response = await runtime.sendRuntimeMessage(message, sender: sender,
                                                                   to: extensionID, senderToken: token) else {
                 return NSNull()
@@ -376,7 +386,9 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
             session.isContent && session.extensionID == extensionID && session.webView === webView
         }
         guard !targets.isEmpty else { return nil }
-        let sender: [String: Any] = ["id": extensionID]
+        // A tabs.sendMessage push originates from the extension itself (background/popup), which is NOT a
+        // tab — so the content script's onMessage sender carries the extension id + origin and no `tab`.
+        let sender: [String: Any] = ["id": extensionID, "origin": "chrome-extension://\(extensionID)"]
         for (token, session) in targets {
             let response = await pushMessage(token: token, webView: webView, frame: session.frameInfo,
                                              message: message, sender: sender)
@@ -478,6 +490,61 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
     /// its extension id — the same fail-closed identity check every routed call uses.
     func resolveExtensionID(_ token: String?) async throws -> String { try await resolve(token) }
 
+    // MARK: - chrome.runtime.MessageSender
+
+    /// Build the MessageSender for a runtime.sendMessage from `token`'s context. A content script (a
+    /// session bound to a real browser tab) gets the full Chrome shape — `tab` so the receiver can reply
+    /// via chrome.tabs.sendMessage(sender.tab.id, …), plus `frameId`/`documentId`/`url`/`origin`. A
+    /// popup/options page omits `tab` (Chrome attaches `tab` iff the sender runs in a tab). `webView`/
+    /// `frameInfo` are the live message's; the session supplies the stable per-document frameId/docId.
+    private func buildMessageSender(token: String?, extensionID: String, url: String?,
+                                    webView: WKWebView?, frameInfo: WKFrameInfo?) -> [String: Any] {
+        let session = token.flatMap { sessions[$0] }
+        let tabRecord = webView.flatMap { host?.webExtTabRecord(forWebView: $0) }
+        let frameId = session?.frameId ?? ((frameInfo?.isMainFrame ?? true) ? 0 : 0)
+        return Self.assembleSender(extensionID: extensionID, url: url, tabRecord: tabRecord,
+                                   frameId: frameId, documentId: session?.documentId)
+    }
+
+    /// Pure assembly of a chrome.runtime.MessageSender from already-resolved parts (no host/web view) —
+    /// unit-testable. `tabRecord` is non-nil iff the sender runs in a browser tab, in which case `tab`,
+    /// `frameId`, and `documentId` are attached; a page sender passes nil and gets none of them. The
+    /// `origin` is derived from `url` (Chrome includes it whenever the sender has a web origin).
+    static func assembleSender(extensionID: String, url: String?, tabRecord: [String: Any]?,
+                               frameId: Int, documentId: String?) -> [String: Any] {
+        var sender: [String: Any] = ["id": extensionID]
+        if let url, !url.isEmpty {
+            sender["url"] = url
+            if let origin = origin(ofURLString: url) { sender["origin"] = origin }
+        }
+        if let tabRecord {
+            sender["tab"] = tabRecord
+            sender["frameId"] = frameId
+            if let documentId, !documentId.isEmpty { sender["documentId"] = documentId }
+        }
+        return sender
+    }
+
+    /// The web origin (scheme://host[:port]) of a URL string, or nil for an origin-less URL
+    /// (e.g. about:blank, data:). Mirrors the `origin` field Chrome puts on a MessageSender.
+    static func origin(ofURLString string: String) -> String? {
+        guard let url = URL(string: string), let scheme = url.scheme, let host = url.host else { return nil }
+        if let port = url.port { return "\(scheme)://\(host):\(port)" }
+        return "\(scheme)://\(host)"
+    }
+
+    /// frameId for a freshly-loaded frame: 0 for the main frame, a minted positive int per subframe.
+    private func mintFrameId(isMainFrame: Bool) -> Int {
+        guard !isMainFrame else { return 0 }
+        frameIdCounter += 1
+        return frameIdCounter
+    }
+
+    /// A fresh per-document id (32 lowercase hex chars, Chrome's documentId shape).
+    private static func newDocumentId() -> String {
+        UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+    }
+
     private func resolve(_ token: String?) async throws -> String {
         guard let token, let session = sessions[token] else {
             throw BrownBearError.bridgeRejected("unrecognized extension token")
@@ -539,6 +606,10 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
         // A main-frame load means a new page (or reload) — reap the web view's prior content sessions so
         // they don't accumulate or get targeted by pushes after their frames are gone.
         if !isSubframe, let webView { purgeSessions(for: webView) }
+        // One frameId + documentId per frame load: every content script injected into this document
+        // shares them (they identify the frame/document, not the script), exactly like Chrome.
+        let frameId = mintFrameId(isMainFrame: frameInfo?.isMainFrame ?? !isSubframe)
+        let documentId = Self.newDocumentId()
         let extensions = await store.enabledExtensions()
         var result: [[String: Any]] = []
 
@@ -565,7 +636,8 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
                 let token = UUID().uuidString
                 registerSession(token: token,
                                 session: Session(extensionID: ext.id, isContent: true,
-                                                 webView: webView, frameInfo: frameInfo))
+                                                 webView: webView, frameInfo: frameInfo,
+                                                 frameId: frameId, documentId: documentId))
                 result.append([
                     "token": token,
                     "extensionId": ext.id,
@@ -591,7 +663,8 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
                 let token = UUID().uuidString
                 registerSession(token: token,
                                 session: Session(extensionID: ext.id, isContent: true,
-                                                 webView: webView, frameInfo: frameInfo))
+                                                 webView: webView, frameInfo: frameInfo,
+                                                 frameId: frameId, documentId: documentId))
                 result.append([
                     "token": token,
                     "extensionId": ext.id,

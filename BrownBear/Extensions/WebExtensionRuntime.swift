@@ -263,26 +263,41 @@ class WebExtensionRuntime {
         } else {
             moduleSource = nil
         }
+        let install = Self.consumeInstallReason(ext.id, currentVersion: manifest.version)
         context.boot(runtimeJS: Self.backgroundRuntimeJS,
                      backgroundSource: source,
                      manifestJSON: ext.manifestJSON,
                      baseURL: ext.baseURLString,
                      messages: messages,
-                     firstInstall: Self.consumeFirstInstall(ext.id),
+                     installReason: install.reason,
+                     previousVersion: install.previousVersion,
                      moduleEntry: moduleEntry,
                      esmRuntimeJS: moduleEntry != nil ? Self.esmRuntimeJS : nil,
                      moduleSource: moduleSource)
     }
 
-    /// True exactly once per extension id (its first-ever boot), so chrome.runtime.onInstalled fires
-    /// reason 'install' only then; every boot still fires onStartup. Ids are random per install, so a
-    /// reinstall is naturally a fresh id and fires 'install' again.
-    private static func consumeFirstInstall(_ extensionID: String) -> Bool {
-        let key = "brownbear.webext.installedFired.\(extensionID)"
+    /// The chrome.runtime.onInstalled detail for this boot, by comparing the stored last-booted version
+    /// against the manifest's current version — exactly like Chrome:
+    /// - first-ever boot of this id → `reason: "install"`, no previousVersion;
+    /// - a later boot whose version differs from the stored one → `reason: "update"`, previousVersion;
+    /// - same version already booted → no event (`nil`), so first-run setup doesn't re-run every launch.
+    /// onStartup still fires on every boot (handled in boot()). The legacy `installedFired` flag is
+    /// honored so extensions installed under the pre-version scheme don't spuriously re-fire `install`.
+    static func consumeInstallReason(_ extensionID: String,
+                                     currentVersion: String) -> (reason: String?, previousVersion: String?) {
+        let versionKey = "brownbear.webext.installedVersion.\(extensionID)"
+        let legacyKey = "brownbear.webext.installedFired.\(extensionID)"
         let defaults = UserDefaults.standard
-        if defaults.bool(forKey: key) { return false }
-        defaults.set(true, forKey: key)
-        return true
+        if let stored = defaults.string(forKey: versionKey) {
+            guard stored != currentVersion else { return (nil, nil) }
+            defaults.set(currentVersion, forKey: versionKey)
+            return ("update", stored)
+        }
+        // No version recorded yet for this id.
+        defaults.set(currentVersion, forKey: versionKey)
+        if defaults.bool(forKey: legacyKey) { return (nil, nil) }   // already installed pre-versioning
+        defaults.set(true, forKey: legacyKey)
+        return ("install", nil)
     }
 
     // MARK: - storage.onChanged fan-out

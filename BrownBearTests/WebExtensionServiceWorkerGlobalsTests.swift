@@ -25,7 +25,9 @@ final class WebExtensionServiceWorkerGlobalsTests: XCTestCase {
     }
 
     private func makeContext(background: String,
-                             manifestJSON: String = #"{"manifest_version":3,"name":"Test","version":"1.0"}"#)
+                             manifestJSON: String = #"{"manifest_version":3,"name":"Test","version":"1.0"}"#,
+                             installReason: String? = nil,
+                             previousVersion: String? = nil)
         throws -> WebExtensionBackgroundContext {
         let extensionID = "abcdefghijklmnopabcdefghijklmnop"
         let context = WebExtensionBackgroundContext(
@@ -37,7 +39,9 @@ final class WebExtensionServiceWorkerGlobalsTests: XCTestCase {
                      backgroundSource: background,
                      manifestJSON: manifestJSON,
                      baseURL: "chrome-extension://\(extensionID)/",
-                     messages: [:])
+                     messages: [:],
+                     installReason: installReason,
+                     previousVersion: previousVersion)
         return context
     }
 
@@ -263,5 +267,56 @@ final class WebExtensionServiceWorkerGlobalsTests: XCTestCase {
         let response = await context.deliverRuntimeMessage(message: ["check": "reset"], sender: [:])
         let r = try XCTUnwrap(response?["value"] as? [String: Any])
         XCTAssertEqual(r["isFn"] as? Bool, true)
+    }
+
+    // MARK: - chrome.runtime.onInstalled (reason + previousVersion)
+
+    /// An 'update' boot must deliver `{reason:'update', previousVersion:<old>}` so an extension can run
+    /// its version-gated migration — the most common reason real extensions read onInstalled at all.
+    func testOnInstalledFiresUpdateReasonWithPreviousVersion() async throws {
+        let context = try makeContext(background: """
+        globalThis.__installDetails = null;
+        chrome.runtime.onInstalled.addListener(function (details) { globalThis.__installDetails = details; });
+        chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+          if (msg && msg.check === 'installed') { sendResponse(globalThis.__installDetails || { reason: 'none' }); }
+        });
+        """, installReason: "update", previousVersion: "1.0")
+        defer { context.shutdown() }
+        let response = await context.deliverRuntimeMessage(message: ["check": "installed"], sender: [:])
+        let details = try XCTUnwrap(response?["value"] as? [String: Any])
+        XCTAssertEqual(details["reason"] as? String, "update")
+        XCTAssertEqual(details["previousVersion"] as? String, "1.0")
+    }
+
+    /// A fresh 'install' boot delivers `{reason:'install'}` with NO previousVersion (Chrome omits it).
+    func testOnInstalledFiresInstallReasonWithoutPreviousVersion() async throws {
+        let context = try makeContext(background: """
+        globalThis.__installDetails = null;
+        chrome.runtime.onInstalled.addListener(function (details) { globalThis.__installDetails = details; });
+        chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+          if (msg && msg.check === 'installed') { sendResponse(globalThis.__installDetails || { reason: 'none' }); }
+        });
+        """, installReason: "install")
+        defer { context.shutdown() }
+        let response = await context.deliverRuntimeMessage(message: ["check": "installed"], sender: [:])
+        let details = try XCTUnwrap(response?["value"] as? [String: Any])
+        XCTAssertEqual(details["reason"] as? String, "install")
+        XCTAssertNil(details["previousVersion"])
+    }
+
+    /// A same-version reboot fires NO onInstalled at all (installReason nil), so first-run setup —
+    /// opening a welcome tab, seeding storage — does not re-run on every launch.
+    func testOnInstalledDoesNotFireOnSameVersionReboot() async throws {
+        let context = try makeContext(background: """
+        globalThis.__installFired = false;
+        chrome.runtime.onInstalled.addListener(function () { globalThis.__installFired = true; });
+        chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+          if (msg && msg.check === 'installed') { sendResponse({ fired: globalThis.__installFired }); }
+        });
+        """)
+        defer { context.shutdown() }
+        let response = await context.deliverRuntimeMessage(message: ["check": "installed"], sender: [:])
+        let r = try XCTUnwrap(response?["value"] as? [String: Any])
+        XCTAssertEqual(r["fired"] as? Bool, false)
     }
 }

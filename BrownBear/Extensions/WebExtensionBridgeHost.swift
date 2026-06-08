@@ -12,7 +12,7 @@
 //  a stable small integer per tab and remembers it for the tab's lifetime.
 //
 
-import Foundation
+import WebKit
 
 @MainActor
 protocol WebExtensionBridgeHost: AnyObject {
@@ -20,6 +20,11 @@ protocol WebExtensionBridgeHost: AnyObject {
     func webExtQueryTabs(_ query: [String: Any]) -> [[String: Any]]
     /// chrome.tabs.get / getCurrent — one tab record (`nil` ext id = the active tab), or nil if gone.
     func webExtTab(extTabId: Int?) -> [String: Any]?
+    /// The chrome.tabs Tab record for the tab whose web view is `webView`, or nil if `webView` is not a
+    /// browser tab (e.g. an extension popup/options page). Lets the runtime put the real `tab` on a
+    /// content script's chrome.runtime.MessageSender, so the receiver can reply via
+    /// chrome.tabs.sendMessage(sender.tab.id, …). Chrome attaches `tab` to a sender iff it runs in a tab.
+    func webExtTabRecord(forWebView webView: WKWebView) -> [String: Any]?
     /// chrome.tabs.create — open a tab (optionally loading `url`, optionally activating it). Returns it.
     func webExtCreateTab(url: String?, active: Bool) -> [String: Any]
     /// chrome.tabs.update — navigate and/or activate a tab (`nil` ext id = the active tab). Returns it.

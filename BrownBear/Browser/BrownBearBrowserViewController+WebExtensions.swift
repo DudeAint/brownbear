@@ -33,6 +33,13 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
         resolveTab(extTabId).map(webExtTabRecord)
     }
 
+    func webExtTabRecord(forWebView webView: WKWebView) -> [String: Any]? {
+        // A content script's message arrives on the tab's own web view; a popup/options page's does not
+        // map to any tab here, so the caller (the MessageSender builder) correctly omits `tab` for it.
+        guard let tab = tabManager.tabs.first(where: { $0.webView === webView }) else { return nil }
+        return webExtTabRecord(tab)
+    }
+
     func webExtCreateTab(url: String?, active: Bool) -> [String: Any] {
         // A chrome-extension://<id>/<path> URL needs the per-extension scheme handler + chrome.* page
         // bridge a normal tab lacks (else it loads blank). Route it to the real extension-page tab. The

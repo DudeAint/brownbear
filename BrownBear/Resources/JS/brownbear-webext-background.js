@@ -1607,8 +1607,11 @@
       if (p) { delete ports[portId]; p._fireDisconnect(); }
     },
 
-    fireInstalled: function (reason) {
+    fireInstalled: function (reason, previousVersion) {
+      // chrome.runtime.onInstalled details: reason is 'install' | 'update'; an 'update' carries the
+      // previousVersion so extensions can run version-gated migrations (a no-op for a fresh install).
       var details = { reason: reason || 'install' };
+      if (previousVersion) { details.previousVersion = previousVersion; }
       for (var i = 0; i < installedListeners.length; i++) {
         try { installedListeners[i](details); } catch (e) { __bb_log('error', 'runtime.onInstalled listener threw: ' + (e && e.message ? e.message : e)); }
       }
