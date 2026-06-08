@@ -75,8 +75,33 @@ final class WebExtensionRuntimePageMessageTests: XCTestCase {
 
         let response = await runtime.sendRuntimeMessage(["x": 1], sender: ["id": "extA"],
                                                         to: "extA", senderToken: nil)
-        XCTAssertNil(response)
+        // The extB page never receives extA's message, and since NO extA context exists to receive it,
+        // the sender gets Chrome's no-receiver signal ("Receiving end does not exist.").
+        XCTAssertEqual(response?["__bbNoReceiver"] as? Bool, true)
         XCTAssertTrue(other.received.isEmpty)
+    }
+
+    /// Sending to an extension with no background context and no open pages must surface the
+    /// no-receiver marker so the sending runtime can set chrome.runtime.lastError — Chrome's
+    /// "Could not establish connection. Receiving end does not exist."
+    func testNoReceiverYieldsNoReceiverMarker() async {
+        let runtime = WebExtensionRuntime()
+        let response = await runtime.sendRuntimeMessage(["x": 1], sender: ["id": "extA"],
+                                                        to: "extA", senderToken: nil)
+        XCTAssertEqual(response?["__bbNoReceiver"] as? Bool, true)
+    }
+
+    /// A page that exists but only declines (returns nil) still counts as a receiving end — the sender
+    /// resolves undefined with NO error (only the total absence of a receiver raises no-receiver).
+    func testDecliningPageSuppressesNoReceiver() async {
+        let runtime = WebExtensionRuntime()
+        let declining = FakePageReceiver(extID: "extA", token: "pageA", answer: nil)
+        runtime.registerEventReceiver(declining)
+        defer { runtime.unregisterEventReceiver(declining) }
+
+        let response = await runtime.sendRuntimeMessage(["x": 1], sender: ["id": "extA"],
+                                                        to: "extA", senderToken: nil)
+        XCTAssertNil(response)   // received-but-declined → undefined, not a no-receiver error
     }
 
     func testFirstAnsweringPageWins() async {

@@ -78,9 +78,20 @@
   try { manifest = _JSON.parse(data.manifestJSON || "{}"); } catch (e) { manifest = {}; }
   var messages = data.messages || {};
 
+  // chrome.runtime.lastError slot for this page. Settable so the message/port paths can set it before
+  // invoking a callback (Chrome semantics), then clear it.
+  var _bbLastError = null;
   function settle(promise, callback) {
-    if (typeof callback === "function") { promise.then(function (v) { callback(v); }, function () { callback(undefined); }); return undefined; }
-    return promise;
+    if (typeof callback === "function") {
+      promise.then(function (v) { callback(v); }, function (e) {
+        // A `__bbLastError`-tagged rejection populates chrome.runtime.lastError for the callback's
+        // duration (Chrome calls the callback with lastError set, then clears it); result undefined.
+        if (e && e.__bbLastError) { _bbLastError = { message: e.message }; }
+        try { callback(undefined); } finally { _bbLastError = null; }
+      });
+      return undefined;
+    }
+    return promise;   // promise form: a tagged rejection propagates (Chrome rejects the promise)
   }
 
   function makeEvent(list) {
@@ -566,7 +577,13 @@
         var cb = (args.length && typeof args[args.length - 1] === "function") ? args.pop() : null;
         var message = (typeof args[0] === "string" && args.length > 1) ? args[1] : args[0];
         var promise = bridge("runtime.sendMessage", { message: (message === undefined ? null : message), url: location.href })
-          .then(function (resp) { return resp ? resp.value : undefined; });
+          .then(function (resp) {
+            if (resp && resp.__bbNoReceiver) {
+              var e = new Error("Could not establish connection. Receiving end does not exist.");
+              e.__bbLastError = true; throw e;
+            }
+            return resp ? resp.value : undefined;
+          });
         return settle(promise, cb);
       },
       connect: runtimeConnect,
@@ -576,7 +593,7 @@
       setUninstallURL: function (url, cb) {
         return settle(bridge("runtime.setUninstallURL", { url: url || "" }).then(function () { return undefined; }), cb);
       },
-      lastError: null,
+      get lastError() { return _bbLastError; },
       getPlatformInfo: function (cb) { var info = { os: "ios", arch: "arm64", nacl_arch: "arm64" }; if (typeof cb === "function") { cb(info); return undefined; } return _Promise.resolve(info); }
     },
     tabs: tabsApi(),

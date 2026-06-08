@@ -1502,8 +1502,12 @@
       }
 
       if (responded) { return; }
-      if (!willRespondAsync) { __bb_message_response(responseId, null); }
-      // Otherwise the native side waits (with a timeout) for an async sendResponse.
+      if (willRespondAsync) { return; }   // native waits (with a timeout) for an async sendResponse
+      // Distinguish "no onMessage listener at all" (→ Chrome's "Could not establish connection.
+      // Receiving end does not exist." on the sender) from a listener that declined (received but
+      // returned nothing → the sender resolves undefined with no lastError).
+      __bb_message_response(responseId,
+        messageListeners.length === 0 ? JSON.stringify({ __bbNoListener: true }) : null);
     },
 
     dispatchAlarm: function (nameJSON) {
