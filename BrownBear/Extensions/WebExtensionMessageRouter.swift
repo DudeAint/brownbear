@@ -181,11 +181,13 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
             return NSNull()
 
         case "runtime.sendMessage":
-            // Content script / popup → its own extension's background worker. `message` is any JSON.
+            // Content script / page → its extension's other contexts (background worker + open pages).
+            // `message` is any JSON. `token` (the sender) is passed so a page never gets its own message.
             let message = payload["message"] ?? NSNull()
             var sender: [String: Any] = ["id": extensionID]
             if let url = payload["url"] as? String { sender["url"] = url }
-            guard let response = await runtime.sendRuntimeMessage(message, sender: sender, to: extensionID) else {
+            guard let response = await runtime.sendRuntimeMessage(message, sender: sender,
+                                                                  to: extensionID, senderToken: token) else {
                 return NSNull()
             }
             return response
@@ -391,6 +393,28 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: Self.responseTimeout)
             self.responseTable.resolve(responseId, value: nil)
+        }
+    }
+
+    /// Deliver a runtime message INTO an open extension PAGE (popup/options) registered under `token`
+    /// and await its chrome.runtime.onMessage sendResponse. Returns `["value": ...]` for an answer,
+    /// nil if the page has no live web view or no listener answered. The page uses this same router, so
+    /// its sendResponse (bridge "runtime.messageResponse") resolves the responseTable. Called by the
+    /// page session when the runtime fans a runtime.sendMessage out to open pages.
+    func deliverRuntimeMessageToPage(token: String, message: Any, sender: [String: Any]) async -> [String: Any]? {
+        guard let session = sessions[token], !session.isContent, let webView = session.webView else { return nil }
+        let response = await pushMessageToPage(webView: webView, message: message, sender: sender)
+        if let response, !(response is NSNull) { return ["value": response] }
+        return nil
+    }
+
+    /// Push one message into an extension page's chrome.runtime.onMessage and await its sendResponse.
+    private func pushMessageToPage(webView: WKWebView, message: Any, sender: [String: Any]) async -> Any? {
+        await responseTable.wait { responseId in
+            let js = "window.__brownbearExtPage&&window.__brownbearExtPage.dispatchMessage("
+                + "\(Self.jsonString(message)),\(Self.jsonString(sender)),'\(responseId)');"
+            BBEvaluateJavaScript(webView, js, contentWorld)   // ObjC shim — main frame, page world.
+            self.schedulePushTimeout(responseId)
         }
     }
 

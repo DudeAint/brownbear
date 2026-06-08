@@ -193,7 +193,10 @@ content-script injection in the isolated world, and `chrome.storage`/`runtime`/`
   isolation, §5); at boot the last snapshot is replayed through the public IndexedDB API. This lets
   Dexie/ScriptCat-style background storage work and survive worker restarts.
 - **Messaging**: content → background `runtime.sendMessage`/`onMessage` with sync **and** async
-  `sendResponse` (and Promise-returning listeners), over the same native-bound-token bridge.
+  `sendResponse` (and Promise-returning listeners), over the same native-bound-token bridge. A
+  `runtime.sendMessage` from a content script or extension page also fans out to the extension's open
+  popup/options **pages** (`WebExtensionRuntime.sendRuntimeMessage` → each page's
+  `chrome.runtime.onMessage`), skipping the sender; the first context to answer wins.
 - **`chrome.alarms`**, **`storage.onChanged`** (in workers), and **direct Chrome Web Store install**
   (`ChromeWebStore` — paste a link or id, fetch the CRX). Surfaced **in-page** two ways: a banner
   above the toolbar (`+ExtensionInstall`), and — primary — the store's **own install button rewired**

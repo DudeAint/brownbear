@@ -269,7 +269,9 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
     /// tab's content scripts. Grouped so installNatives stays readable as the surface grows.
     private func installMessagingNatives(into context: JSContext) {
         // background runtime.sendMessage → other extension contexts. Content scripts receive via
-        // tabs.sendMessage, not this; with no popup/options page open to receive, resolve with no value.
+        // tabs.sendMessage, not this. Delivery from a CONTENT SCRIPT or PAGE to an open popup/options
+        // page is wired through WebExtensionRuntime.sendRuntimeMessage; the worker-as-SENDER path
+        // (background → page) is not yet routed here, so resolve with no value for now.
         let sendMessage: @convention(block) (String, JSValue) -> Void = { [weak self] _, callback in
             self?.callBack(callback, with: "null")
         }

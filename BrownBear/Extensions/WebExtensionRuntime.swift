@@ -95,11 +95,26 @@ class WebExtensionRuntime {
 
     // MARK: - Message bus
 
-    /// Deliver a content-script `chrome.runtime.sendMessage` to its extension's background worker
-    /// and return the listener's response (`["value": ...]`) or nil if nothing answered.
-    func sendRuntimeMessage(_ message: Any, sender: [String: Any], to extensionID: String) async -> [String: Any]? {
-        guard let context = contexts[extensionID] else { return nil }
-        return await context.deliverRuntimeMessage(message: message, sender: sender)
+    /// Deliver a `chrome.runtime.sendMessage` to its extension's other contexts and return the first
+    /// listener's response (`["value": ...]`) or nil if nothing answered. Chrome delivers to every
+    /// context of the extension (background worker + open popup/options pages) except the sender; the
+    /// first context that answers wins. `senderToken` is the sending page's token (if a page sent it),
+    /// so that page is skipped. Content scripts receive via tabs.sendMessage, not this fan-out.
+    func sendRuntimeMessage(_ message: Any, sender: [String: Any], to extensionID: String,
+                            senderToken: String? = nil) async -> [String: Any]? {
+        // Background worker first (the common responder), then open extension pages.
+        if let context = contexts[extensionID],
+           let response = await context.deliverRuntimeMessage(message: message, sender: sender) {
+            return response
+        }
+        for box in eventReceivers.values {
+            guard let receiver = box.value, receiver.receiverExtensionID == extensionID else { continue }
+            if let response = await receiver.deliverRuntimeMessage(message: message, sender: sender,
+                                                                   senderToken: senderToken) {
+                return response
+            }
+        }
+        return nil
     }
 
     /// Deliver chrome.action.onClicked to an extension's background worker (when the action has no
