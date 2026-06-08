@@ -230,10 +230,13 @@ class WebExtensionRuntime {
         contexts[ext.id] = context
         // Synchronous, path-contained package reader for the ESM linker (the store actor's
         // `nonisolated fileSync` is safe to call off-actor on the worker's serial queue).
-        let storeRef = store
-        let extID = ext.id
-        let moduleSource: (@Sendable (String) -> Data?)? = moduleEntry == nil ? nil : { path in
-            storeRef.fileSync(extensionID: extID, path: path)
+        let moduleSource: (@Sendable (String) -> Data?)?
+        if moduleEntry != nil {
+            let storeRef = store
+            let extID = ext.id
+            moduleSource = { path in storeRef.fileSync(extensionID: extID, path: path) }
+        } else {
+            moduleSource = nil
         }
         context.boot(runtimeJS: Self.backgroundRuntimeJS,
                      backgroundSource: source,
