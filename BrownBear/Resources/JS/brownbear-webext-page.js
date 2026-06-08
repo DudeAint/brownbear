@@ -544,6 +544,30 @@
       managed: storageArea("managed"),   // read-only policy store; resolves {} with no MDM policy
       onChanged: makeEvent(storageListeners)
     },
+    // chrome.identity — getRedirectURL is the real Chrome value an extension registers as its OAuth
+    // redirect URI; launchWebAuthFlow's interactive UI lands in a follow-up (rejects clearly until then).
+    identity: {
+      getRedirectURL: function (path) {
+        var p = (path == null) ? "" : String(path);
+        if (p.charAt(0) === "/") { p = p.slice(1); }
+        return "https://" + data.extensionId + ".chromiumapp.org/" + p;
+      },
+      launchWebAuthFlow: function (details, cb) {
+        return settle(_Promise.reject(new Error("identity.launchWebAuthFlow is not yet available")), cb);
+      },
+      getAuthToken: function (details, cb) {
+        if (typeof details === "function") { cb = details; }
+        return settle(_Promise.reject(new Error("identity.getAuthToken is not supported; use launchWebAuthFlow")), cb);
+      },
+      removeCachedAuthToken: function (details, cb) { return settle(_Promise.resolve(), cb); },
+      clearAllCachedAuthTokens: function (cb) { return settle(_Promise.resolve(), cb); },
+      getProfileUserInfo: function (details, cb) {
+        if (typeof details === "function") { cb = details; }
+        return settle(_Promise.resolve({ email: "", id: "" }), cb);
+      },
+      getAccounts: function (cb) { return settle(_Promise.resolve([]), cb); },
+      onSignInChanged: makeEvent([])
+    },
     cookies: cookiesApi(),
     notifications: notificationsApi(),
     contextMenus: contextMenusApi(),
