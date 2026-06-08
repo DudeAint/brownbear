@@ -104,13 +104,52 @@ final class UserScriptInstallRouterTests: XCTestCase {
                        "chrome-extension://\(extID)/confirm.html")
     }
 
-    func testAbsoluteURLRedirect() {
+    func testAcceptsOwnExtensionURLRedirect() {
+        // redirect.url pointing at THIS extension's own page is allowed.
         let rule: [String: Any] = [
-            "id": 3, "action": ["type": "redirect", "redirect": ["url": "https://manager.example/install"]],
+            "id": 3, "action": ["type": "redirect", "redirect": ["url": "chrome-extension://\(extID)/install.html"]],
             "condition": ["urlFilter": "*.user.js"]
         ]
         XCTAssertEqual(redirect("https://example.com/x.user.js", [rule])?.target.absoluteString,
-                       "https://manager.example/install")
+                       "chrome-extension://\(extID)/install.html")
+    }
+
+    // MARK: - Security: target must be the rule-owning extension's own page
+
+    func testRejectsWebOriginRedirectTarget() {
+        // A redirect to a web origin must NOT be honored — it would otherwise be loaded under the
+        // rule-owner's scheme handler (path/param confusion) and is never a real manager install page.
+        let rule: [String: Any] = [
+            "id": 30, "action": ["type": "redirect", "redirect": ["url": "https://evil.example/install"]],
+            "condition": ["urlFilter": "*.user.js"]
+        ]
+        XCTAssertNil(redirect("https://example.com/x.user.js", [rule]))
+    }
+
+    func testRejectsCrossExtensionRedirectTarget() {
+        // A regexSubstitution pointing at ANOTHER extension's id must be rejected (hijack guard).
+        var rule = scriptCatRule()
+        let other = "ponmlkjihgfedcbaponmlkjihgfedcba"
+        rule["action"] = ["type": "redirect",
+                          "redirect": ["regexSubstitution": "chrome-extension://\(other)/src/install.html?url=\\1"]]
+        XCTAssertNil(redirect("https://example.com/foo.user.js", [rule]))
+    }
+
+    func testRejectsJavascriptSchemeRedirectTarget() {
+        let rule: [String: Any] = [
+            "id": 31, "action": ["type": "redirect", "redirect": ["url": "javascript:alert(1)"]],
+            "condition": ["urlFilter": "*.user.js"]
+        ]
+        XCTAssertNil(redirect("https://example.com/x.user.js", [rule]))
+    }
+
+    func testRegexFilterLengthCapSkipsAbsurdPatterns() {
+        var rule = scriptCatRule()
+        var condition = rule["condition"] as? [String: Any] ?? [:]
+        condition["regexFilter"] = String(repeating: "a", count: 1001) + "\\.user\\.js"
+        rule["condition"] = condition
+        XCTAssertNil(redirect("https://example.com/foo.user.js", [rule]),
+                     "an absurdly long regexFilter is skipped (ReDoS defense-in-depth)")
     }
 
     // MARK: - Non-redirect rules ignored

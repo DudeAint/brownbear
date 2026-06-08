@@ -57,6 +57,10 @@ enum UserScriptInstallRouter {
             let caseSensitive = (condition["isUrlFilterCaseSensitive"] as? Bool) ?? false
 
             if let regexFilter = condition["regexFilter"] as? String, !regexFilter.isEmpty {
+                // Defense-in-depth against a pathological pattern: skip absurdly long regexFilters. The
+                // real ReDoS guard is that the caller runs this matcher OFF the main actor with a timeout
+                // (userScriptInstallRedirect), so even catastrophic backtracking can't freeze the UI.
+                guard regexFilter.count <= 1000 else { continue }
                 let options: NSRegularExpression.Options = caseSensitive ? [] : [.caseInsensitive]
                 guard let re = try? NSRegularExpression(pattern: regexFilter, options: options) else { continue }
                 let range = NSRange(urlString.startIndex..., in: urlString)
@@ -86,18 +90,24 @@ enum UserScriptInstallRouter {
     /// `…/install.html?url=\1`), `extensionPath`, and an absolute `url`. `transform` is not supported.
     private static func computeTarget(_ redirect: [String: Any], extensionID: String,
                                       match: NSTextCheckingResult?, source: String) -> URL? {
+        var resolved: URL?
         if let substitution = redirect["regexSubstitution"] as? String, let match {
-            let resolved = applyRegexSubstitution(substitution, match: match, source: source)
-            return URL(string: resolved)
-        }
-        if let extensionPath = redirect["extensionPath"] as? String {
+            resolved = URL(string: applyRegexSubstitution(substitution, match: match, source: source))
+        } else if let extensionPath = redirect["extensionPath"] as? String {
             let path = extensionPath.hasPrefix("/") ? extensionPath : "/" + extensionPath
-            return URL(string: "\(WebExtensionSchemeHandler.scheme)://\(extensionID)\(path)")
+            resolved = URL(string: "\(WebExtensionSchemeHandler.scheme)://\(extensionID)\(path)")
+        } else if let absolute = redirect["url"] as? String {
+            resolved = URL(string: absolute)
         }
-        if let absolute = redirect["url"] as? String {
-            return URL(string: absolute)
-        }
-        return nil
+        // SECURITY (CLAUDE.md §5): the hand-off opens this URL under the RULE-OWNER's scheme handler, so
+        // it MUST be that extension's OWN page. Require chrome-extension://<extensionID>/… and reject
+        // anything else — a web origin, a javascript:/data: URL, or another extension's id — so a rule
+        // can't hijack a .user.js navigation into an attacker-chosen page/origin. (A userscript-manager
+        // install page is always a chrome-extension:// page of the manager itself.)
+        guard let target = resolved,
+              target.scheme?.lowercased() == WebExtensionSchemeHandler.scheme,
+              let host = target.host, host.lowercased() == extensionID.lowercased() else { return nil }
+        return target
     }
 
     /// Apply Chrome's DNR `regexSubstitution` escaping: `\0`…`\9` insert the corresponding capture group
