@@ -31,9 +31,10 @@ struct URLMatcher {
     private let excludeRegexes: [NSRegularExpression]        // from @exclude
     private let matchesAllURLs: Bool                         // any @match was <all_urls>
 
-    /// Parses a Chrome match pattern into (scheme, host, path).
+    /// Parses a Chrome match pattern into (scheme, host, path). The host alternation accepts a
+    /// dotted/wildcard hostname OR a bracketed IPv6 literal (e.g. `[::1]`, `[2001:db8::1]`).
     private static let matchPatternRegex = try? NSRegularExpression(
-        pattern: #"^(http:|https:|\*:)//((?:\*\.)?(?:[a-z0-9-]+\.)+(?:[a-z0-9]+)|\*\.[a-z]+|\*|[a-z0-9]+)(/[^\s]*)$"#,
+        pattern: #"^(http:|https:|\*:)//((?:\*\.)?(?:[a-z0-9-]+\.)+(?:[a-z0-9]+)|\*\.[a-z]+|\*|[a-z0-9]+|\[[0-9a-f:.]+\])(/[^\s]*)$"#,
         options: .caseInsensitive)
 
     init(metadata: ScriptMetadata) {
@@ -121,10 +122,18 @@ struct URLMatcher {
         let hostToken = String(pattern[hostRange])
         let pathToken = String(pattern[pathRange])
 
-        // Host: escape dots, anchor, then expand wildcards (mirrors the reference exactly).
-        var hostPattern = "^" + hostToken.replacingOccurrences(of: ".", with: "\\.") + "$"
-        hostPattern = hostPattern.replacingOccurrences(of: "^*$", with: ".*")
-        hostPattern = hostPattern.replacingOccurrences(of: "*\\.", with: "(.*\\.)?")
+        // Host → anchored regex. An IPv6 literal ([::1]) is matched EXACTLY (its brackets/colons are
+        // regex metacharacters, so escape the whole token — no dot/wildcard expansion). A hostname
+        // escapes dots and expands the `*` / `*.` wildcards (mirrors the reference exactly).
+        let hostPattern: String
+        if hostToken.hasPrefix("[") && hostToken.hasSuffix("]") {
+            hostPattern = "^" + NSRegularExpression.escapedPattern(for: hostToken) + "$"
+        } else {
+            var pattern = "^" + hostToken.replacingOccurrences(of: ".", with: "\\.") + "$"
+            pattern = pattern.replacingOccurrences(of: "^*$", with: ".*")
+            pattern = pattern.replacingOccurrences(of: "*\\.", with: "(.*\\.)?")
+            hostPattern = pattern
+        }
 
         guard let hostRegex = try? NSRegularExpression(pattern: hostPattern, options: .caseInsensitive),
               let pathRegex = try? NSRegularExpression(pattern: globToRegexPattern(pathToken),
@@ -166,7 +175,12 @@ struct URLMatcher {
     private static func parse(_ urlString: String) -> URLParts? {
         guard let components = URLComponents(string: urlString),
               let scheme = components.scheme else { return nil }
-        let host = components.host ?? ""
+        var host = components.host ?? ""
+        // Normalize an IPv6 host to the bracketed form ([::1]) so it lines up with a bracketed
+        // match-pattern host. URLComponents.host may return it WITH or WITHOUT brackets across SDKs, so
+        // only add them when absent (double-wrapping to [[::1]] would never match). Hostname/IPv4 has no
+        // colon, so this is a no-op for them.
+        if host.contains(":") && !host.hasPrefix("[") { host = "[\(host)]" }
         var path = components.percentEncodedPath
         if path.isEmpty { path = "/" }
         if let query = components.percentEncodedQuery, !query.isEmpty {
