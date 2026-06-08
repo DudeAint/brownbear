@@ -40,6 +40,19 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
         return webExtTabRecord(tab)
     }
 
+    /// The page-relative path (file path + query + fragment) of a `chrome-extension://<id>/…` URL, for
+    /// `openExtensionPageTab`'s `path` override. The query + fragment MUST survive: extensions open pages
+    /// like `install.html?uuid=<id>` and read `window.location.search` (ScriptCat's install page does);
+    /// dropping it loaded the page with no params so its lookup found nothing. The scheme handler resolves
+    /// files by path only, so the suffix is harmless to resource loading. Nil for a bare-origin URL.
+    nonisolated static func extensionPageRelativePath(from url: URL) -> String? {
+        var path = url.path
+        while path.hasPrefix("/") { path.removeFirst() }
+        if let query = url.query { path += "?" + query }
+        if let fragment = url.fragment { path += "#" + fragment }
+        return path.isEmpty ? nil : path
+    }
+
     func webExtCreateTab(url: String?, active: Bool) -> [String: Any] {
         // A chrome-extension://<id>/<path> URL needs the per-extension scheme handler + chrome.* page
         // bridge a normal tab lacks (else it loads blank). Route it to the real extension-page tab. The
@@ -48,11 +61,10 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
         if let url, let parsed = URL(string: url),
            parsed.scheme == WebExtensionSchemeHandler.scheme,
            let extID = parsed.host, ChromeWebStore.isExtensionID(extID) {
-            var path = parsed.path
-            while path.hasPrefix("/") { path.removeFirst() }
+            let path = Self.extensionPageRelativePath(from: parsed)
             Task { @MainActor in
                 guard let ext = await BrownBearServices.shared.webExtensionStore.ext(for: extID) else { return }
-                openExtensionPageTab(ext: ext, kind: .options, path: path.isEmpty ? nil : path, activate: active)
+                openExtensionPageTab(ext: ext, kind: .options, path: path, activate: active)
             }
             return ["id": -1, "url": url, "active": active, "windowId": Self.webExtWindowID, "index": tabManager.count]
         }
