@@ -57,9 +57,12 @@
       if (abs.origin === extOrigin || (abs.protocol !== "http:" && abs.protocol !== "https:")) {
         return origFetch(input, init);   // own packaged resource (scheme handler) or non-http scheme
       }
-      var body = (init.body != null) ? init.body : null;
+      // Body + method follow the init-then-Request-input fallback (like url above). Only a string body is
+      // forwarded; anything else (FormData/Blob/stream) uses the page's own fetch.
+      var body = (init.body != null) ? init.body
+               : ((input && typeof input === "object" && input.body != null) ? input.body : null);
       if (body != null && typeof body !== "string") { return origFetch(input, init); }
-      var method = String(init.method || (input && input.method) || "GET").toUpperCase();
+      var method = String(init.method || (input && input.method) || "GET").trim().toUpperCase();
       return bridge("hostFetch", { url: abs.href, method: method, headers: headerObject(init, input), body: body })
         .then(function (r) {
           if (r && r.notPermitted) { return origFetch(input, init); }   // not declared → normal CORS fetch
