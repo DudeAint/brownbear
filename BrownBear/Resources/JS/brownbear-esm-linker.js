@@ -325,10 +325,25 @@
         };
         try {
             rec.fn(rec.exports, req, dyn, meta, exp);
+            rec.evaluated = true;
+        } catch (e) {
+            // A module is evaluated exactly once; a failed module STAYS failed (ESM semantics). Mark it
+            // so it is never re-evaluated (which would re-run side effects and could cascade into a
+            // misleading downstream error), and attribute the failure to its path ONCE so the real first
+            // error surfaces in the worker's Logs tab rather than a confusing later crash.
+            rec.evaluated = true;
+            rec.failed = true;
+            rec.error = e;
+            if (!(e && e.__bbModuleFailed)) {
+                var wrapped = new Error('module "' + rec.path + '" failed to initialize: '
+                    + (e && e.message ? e.message : e));
+                wrapped.__bbModuleFailed = true;
+                e = wrapped;
+            }
+            throw e;
         } finally {
             rec.evaluating = false;
         }
-        rec.evaluated = true;
         return rec.exports;
     }
 
