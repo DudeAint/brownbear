@@ -139,4 +139,37 @@ final class WebExtensionCookieMapperTests: XCTestCase {
         XCTAssertNil(WebExtensionCookieMapper.sameSitePolicy("unspecified"))
         XCTAssertEqual(WebExtensionCookieMapper.sameSitePolicy("no_restriction")?.rawValue, "None")
     }
+
+    // MARK: - Host-permission gate (cross-domain cookies.set bypass)
+
+    func testScopeAllowedGatesOnEffectiveDomainNotJustURL() {
+        // An extension permitted ONLY for attacker.example must NOT be allowed to target google.com by
+        // passing url=attacker.example with domain=google.com (the cookie would be written for google.com).
+        let onlyAttacker: (String) -> Bool = { $0.contains("attacker.example") }
+        XCTAssertFalse(WebExtensionCookieMapper.scopeAllowed(
+            details: ["url": "https://attacker.example/", "domain": "google.com", "name": "SID", "value": "x"],
+            hostMatches: onlyAttacker), "cross-domain set must be denied — gate on the effective domain")
+        // The same extension setting a cookie for its own host is allowed.
+        XCTAssertTrue(WebExtensionCookieMapper.scopeAllowed(
+            details: ["url": "https://attacker.example/", "name": "ok", "value": "1"],
+            hostMatches: onlyAttacker))
+        // An extension permitted for google.com may target google.com via a subdomain url + domain.
+        let onlyGoogle: (String) -> Bool = { $0.contains("google.com") }
+        XCTAssertTrue(WebExtensionCookieMapper.scopeAllowed(
+            details: ["url": "https://mail.google.com/", "domain": "google.com", "name": "SID", "value": "1"],
+            hostMatches: onlyGoogle))
+    }
+
+    func testSetDetailsRejectsCookieDomainNotMatchingURLHost() {
+        // Chrome's domain-match rule: the url's host must be within the cookie domain. A mismatch
+        // (defense-in-depth even if the gate were bypassed) must produce no cookie.
+        XCTAssertNil(WebExtensionCookieMapper.cookie(fromSetDetails: [
+            "url": "https://attacker.example/", "domain": "google.com", "name": "SID", "value": "x"
+        ]), "a cookie domain unrelated to the url host must fail closed")
+        // A subdomain url under the cookie domain is valid.
+        let ok = WebExtensionCookieMapper.cookie(fromSetDetails: [
+            "url": "https://mail.google.com/", "domain": "google.com", "name": "SID", "value": "1"
+        ])
+        XCTAssertEqual(ok?.domain, ".google.com")
+    }
 }
