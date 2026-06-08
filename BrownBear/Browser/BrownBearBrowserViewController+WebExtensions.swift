@@ -131,6 +131,15 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
 
     // MARK: - Helpers
 
+    /// The title for an extension's overflow-menu (quick-look) action row. Resolves any `__MSG_*__`
+    /// i18n placeholder in the action title (a manifest `default_title` is often `__MSG_extName__`);
+    /// a no-op for already-final titles set via chrome.action.setTitle. Falls back to the extension's
+    /// (already-resolved) display name when the action declares no title.
+    static func webExtMenuActionTitle(_ resolvedTitle: String, ext: WebExtension) -> String {
+        let raw = resolvedTitle.isEmpty ? ext.displayName : resolvedTitle
+        return WebExtensionLocalizer.resolve(raw, extensionID: ext.id, defaultLocale: ext.manifest?.defaultLocale)
+    }
+
     /// Encode a Swift string as a safe JS string literal (quotes included) via JSON.
     private static func jsStringLiteral(_ string: String) -> String {
         guard let data = try? JSONSerialization.data(withJSONObject: [string], options: []),

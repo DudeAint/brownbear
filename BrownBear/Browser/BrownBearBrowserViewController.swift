@@ -531,15 +531,9 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
                                                    fallbackIcons: ext.manifest?.icons ?? [:])
                 let resolved = actionState.resolved(extensionID: ext.id, tabId: actionTabId)
                 guard resolved.enabled else { continue }
-                // Resolve any `__MSG_*__` i18n placeholder in the action title (a manifest
-                // `default_title` is often `__MSG_extName__`); harmless no-op for already-final
-                // titles set via chrome.action.setTitle. displayName is already resolved.
-                let rawTitle = resolved.title.isEmpty ? ext.displayName : resolved.title
-                let menuTitle = WebExtensionLocalizer.resolve(rawTitle, extensionID: ext.id,
-                                                              defaultLocale: ext.manifest?.defaultLocale)
                 extensionActions.append(MenuExtensionAction(
                     extensionID: ext.id,
-                    title: menuTitle,
+                    title: Self.webExtMenuActionTitle(resolved.title, ext: ext),
                     badgeText: resolved.badgeText,
                     badgeColor: Self.actionBadgeColor(actionState.badgeColorBytes(extensionID: ext.id, tabId: actionTabId)),
                     iconPath: resolved.iconPath,
