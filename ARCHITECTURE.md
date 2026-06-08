@@ -222,10 +222,22 @@ content-script injection in the isolated world, and `chrome.storage`/`runtime`/`
   extension — via `brownbear-webext-page.js` with identity baked in at document-start. Reachable
   from Dashboard → Extensions (long-press).
 
-**Module 6 is COMPLETE.** The remaining Chrome APIs (blocking `webRequest`, background→content
-`tabs.sendMessage` / long-lived ports, write-side `chrome.tabs`/`scripting`, `commands` dispatch,
-suspended-app alarms, native messaging) are the hard edges of WebKit's extension-less model on iOS;
-they degrade to honest no-ops/rejections rather than fakes. See `docs/WEB_EXTENSIONS.md`.
+**Status — Phase 4 (shipped): broad `chrome.*` + web-platform parity.** Beyond the above, the runtime
+now exposes `chrome.tabs`/`windows` (read + write, via `WebExtensionBridgeHost`), `webNavigation`,
+`scripting` (+ MV2 `tabs.executeScript`), `cookies` (+ `onChanged`), `notifications`, `contextMenus`,
+`identity` (incl. `launchWebAuthFlow`), `permissions`, `action`, `userScripts`, **background↔content
+messaging + long-lived ports** (both directions, via a token-bound port hub), and the web-platform
+APIs JavaScriptCore lacks — `fetch`/`Headers`/`Request`/`Response`, `AbortController`, `FormData`,
+`Blob`/`File`/`FileReader`, `XMLHttpRequest`, `structuredClone`, `Event`/`EventTarget`, and
+`crypto.subtle` (HMAC/AES/PBKDF2/ECDSA). MV2 background *pages* get a `window` alias and a minimal
+`document`. A `.user.js` navigation can be handed off to an installed userscript-manager extension
+(e.g. ScriptCat) by evaluating its `declarativeNetRequest` redirect rule (`UserScriptInstallRouter`),
+since WebKit can't redirect a main-frame request.
+
+**The remaining no-ops** (blocking `webRequest`, `commands` dispatch, suspended-app alarms, native
+messaging, devtools/`proxy`/`privacy`) are the hard edges of WebKit's extension-less model on iOS;
+they degrade to honest rejections rather than fakes. Real-extension hardening (Violentmonkey's Dexie
+store + MV2 import hand-off, userscript-manager import polish) is ongoing. See `docs/WEB_EXTENSIONS.md`.
 
 ---
 

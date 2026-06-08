@@ -1,13 +1,15 @@
 # Web Extensions in BrownBear (Module 6)
 
-BrownBear can install and run **browser extensions** (Chrome/Firefox `.crx`/`.zip`), the way
-[Orion](https://kagi.com/orion/) and [Gear Browser](https://gear4.app/) do — not just userscripts.
-**Phase 1** delivered the foundation (manifest parsing, packaging, install/management, content-script
-injection, a core `chrome.*` surface). **Phase 2** adds the things that make extensions actually
-*do* something in the background: `declarativeNetRequest` content blocking, headless background
-service workers, content↔background messaging, `chrome.alarms`, `storage.onChanged`, and one-tap
-install straight from the Chrome Web Store. Deeper Chromium-internal APIs are constrained by what
-WebKit exposes; we document exactly what's supported and degrade honestly.
+BrownBear can install and run **browser extensions** (Chrome/Edge/Firefox `.crx`/`.zip`/`.xpi`), the
+way [Orion](https://kagi.com/orion/) and [Gear Browser](https://gear4.app/) do — not just userscripts.
+All build phases have shipped: the install/manage pipeline, content scripts, `declarativeNetRequest`
+content blocking, **headless background service workers** (classic *and* ES-module), popup/options
+pages, content↔background **and** background↔content messaging + long-lived ports, and a broad
+native-backed `chrome.*` surface (`tabs`/`windows`/`webNavigation`/`scripting`/`cookies`/
+`notifications`/`contextMenus`/`identity`/`alarms`/`storage`/`runtime`/`i18n`), plus the web-platform
+APIs JavaScriptCore itself lacks. The focus now is hardening against real shipping extensions
+(ScriptCat, uBlock Origin Lite, Violentmonkey, Grammarly). Deeper Chromium-internal APIs are
+constrained by what WebKit exposes; we document exactly what's supported and degrade honestly.
 
 ## iOS reality check
 
@@ -43,26 +45,49 @@ partial or unsupported below.
 | `chrome.i18n` | `getMessage()` (default-locale `_locales/.../messages.json` preloaded), `getUILanguage()`, `getAcceptLanguages()` |
 | `chrome.extension.getURL` | legacy alias for `runtime.getURL` |
 | **Direct Chrome Web Store install** ⟶ **Phase 2** | Paste a store link or extension id; the `.crx` is fetched and installed. |
-| **Popup & options pages** ⟶ **Phase 3** | `action.default_popup` and `options_ui`/`options_page` render in a real WKWebView over the `chrome-extension://` scheme (a `WKURLSchemeHandler` serves the extension's packaged files). The page gets a **synchronous** `chrome.*` surface — `storage` (+ live `onChanged`), `runtime` (`id`/`getManifest`/`getURL`/`sendMessage`→background/`getPlatformInfo`/`openOptionsPage`), `i18n`, `extension`. Open it from Dashboard → Extensions → long-press an extension. |
+| **Popup & options pages** | `action.default_popup` and `options_ui`/`options_page` render in a real WKWebView over the `chrome-extension://` scheme (a `WKURLSchemeHandler` serves the extension's packaged files). The page gets a **synchronous** `chrome.*` surface — `storage` (+ live `onChanged`), `runtime` (`id`/`getManifest`/`getURL`/`sendMessage`→background/`getPlatformInfo`/`openOptionsPage`), `i18n`, `extension`. Opened in a real tab (Dashboard → Extensions → long-press, or `chrome.tabs.create` / `runtime.openOptionsPage`); query strings survive (`install.html?uuid=…`). |
+| **ES-module service workers** | `"background": { "type": "module" }` (e.g. uBlock Origin Lite). JSC has no native ES-module loader, so a vendored acorn parser + an AST rewriter (`brownbear-esm-linker.js`) links the module graph against a synchronous registry, resolving sibling modules from the package on demand. Named-import cycles snapshot (CommonJS semantics); top-level `await` is unsupported (fails closed). |
+| **`chrome.tabs`** | `query`/`get`/`getCurrent`/`create`/`update`/`remove`/`reload`/`sendMessage` + `onCreated`/`onUpdated`/`onRemoved`/`onActivated`, bridged to `TabManager` via `WebExtensionBridgeHost`. Integer tab ids (UUID↔Int registry); single window (`windowId` 1). |
+| **`chrome.windows`** | `get`/`getCurrent`/`getLastFocused`/`getAll`/`create`/`update`/`remove` — one window on iOS. |
+| **`chrome.webNavigation`** | `onBeforeNavigate`/`onCommitted`/`onCompleted`/`onHistoryStateUpdated`/`onDOMContentLoaded` etc., gated by host permissions. |
+| **`chrome.scripting`** (MV3) + **`tabs.executeScript`/`insertCSS`** (MV2) | `executeScript`/`insertCSS`/`removeCSS`, `registerContentScripts`/`getRegisteredContentScripts`/`updateContentScripts`/`unregister`, permission-gated. |
+| **`chrome.cookies`** | `get`/`getAll`/`set`/`remove`/`getAllCookieStores` + `onChanged`, over `WKHTTPCookieStore`, host-permission-gated. |
+| **`chrome.notifications`** | `create`/`update`/`clear`/`getAll`/`getPermissionLevel` + `onClicked`/`onClosed`/`onButtonClicked`, backed by `UNUserNotificationCenter`. |
+| **`chrome.contextMenus`** | `create`/`update`/`remove`/`removeAll` + `onClicked`, surfaced in the page/long-press menu. |
+| **`chrome.identity`** | `getRedirectURL`, `launchWebAuthFlow` (ASWebAuthenticationSession), `getAuthToken`, `onSignInChanged`. |
+| **`chrome.permissions`** | `contains`/`getAll`/`request`/`remove` over declared + optional permissions. |
+| **Background ↔ content messaging + ports** | `tabs.sendMessage` (background→content), and long-lived `runtime.connect`/`onConnect` ports in **both** directions via a token-bound port hub (`onDisconnect` fires on teardown). |
+| **`chrome.action`** | `setIcon`/`setBadgeText`/`setBadgeBackgroundColor`/`setTitle`/`setPopup` + getters + `onClicked` (fires when the action has no popup). |
+| **`chrome.userScripts`** (MV3) | `register`/`getScripts`/`update`/`unregister`/`configureWorld`/`resetWorldConfiguration` — the MV3 userScripts world API. |
+| **Web-platform APIs in the worker** | JavaScriptCore ships none of these; we provide `fetch` + `Headers`/`Request`/`Response` (+ `.blob()`/`.json()`/`.arrayBuffer()`), `AbortController`/`AbortSignal`, `FormData`, `Blob`/`File`/`FileReader`, `XMLHttpRequest` (network via the gated fetch; `blob:` synchronously), `URL`/`URLSearchParams`, `TextEncoder`/`TextDecoder`, `btoa`/`atob`, `structuredClone`, `Event`/`EventTarget`/`CustomEvent`, `performance`, `queueMicrotask`, `crypto.getRandomValues`/`randomUUID` + `crypto.subtle` (digest/HMAC/AES-GCM/AES-CBC/PBKDF2/ECDSA + JWK), and `navigator`/`location`. All network egress is host-permission-gated (CORS-free, like Chrome). |
+| **MV2 background-page environment** | An MV2 `background.scripts` bundle is a background *page* in Chrome, so for MV2 only we expose `window` (= the global) and a minimal non-rendering `document` (createElement, `<a>` URL parsing, fragments, event no-ops). MV3 service workers get neither. |
+| **Userscript-manager extensions** | A `.user.js` navigation can be handed off to an installed manager that claims it via a `declarativeNetRequest` redirect rule (e.g. **ScriptCat** → its `install.html?url=…`), evaluated in the navigation delegate since WebKit can't redirect a main-frame request. BrownBear's own native userscript installer remains available; the user chooses. |
 
-## Module 6 is complete
+## Known gaps (honest no-ops)
 
-Phases 1–3 deliver the install/manage pipeline, content scripts, `declarativeNetRequest` blocking,
-background service workers, messaging, alarms, storage (+ events), Chrome Web Store install, and
-popup/options UI. The remaining gaps below are **not "todo"** — they're the hard edges of running an
-extension model inside WebKit (no extension process, no privileged network layer) on iOS. We
-implement the compatibility layer and degrade honestly; an unimplemented `chrome.*` method gets a
-rejected/no-op call rather than a crash.
+All build phases shipped — install/manage, content scripts, `declarativeNetRequest` blocking,
+classic **and** ES-module background service workers, two-way messaging + ports, `tabs`/`windows`/
+`webNavigation`/`scripting`/`cookies`/`notifications`/`contextMenus`/`identity`/`alarms`/`storage`
+(+ events), the web-platform/IndexedDB worker surface, popup/options UI, and Chrome Web Store / Edge /
+Firefox install. The gaps below are **not "todo"** — they're the hard edges of running an extension
+model inside WebKit (no extension process, no privileged synchronous network layer) on iOS. We
+degrade honestly; an unimplemented `chrome.*` method gets a rejected/no-op call rather than a crash.
 
 | Area | Why it stays a no-op on iOS/WebKit |
 |---|---|
-| `chrome.webRequest` (blocking/redirect) | WebKit exposes no synchronous request-interception API to extensions; `declarativeNetRequest` → `WKContentRuleList` is the only blocking primitive and it's ahead-of-time only. |
-| `declarativeNetRequest` `redirect` / `modifyHeaders` / `requestMethods` / `requestDomains` | No `WKContentRuleList` equivalent — skipped-and-counted at compile so a ruleset never over-blocks. |
-| Background **→ content** messaging (`tabs.sendMessage`) and long-lived **ports** (`runtime.connect`) | Content→background (and popup→background) is the supported direction; the reverse needs per-tab routing WebKit doesn't expose to the extension layer. |
-| `chrome.tabs` / `webNavigation` / `scripting` write APIs, `chrome.commands` dispatch | No extension-facing tab/scripting control surface; `commands` is parsed and `chrome.commands`/`chrome.action.onClicked` exist as never-firing events (no keyboard/toolbar source on iOS). |
+| `chrome.webRequest` (blocking/redirect) | WebKit exposes no synchronous request-interception API to extensions; listeners register but never fire. `declarativeNetRequest` → `WKContentRuleList` is the blocking primitive (ahead-of-time only). **Exception:** a `.user.js` main-frame navigation is matched against extensions' DNR `redirect` rules in the navigation delegate, so a userscript manager's install page still opens. |
+| `declarativeNetRequest` `modifyHeaders` / `requestMethods` / `requestDomains` filters | No `WKContentRuleList` equivalent — skipped-and-counted at compile so a ruleset never over-blocks. (`redirect` is unsupported for general blocking, but is honored for the `.user.js` hand-off above.) |
+| `chrome.commands` dispatch | Parsed, and `chrome.commands`/`chrome.action.onClicked` exist, but there's no keyboard-shortcut/toolbar source on iOS to fire them. |
 | `chrome.alarms` while the app is **suspended/closed** | Timers are foreground-lifetime; durable wake-ups would ride the BGTask path (Module 4) and aren't guaranteed by iOS. |
 | `storage.onChanged` in **content scripts** | Fires in background workers and extension pages; content scripts have no per-tab push channel in the shared content world. |
+| `chrome.offscreen` documents | `createDocument` rejects (no hidden-DOM host for a headless worker); well-behaved callers fall back. |
 | Native messaging, devtools pages, `chrome.proxy`, `chrome.privacy`, etc. | No host/native counterpart on iOS. |
+
+### In progress (real-extension hardening)
+- **Violentmonkey (MV2)** boots its background, but its IndexedDB-backed (Dexie) store and
+  `webRequest`-based `.user.js` install hand-off are still being made fully reliable.
+- **Userscript-manager import polish** — extension-page cross-origin fetch (CORS) for managers whose
+  install page self-fetches the script, and a `webRequest`-style hand-off for MV2 managers.
 
 ## DNR → WKContentRuleList: how rules translate
 
@@ -106,6 +131,14 @@ that would block more than the author intended.
 - `brownbear-webext-runtime.js` / `brownbear-webext-background.js` / `brownbear-webext-page.js` — the
   injected content-side, headless background, and extension-page `chrome`/`browser` surfaces.
 - `WebExtensionMessageRouter` — content-side native bridge: `getContentScripts` (URL matching via the
-  shared `URLMatcher`), `chrome.storage.*`, and `runtime.sendMessage` (→ `WebExtensionRuntime`).
+  shared `URLMatcher`), `chrome.storage.*`, `runtime.pageLog`, and `runtime.sendMessage` (→ `WebExtensionRuntime`).
+- `WebExtensionBridgeHost` — the browser-VC-implemented bridge backing `chrome.tabs`/`windows`/
+  `cookies`/`notifications` for content scripts, pages, **and** background workers.
+- `WebExtensionPageSession` — builds the WKWebView configuration (scheme handler + page bridge + live
+  storage/cookie/notification push) for a popup/options/install page opened in a real tab.
+- `BrownBearIDBStore` — per-namespace snapshot persistence for the headless IndexedDB engine.
+- `UserScriptInstallRouter` — pure matcher that resolves an extension's `declarativeNetRequest`
+  `redirect` rule for a `.user.js` URL (regexFilter + `regexSubstitution`), so the navigation delegate
+  can hand the install to a userscript-manager extension that claims it.
 
 Tracked as the north-star epic in [`ARCHITECTURE.md`](../ARCHITECTURE.md) and GitHub issue #7.
