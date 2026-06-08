@@ -295,38 +295,9 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
         }
         context.setObject(tabsSendMessage, forKeyedSubscript: "__bb_tabs_send_message" as NSString)
     }
-    /// Map a chrome.scripting method to the bridge host, resolving `files` from the extension package.
-    @MainActor
-    private static func dispatchScripting(host: WebExtensionBridgeHost, method: String,
-                                          args: [String: Any], extensionID: String) async -> Any {
-        let store = BrownBearServices.shared.webExtensionStore
-        let target = args["target"] as? [String: Any] ?? [:]
-        let tabId = target["tabId"] as? Int ?? (args["tabId"] as? Int)
-        switch method {
-        case "executeScript":
-            var code = args["code"] as? String ?? ""
-            if code.isEmpty {
-                for path in (args["files"] as? [String] ?? []) {
-                    if let text = await store.text(extensionID: extensionID, path: path) { code += text + "\n;\n" }
-                }
-            }
-            guard !code.isEmpty else { return [] }
-            let world = (args["world"] as? String) ?? "ISOLATED"
-            return await host.webExtExecuteScript(extTabId: tabId, world: world, code: code)
-        case "insertCSS", "removeCSS":
-            var css = args["css"] as? String ?? ""
-            if css.isEmpty {
-                for path in (args["files"] as? [String] ?? []) {
-                    if let text = await store.text(extensionID: extensionID, path: path) { css += text + "\n" }
-                }
-            }
-            if method == "insertCSS" { host.webExtInsertCSS(extTabId: tabId, css: css) }
-            else { host.webExtRemoveCSS(extTabId: tabId, css: css) }
-            return NSNull()
-        default:
-            return NSNull()
-        }
-    }
+
+    // dispatchScripting (chrome.scripting / MV2 tabs.executeScript, permission+host gated) lives in
+    // WebExtensionBackgroundContext+Scripting.swift (file-length limit).
 
     /// Map a chrome.tabs method + args to the bridge host, returning a JSON-serializable value.
     @MainActor
