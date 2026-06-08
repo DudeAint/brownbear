@@ -80,6 +80,11 @@ final class Tab {
     /// used so a freshly created tab can defer its first load until it is on screen.
     private(set) var pendingURL: URL?
 
+    /// Invoked once when this tab is closed (any close path), before its web view is freed. Lets an
+    /// owner tear down state bound to the tab — e.g. a hosted extension page's chrome.runtime ports —
+    /// while the runtime is still reachable. Generic so the Models layer stays free of feature knowledge.
+    var onClose: (() -> Void)?
+
     init(id: UUID = UUID(), configuration: WKWebViewConfiguration, isPrivate: Bool = false) {
         self.id = id
         self.isPrivate = isPrivate

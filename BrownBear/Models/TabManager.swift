@@ -109,6 +109,7 @@ final class TabManager {
         guard let removalIndex = tabs.firstIndex(where: { $0.id == id }) else { return }
         let wasActive = (id == activeTabID)
         let removed = tabs.remove(at: removalIndex)
+        removed.onClose?()
         removed.stopLoading()
         rememberClosed(removed)
         delegate?.tabManager(self, didUpdate: tabs)
@@ -132,7 +133,7 @@ final class TabManager {
     func closeAll() {
         let hadPrivate = hasPrivateTabs
         let previous = activeTab
-        tabs.forEach { $0.stopLoading(); rememberClosed($0) }
+        tabs.forEach { $0.onClose?(); $0.stopLoading(); rememberClosed($0) }
         tabs.removeAll()
         activeTabID = nil
         delegate?.tabManager(self, didUpdate: tabs)
@@ -147,7 +148,7 @@ final class TabManager {
         guard !toRemove.isEmpty else { return }
         let activeWasRemoved = toRemove.contains { $0.id == activeTabID }
         let previous = activeTab
-        toRemove.forEach { $0.stopLoading(); rememberClosed($0) }
+        toRemove.forEach { $0.onClose?(); $0.stopLoading(); rememberClosed($0) }
         tabs.removeAll { $0.isPrivate == isPrivate }
         delegate?.tabManager(self, didUpdate: tabs)
         if isPrivate { wipePrivateDataStore() }
@@ -169,7 +170,7 @@ final class TabManager {
         guard !others.isEmpty else { return }
         let removedPrivate = others.contains { $0.isPrivate }
         let previous = activeTab
-        others.forEach { $0.stopLoading(); rememberClosed($0) }
+        others.forEach { $0.onClose?(); $0.stopLoading(); rememberClosed($0) }
         tabs.removeAll { $0.id != id }
         delegate?.tabManager(self, didUpdate: tabs)
         if removedPrivate, !hasPrivateTabs { wipePrivateDataStore() }
