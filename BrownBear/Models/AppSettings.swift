@@ -53,6 +53,14 @@ enum SearchEngine: String, CaseIterable, Identifiable {
     var formQueryParam: String { self == .startpage ? "query" : "q" }
 }
 
+/// Where the address bar (omnibox) lives — at the top (Chrome-style, default) or at the bottom above
+/// the toolbar (Safari-style). In bottom mode the omnibox + toolbar collapse away together on scroll.
+enum AddressBarPosition: String, CaseIterable, Identifiable {
+    case top, bottom
+    var id: String { rawValue }
+    var title: String { self == .top ? "Top" : "Bottom" }
+}
+
 /// Namespaced UserDefaults-backed app preferences. The SwiftUI Settings screen uses `@AppStorage`
 /// on the same keys, so reads here and edits there stay in sync.
 enum AppSettings {
@@ -62,6 +70,14 @@ enum AppSettings {
         static let autoUpdateScripts = "bbAutoUpdateScripts"
         static let lastScriptUpdateCheck = "bbLastScriptUpdateCheck"
         static let hideBarsOnScroll = "bbHideBarsOnScroll"
+        static let addressBarPosition = "bbAddressBarPosition"
+    }
+
+    /// Where the address bar sits. Default `.top`. Changing it posts `.brownBearChromeLayoutChanged`
+    /// (from the Settings screen) so the open browser re-lays-out its chrome immediately.
+    static var addressBarPosition: AddressBarPosition {
+        get { AddressBarPosition(rawValue: UserDefaults.standard.string(forKey: Key.addressBarPosition) ?? "") ?? .top }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.addressBarPosition) }
     }
 
     /// Whether the browser chrome (the omnibox bar) slides away as you scroll the page down and returns
@@ -96,4 +112,10 @@ enum AppSettings {
         get { UserDefaults.standard.object(forKey: Key.lastScriptUpdateCheck) as? Date }
         set { UserDefaults.standard.set(newValue, forKey: Key.lastScriptUpdateCheck) }
     }
+}
+
+extension Notification.Name {
+    /// Posted when a chrome-layout preference (e.g. the address-bar position) changes, so the open
+    /// browser controller re-applies its layout immediately instead of only on next launch.
+    static let brownBearChromeLayoutChanged = Notification.Name("brownBearChromeLayoutChanged")
 }

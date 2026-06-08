@@ -43,10 +43,26 @@ final class BrownBearBrowserViewController: UIViewController {
     /// rolls up but the status-bar / Dynamic Island strip stays chrome-coloured and the page never
     /// slides under it. Built in +Layout, animated in +ScrollChrome.
     var topChromeHeightConstraint: NSLayoutConstraint?
-    /// The omnibox's `top == topChrome.top + (safe-area-top + 8)` constraint. The omnibox is pinned to
-    /// topChrome (not the view's safe area) so the whole bar slides as one unit; this constant tracks the
-    /// safe-area inset (updated in viewSafeAreaInsetsDidChange).
+    /// The omnibox's `top == topChrome.top + offset` constraint. The omnibox is pinned to topChrome (not
+    /// the view's safe area) so the whole bar moves as one unit; the offset is the safe-area-top + 8 in
+    /// top mode (status bar above it) or 8 in bottom mode, tracked in viewSafeAreaInsetsDidChange.
     var omniboxTopConstraint: NSLayoutConstraint?
+    /// Bottom mode only: the toolbar's `bottom == safeArea.bottom + c` constraint. Scroll-hide drives `c`
+    /// to slide the whole bottom chrome (omnibox + toolbar) down off-screen, and back to 0 to restore.
+    var bottomChromeBottomConstraint: NSLayoutConstraint?
+    /// The two position-specific constraint sets (top-bar vs bottom-bar); exactly one is active.
+    /// applyAddressBarPosition swaps them when the preference changes. Built in +Layout.
+    var topPositionConstraints: [NSLayoutConstraint] = []
+    var bottomPositionConstraints: [NSLayoutConstraint] = []
+    /// Observes `.brownBearChromeLayoutChanged` so a Settings change re-lays-out the chrome live.
+    var chromeLayoutObserver: NSObjectProtocol?
+    /// Observes keyboard-frame changes so the BOTTOM address bar lifts above the keyboard while editing.
+    var keyboardObserver: NSObjectProtocol?
+    /// True while the keyboard is up — scroll-hide is suspended so typing doesn't fight the lift.
+    var keyboardVisible = false
+    /// How far the bottom chrome is currently lifted above the keyboard (0 when not editing). Tracked so
+    /// a re-layout (rotation / safe-area change) preserves the lift instead of dropping the bar behind it.
+    var keyboardLiftOverlap: CGFloat = 0
     /// Whether the chrome is currently slid away (scrolled down). Drives idempotent show/hide.
     var chromeHidden = false
     /// The scroll offset at the last direction sample, so +ScrollChrome can detect up vs. down.
@@ -102,6 +118,12 @@ final class BrownBearBrowserViewController: UIViewController {
         injection.historyStateHandler.delegate = self   // SPA history → webNavigation.onHistoryStateUpdated
         DownloadManager.shared.onDownloadStarted = { [weak self] in self?.presentDownloadStartedToast() }
         buildHierarchy()
+        registerChromeLayoutObservers()
+    }
+
+    deinit {
+        if let chromeLayoutObserver { NotificationCenter.default.removeObserver(chromeLayoutObserver) }
+        if let keyboardObserver { NotificationCenter.default.removeObserver(keyboardObserver) }
     }
 
     override var preferredStatusBarStyle: UIStatusBarStyle {
@@ -113,14 +135,13 @@ final class BrownBearBrowserViewController: UIViewController {
     /// Must live in the main class body — Swift forbids overriding inherited methods from an extension.
     override func viewSafeAreaInsetsDidChange() {
         super.viewSafeAreaInsetsDidChange()
-        guard let omniboxTopConstraint else { return }
-        let target = view.safeAreaInsets.top + 8
-        if omniboxTopConstraint.constant != target {
-            omniboxTopConstraint.constant = target
-            // Both the omnibox offset and the bar's full/collapsed heights depend on the inset; re-apply
-            // the current shown/hidden state so they track rotation / Dynamic-Island changes.
-            applyChromeHidden(chromeHidden, animated: false)
-        }
+        // In top mode the omnibox sits below the status bar (offset tracks the inset); in bottom mode it
+        // sits at a fixed 8pt above the toolbar. Re-applying the position keeps both the offset and the
+        // bar height correct across rotation / Dynamic-Island changes, then restore the shown/hidden state.
+        guard omniboxTopConstraint != nil else { return }
+        let wasHidden = chromeHidden
+        applyAddressBarPosition(AppSettings.addressBarPosition, animated: false)
+        if wasHidden { chromeHidden = true; applyChromeHidden(true, animated: false) }
     }
 
     // MARK: - Public entry points (called by SceneDelegate)

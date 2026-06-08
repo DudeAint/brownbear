@@ -2,25 +2,31 @@
 //  BrownBearBrowserViewController+Layout.swift
 //  BrownBear
 //
-//  Builds the browser chrome hierarchy (top omnibox bar, progress bar, web content area, bottom
-//  toolbar, suggestions overlay) and its Auto Layout constraints. Split out of the main controller so
-//  the controller stays under the SwiftLint length limit and so the scroll-hide machinery
-//  (+ScrollChrome) has a clear, named set of constraints to animate.
+//  Builds the browser chrome hierarchy (omnibox bar, progress bar, web content area, toolbar,
+//  suggestions overlay) and its Auto Layout constraints, supporting BOTH address-bar positions:
 //
-//  The omnibox is pinned inside `topChrome` (not directly to the view's safe area), and topChrome is
-//  anchored to the very top with an animatable HEIGHT. Scroll-hide collapses that height to the
-//  safe-area strip so the bar rolls away while the status-bar / Dynamic Island region keeps its chrome
-//  backing. At rest the height equals omnibox.bottom + 8, so the resting layout is unchanged.
+//   • Top (default, Chrome-style): the omnibox bar is at the top. Scroll-hide collapses its HEIGHT to
+//     the safe-area strip so the bar rolls away while the status-bar / Dynamic Island region keeps its
+//     chrome backing and the page never slides under it. The toolbar stays put.
+//   • Bottom (Safari-style): the omnibox sits just above the toolbar. Scroll-hide slides the whole
+//     bottom chrome (omnibox + toolbar) down off-screen together; the page grows to fill.
+//
+//  Both modes share the omnibox/progress/content/toolbar views and a common set of constraints; a
+//  per-position set (topPositionConstraints / bottomPositionConstraints) is swapped by
+//  applyAddressBarPosition when the preference changes (live, via .brownBearChromeLayoutChanged).
 //
 
 import UIKit
 
 extension BrownBearBrowserViewController {
 
+    /// The omnibox bar's height excluding the safe area (omnibox + 8pt top/bottom padding).
+    var omniboxBarHeight: CGFloat { BrownBearTheme.Metrics.omniboxHeight + 16 }
+
     /// Compose the chrome subviews and activate their constraints. Called once from viewDidLoad.
     func buildHierarchy() {
         topChrome.backgroundColor = BrownBearTheme.Palette.chrome
-        // Clip so the omnibox is hidden when the bar collapses to the safe-area strip on scroll.
+        // Clip so the omnibox is hidden when the top bar collapses to the safe-area strip on scroll.
         topChrome.clipsToBounds = true
         topChrome.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(topChrome)
@@ -39,56 +45,106 @@ extension BrownBearBrowserViewController {
         toolbar.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(toolbar)
 
-        // Suggestions overlay the page between the bar and the toolbar; added last so it sits on top.
+        // Suggestions overlay the page next to the bar; added last so it sits on top.
         omniboxSuggestions.delegate = self
         omniboxSuggestions.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(omniboxSuggestions)
 
         let inset = BrownBearTheme.Metrics.chromeHorizontalInset
         let guide = view.safeAreaLayoutGuide
+        let omniboxH = BrownBearTheme.Metrics.omniboxHeight
 
-        // The top chrome stays pinned to the very top (covering the status bar / Dynamic Island); the
-        // scroll-hide animation drives its HEIGHT — full when shown, just the safe-area strip when
-        // hidden — and the omnibox (pinned inside, clipped) rolls away with it. At rest the height equals
-        // omnibox.bottom + 8, so the resting layout is unchanged.
+        // The omnibox is pinned INSIDE topChrome so the whole bar moves as one unit; the offset + the
+        // bar height track the safe-area inset (set per-position in applyAddressBarPosition).
         let omniboxTop = omnibox.topAnchor.constraint(equalTo: topChrome.topAnchor,
                                                       constant: view.safeAreaInsets.top + 8)
-        let fullHeight = view.safeAreaInsets.top + BrownBearTheme.Metrics.omniboxHeight + 16
-        let heightConstraint = topChrome.heightAnchor.constraint(equalToConstant: fullHeight)
-        topChromeHeightConstraint = heightConstraint
+        let heightConstraint = topChrome.heightAnchor.constraint(equalToConstant: view.safeAreaInsets.top + omniboxH + 16)
         omniboxTopConstraint = omniboxTop
+        topChromeHeightConstraint = heightConstraint
 
+        // Common constraints — true in both positions.
         NSLayoutConstraint.activate([
             topChrome.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             topChrome.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            topChrome.topAnchor.constraint(equalTo: view.topAnchor),
             heightConstraint,
 
             omnibox.leadingAnchor.constraint(equalTo: guide.leadingAnchor, constant: inset),
             omnibox.trailingAnchor.constraint(equalTo: guide.trailingAnchor, constant: -inset),
             omniboxTop,
-            omnibox.heightAnchor.constraint(equalToConstant: BrownBearTheme.Metrics.omniboxHeight),
+            omnibox.heightAnchor.constraint(equalToConstant: omniboxH),
 
             progressBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             progressBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            progressBar.topAnchor.constraint(equalTo: topChrome.bottomAnchor),
             progressBar.heightAnchor.constraint(equalToConstant: BrownBearTheme.Metrics.progressBarHeight),
 
             contentContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             contentContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            contentContainer.topAnchor.constraint(equalTo: progressBar.bottomAnchor),
-            contentContainer.bottomAnchor.constraint(equalTo: toolbar.topAnchor),
 
             toolbar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             toolbar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            toolbar.bottomAnchor.constraint(equalTo: guide.bottomAnchor),
-            toolbar.topAnchor.constraint(equalTo: guide.bottomAnchor,
-                                         constant: -BrownBearTheme.Metrics.toolbarHeight),
+            toolbar.heightAnchor.constraint(equalToConstant: BrownBearTheme.Metrics.toolbarHeight),
 
-            omniboxSuggestions.topAnchor.constraint(equalTo: progressBar.bottomAnchor),
             omniboxSuggestions.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            omniboxSuggestions.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            omniboxSuggestions.bottomAnchor.constraint(equalTo: toolbar.topAnchor)
+            omniboxSuggestions.trailingAnchor.constraint(equalTo: view.trailingAnchor)
         ])
+
+        // Top-position: bar at the top, toolbar fixed at the bottom.
+        topPositionConstraints = [
+            topChrome.topAnchor.constraint(equalTo: view.topAnchor),
+            progressBar.topAnchor.constraint(equalTo: topChrome.bottomAnchor),
+            contentContainer.topAnchor.constraint(equalTo: progressBar.bottomAnchor),
+            contentContainer.bottomAnchor.constraint(equalTo: toolbar.topAnchor),
+            toolbar.bottomAnchor.constraint(equalTo: guide.bottomAnchor),
+            omniboxSuggestions.topAnchor.constraint(equalTo: progressBar.bottomAnchor),
+            omniboxSuggestions.bottomAnchor.constraint(equalTo: toolbar.topAnchor)
+        ]
+
+        // Bottom-position: progress bar at the top (below the island), omnibox above the toolbar, and
+        // the toolbar's bottom is the animatable anchor the bottom chrome slides on.
+        let toolbarBottom = toolbar.bottomAnchor.constraint(equalTo: guide.bottomAnchor)
+        bottomChromeBottomConstraint = toolbarBottom
+        bottomPositionConstraints = [
+            progressBar.topAnchor.constraint(equalTo: guide.topAnchor),
+            contentContainer.topAnchor.constraint(equalTo: progressBar.bottomAnchor),
+            contentContainer.bottomAnchor.constraint(equalTo: topChrome.topAnchor),
+            topChrome.bottomAnchor.constraint(equalTo: toolbar.topAnchor),
+            toolbarBottom,
+            omniboxSuggestions.topAnchor.constraint(equalTo: progressBar.bottomAnchor),
+            omniboxSuggestions.bottomAnchor.constraint(equalTo: topChrome.topAnchor)
+        ]
+
+        applyAddressBarPosition(AppSettings.addressBarPosition, animated: false)
+    }
+
+    /// Activate the constraint set for `position`, update the position-dependent constants, and reset the
+    /// chrome to fully shown. Called at build and whenever the preference changes (animated when live).
+    func applyAddressBarPosition(_ position: AddressBarPosition, animated: Bool) {
+        NSLayoutConstraint.deactivate(topPositionConstraints)
+        NSLayoutConstraint.deactivate(bottomPositionConstraints)
+
+        let safeTop = view.safeAreaInsets.top
+        let omniboxH = BrownBearTheme.Metrics.omniboxHeight
+        switch position {
+        case .top:
+            NSLayoutConstraint.activate(topPositionConstraints)
+            omniboxTopConstraint?.constant = safeTop + 8           // sit below the status bar
+            topChromeHeightConstraint?.constant = safeTop + omniboxH + 16
+        case .bottom:
+            NSLayoutConstraint.activate(bottomPositionConstraints)
+            omniboxTopConstraint?.constant = 8                     // no status bar above it at the bottom
+            topChromeHeightConstraint?.constant = omniboxH + 16
+        }
+
+        // Come back fully shown in the new layout — but preserve an in-progress keyboard lift (a
+        // safe-area change / rotation while editing the bottom bar re-applies the position; without this
+        // the bar would drop back behind the keyboard).
+        chromeHidden = false
+        omnibox.alpha = 1
+        bottomChromeBottomConstraint?.constant = keyboardVisible ? -keyboardLiftOverlap : 0
+
+        guard animated else { return }
+        UIView.animate(withDuration: 0.25, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
+            self.view.layoutIfNeeded()
+        }
     }
 }

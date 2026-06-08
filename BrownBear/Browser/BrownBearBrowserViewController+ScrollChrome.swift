@@ -2,15 +2,13 @@
 //  BrownBearBrowserViewController+ScrollChrome.swift
 //  BrownBear
 //
-//  Hide-the-bar-on-scroll: as the user scrolls a page down, the top omnibox bar slides off the top of
-//  the screen and the web content expands to fill it; scrolling up (or starting a new page load, or
-//  switching tabs) brings it back. The Safari/Chrome immersive-reading behaviour, gated by the
-//  AppSettings.hideBarsOnScroll preference (default on).
-//
-//  We drive topChromeHeightConstraint (owned by +Layout) and animate layout — collapsing the bar's
-//  height to the safe-area strip rolls the omnibox away (clipped, faded) while the progress bar +
-//  content container, pinned below, follow and grow the page area, all in one animation. The status-bar
-//  / Dynamic Island region keeps its chrome backing, so the page never slides up under it.
+//  Hide-the-bar-on-scroll + the chrome-layout observers, for both address-bar positions:
+//   • Top: collapse the bar's HEIGHT to the safe-area strip (omnibox clipped + faded); the status-bar /
+//     Dynamic Island region keeps its chrome backing and the page never slides under it.
+//   • Bottom: slide the whole bottom chrome (omnibox + toolbar) down off-screen together.
+//  Both honour AppSettings.hideBarsOnScroll (default on). Also keeps the BOTTOM bar above the keyboard
+//  while editing (the omnibox would otherwise sit behind it), and re-lays-out live when the address-bar
+//  position preference changes.
 //
 
 import UIKit
@@ -23,6 +21,8 @@ extension BrownBearBrowserViewController: UIScrollViewDelegate {
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         // Only the active tab's web view drives the chrome; ignore any stale delegate callbacks.
         guard scrollView === tabManager.activeTab?.webView.scrollView else { return }
+        // Don't fight the keyboard-lift while editing the bottom bar.
+        guard !keyboardVisible else { return }
 
         guard AppSettings.hideBarsOnScroll else {
             if chromeHidden { showChrome(animated: true) }   // preference turned off → restore the bar
@@ -48,8 +48,8 @@ extension BrownBearBrowserViewController: UIScrollViewDelegate {
             return
         }
 
-        // Not worth collapsing for a page barely taller than the viewport.
-        guard scrollView.contentSize.height > scrollView.bounds.height + topChrome.bounds.height else {
+        // Not worth collapsing for a page barely taller than the bar(s) that would hide.
+        guard scrollView.contentSize.height > scrollView.bounds.height + chromeHideDistance else {
             lastScrollOffsetY = offsetY
             return
         }
@@ -79,26 +79,79 @@ extension BrownBearBrowserViewController: UIScrollViewDelegate {
         applyChromeHidden(false, animated: animated)
     }
 
-    /// Collapse the top chrome to just the safe-area strip (hidden) or expand it to full (shown) by
-    /// driving its height constraint. The bar stays anchored at the very top so the status-bar /
-    /// Dynamic Island region keeps its chrome backing and the page never slides up under it; the omnibox
-    /// (clipped by topChrome) fades as it rolls away. The progress bar + content area, pinned below,
-    /// follow and the page grows to fill. Shown restores the full height — the unchanged resting layout.
+    /// Hide or show the chrome — collapse the top bar's height (top mode) or slide the bottom chrome
+    /// down (bottom mode). The progress bar + content area, pinned to the moving edge, follow and the
+    /// page grows to fill.
     func applyChromeHidden(_ hidden: Bool, animated: Bool) {
-        guard let heightConstraint = topChromeHeightConstraint else { return }
-        let safeTop = view.safeAreaInsets.top
-        let fullHeight = safeTop + BrownBearTheme.Metrics.omniboxHeight + 16
-        heightConstraint.constant = hidden ? safeTop : fullHeight
-        let apply = {
-            self.omnibox.alpha = hidden ? 0 : 1
-            self.view.layoutIfNeeded()
+        switch AppSettings.addressBarPosition {
+        case .top:
+            guard let heightConstraint = topChromeHeightConstraint else { return }
+            heightConstraint.constant = hidden ? view.safeAreaInsets.top
+                                               : view.safeAreaInsets.top + omniboxBarHeight
+            animateChrome(animated) {
+                self.omnibox.alpha = hidden ? 0 : 1   // clipped omnibox fades as the bar rolls away
+                self.view.layoutIfNeeded()
+            }
+        case .bottom:
+            guard let bottomConstraint = bottomChromeBottomConstraint else { return }
+            // While editing, the bar is lifted above the keyboard — never fight that (a stray
+            // showChrome / new-page load mid-edit must not drop the omnibox behind the keyboard).
+            // Otherwise slide the omnibox + toolbar fully below the screen (bar + toolbar + inset).
+            bottomConstraint.constant = keyboardVisible ? -keyboardLiftOverlap : (hidden ? chromeHideDistance : 0)
+            animateChrome(animated) { self.view.layoutIfNeeded() }
         }
-        if animated {
-            // A quick, lightly-damped spring — snappy on the way out, still refined rather than abrupt.
-            UIView.animate(withDuration: 0.22, delay: 0, usingSpringWithDamping: 0.9, initialSpringVelocity: 0.6,
-                           options: [.beginFromCurrentState, .allowUserInteraction]) { apply() }
-        } else {
-            apply()
+    }
+
+    /// How far the chrome travels when hidden in the current position: the top bar's collapsible height,
+    /// or the full bottom chrome (omnibox + toolbar + home-indicator inset). Also the minimum extra page
+    /// height worth collapsing for.
+    var chromeHideDistance: CGFloat {
+        switch AppSettings.addressBarPosition {
+        case .top: return omniboxBarHeight
+        case .bottom: return omniboxBarHeight + BrownBearTheme.Metrics.toolbarHeight + view.safeAreaInsets.bottom
         }
+    }
+
+    private func animateChrome(_ animated: Bool, _ apply: @escaping () -> Void) {
+        guard animated else { apply(); return }
+        // A quick, lightly-damped spring — snappy on the way out, still refined rather than abrupt.
+        UIView.animate(withDuration: 0.22, delay: 0, usingSpringWithDamping: 0.9, initialSpringVelocity: 0.6,
+                       options: [.beginFromCurrentState, .allowUserInteraction], animations: apply)
+    }
+
+    // MARK: - Layout observers (live position switch + keyboard avoidance)
+
+    /// Register for the address-bar-position preference change and for keyboard-frame changes.
+    func registerChromeLayoutObservers() {
+        chromeLayoutObserver = NotificationCenter.default.addObserver(
+            forName: .brownBearChromeLayoutChanged, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            self.applyAddressBarPosition(AppSettings.addressBarPosition, animated: true)
+        }
+        keyboardObserver = NotificationCenter.default.addObserver(
+            forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: .main) { [weak self] note in
+            guard let self else { return }
+            self.handleKeyboardFrameChange(note)
+        }
+    }
+
+    /// Lift the BOTTOM chrome above the keyboard while editing (so the omnibox isn't behind it). No-op in
+    /// top mode (the keyboard covering the bottom toolbar there is fine — the user looks at the top bar).
+    private func handleKeyboardFrameChange(_ note: Notification) {
+        guard AppSettings.addressBarPosition == .bottom,
+              let bottomConstraint = bottomChromeBottomConstraint,
+              let endFrame = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
+        let keyboardCover = view.bounds.height - view.convert(endFrame, from: nil).origin.y
+        let overlap = max(0, keyboardCover - view.safeAreaInsets.bottom)   // keyboard height above the safe area
+        keyboardVisible = overlap > 0
+        keyboardLiftOverlap = overlap   // remembered so a re-layout preserves the lift
+        // Editing only happens with the bar shown (it's tappable only when shown), so on retract the bar
+        // returns fully shown — keep chromeHidden in sync so scroll-hide resumes from the right state.
+        if overlap == 0 { chromeHidden = false }
+        // Negative constant lifts the toolbar.bottom (and the omnibox above it) up over the keyboard.
+        bottomConstraint.constant = overlap > 0 ? -overlap : 0
+        let duration = (note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
+        UIView.animate(withDuration: duration, delay: 0,
+                       options: [.beginFromCurrentState, .allowUserInteraction]) { self.view.layoutIfNeeded() }
     }
 }
