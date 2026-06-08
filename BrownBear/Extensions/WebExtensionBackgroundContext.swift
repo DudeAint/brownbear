@@ -33,6 +33,9 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
     /// read-only, so the cross-actor read in `cookiePermitted` (on the main actor) is race-free.
     var cookiePermissions: Set<String> = []
     var cookieHostMatcher: (String) -> Bool = { _ in false }
+    /// The raw host_permission patterns (same source as `cookieHostMatcher`), kept so the fetch path can
+    /// build a redirect-guard that re-applies the gate to 3xx targets (SSRF). Set once in boot.
+    var cookieHostPatterns: [String] = []
     /// Granted API permissions, cached by the runtime at boot. Defense-in-depth for event gating (the
     /// authoritative webNavigation gate lives in WebExtensionRuntime.dispatchEventToAll). On `queue`.
     private var grantedPermissions: Set<String> = []
@@ -106,6 +109,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
                 let matcher = URLMatcher(matches: parsed.hostPermissions,
                                          includes: [], excludes: [], excludeMatches: [])
                 cookieHostMatcher = { matcher.matches($0) }
+                cookieHostPatterns = parsed.hostPermissions
             }
 
             // Configuration globals the runtime reads on load.

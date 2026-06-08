@@ -67,9 +67,7 @@ extension WebExtensionBackgroundContext {
         request.httpMethod = (req["method"] as? String)?.uppercased() ?? "GET"
         request.timeoutInterval = 60
         if let headers = req["headers"] as? [String: Any] {
-            for (key, value) in headers {
-                request.setValue(String(describing: value), forHTTPHeaderField: key)
-            }
+            WebExtensionFetchSecurity.apply(headers: headers, to: &request)   // drops CRLF / invalid names
         }
         if let body = req["body"] as? String {
             if (req["bodyEncoding"] as? String) == "base64" {
@@ -78,7 +76,11 @@ extension WebExtensionBackgroundContext {
                 request.httpBody = body.data(using: .utf8)
             }
         }
-        let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+        // Redirect-guarded session: the host_permissions gate above only saw the initial URL, so a
+        // permitted host must not 30x-redirect onto an undeclared/internal host (SSRF). Invalidate after.
+        let session = WebExtensionFetchSecurity.redirectGuardedSession(hostPatterns: cookieHostPatterns)
+        let task = session.dataTask(with: request) { [weak self] data, response, error in
+            defer { session.finishTasksAndInvalidate() }
             guard let self else { return }
             if let error {
                 self.callBack(callback, with: Self.fetchError(error.localizedDescription))

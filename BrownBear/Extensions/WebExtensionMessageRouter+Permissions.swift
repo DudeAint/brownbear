@@ -140,13 +140,17 @@ extension WebExtensionMessageRouter {
         request.httpMethod = method
         request.timeoutInterval = 60
         if let headers = payload["headers"] as? [String: Any] {
-            for (key, value) in headers { request.setValue(String(describing: value), forHTTPHeaderField: key) }
+            WebExtensionFetchSecurity.apply(headers: headers, to: &request)   // drops CRLF / invalid names
         }
         if let body = payload["body"] as? String, method != "GET", method != "HEAD" {
             request.httpBody = body.data(using: .utf8)
         }
+        // A redirect-guarded session: a permitted host can't 30x-redirect the request onto an undeclared/
+        // internal host (the gate above only sees the initial URL). Invalidate it once the request settles.
+        let session = WebExtensionFetchSecurity.redirectGuardedSession(hostPatterns: manifest.hostPermissions)
+        defer { session.finishTasksAndInvalidate() }
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else { return ["error": "no HTTP response"] }
             let clamped = data.count > Self.maxHostFetchBytes ? Data(data.prefix(Self.maxHostFetchBytes)) : data
             var headerMap: [String: String] = [:]
