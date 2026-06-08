@@ -547,6 +547,59 @@
       };
     }
 
+    // structuredClone — real service workers have it; a bare JSContext does not, so an MV3 worker
+    // (or a bundled library it pulls in) that deep-clones with it throws "Can't find variable:
+    // structuredClone". Spec-ish deep clone covering Date/RegExp/ArrayBuffer/TypedArray/Map/Set/Array/
+    // plain object + circular refs; throws DataCloneError on functions/symbols.
+    if (typeof globalThis.structuredClone !== 'function') {
+      globalThis.structuredClone = function structuredClone(value) {
+        var seen = (typeof Map === 'function') ? new Map() : null;
+        function fail() {
+          var C = globalThis.DOMException || Error;
+          try { return new C("Failed to execute 'structuredClone': value could not be cloned.", 'DataCloneError'); }
+          catch (e) { return new Error('DataCloneError'); }
+        }
+        function clone(v) {
+          if (v === null || typeof v !== 'object') {
+            if (typeof v === 'function' || typeof v === 'symbol') { throw fail(); }
+            return v;
+          }
+          if (seen && seen.has(v)) { return seen.get(v); }
+          if (v instanceof Date) { return new Date(v.getTime()); }
+          if (v instanceof RegExp) { return new RegExp(v.source, v.flags); }
+          if (typeof ArrayBuffer === 'function' && v instanceof ArrayBuffer) {
+            var b = v.slice(0); if (seen) { seen.set(v, b); } return b;
+          }
+          if (typeof ArrayBuffer === 'function' && ArrayBuffer.isView(v)) {
+            var buf = clone(v.buffer);
+            var view = (typeof DataView === 'function' && v instanceof DataView)
+              ? new DataView(buf, v.byteOffset, v.byteLength)
+              : new v.constructor(buf, v.byteOffset, v.length);
+            if (seen) { seen.set(v, view); } return view;
+          }
+          if (Array.isArray(v)) {
+            var arr = []; if (seen) { seen.set(v, arr); }
+            for (var i = 0; i < v.length; i++) { arr[i] = clone(v[i]); }
+            return arr;
+          }
+          if (typeof Map === 'function' && v instanceof Map) {
+            var m = new Map(); if (seen) { seen.set(v, m); }
+            v.forEach(function (val, key) { m.set(clone(key), clone(val)); });
+            return m;
+          }
+          if (typeof Set === 'function' && v instanceof Set) {
+            var s = new Set(); if (seen) { seen.set(v, s); }
+            v.forEach(function (val) { s.add(clone(val)); });
+            return s;
+          }
+          var o = {}; if (seen) { seen.set(v, o); }
+          for (var k in v) { if (Object.prototype.hasOwnProperty.call(v, k)) { o[k] = clone(v[k]); } }
+          return o;
+        }
+        return clone(value);
+      };
+    }
+
     // navigator — a (reduced) navigator exists in real service workers; extensions read
     // userAgent/language/onLine/hardwareConcurrency. JSC provides none, so a bare reference throws
     // "Can't find variable: navigator". Honest values come from native (__bbUserAgent/__bbLanguage)
