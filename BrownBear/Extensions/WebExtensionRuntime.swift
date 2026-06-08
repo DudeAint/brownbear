@@ -102,19 +102,31 @@ class WebExtensionRuntime {
     /// so that page is skipped. Content scripts receive via tabs.sendMessage, not this fan-out.
     func sendRuntimeMessage(_ message: Any, sender: [String: Any], to extensionID: String,
                             senderToken: String? = nil) async -> [String: Any]? {
+        // Track whether ANY context of this extension had a receiving onMessage listener. Chrome only
+        // raises "Could not establish connection. Receiving end does not exist." when NOTHING received.
+        var sawReceiver = false
         // Background worker first (the common responder), then open extension pages.
-        if let context = contexts[extensionID],
-           let response = await context.deliverRuntimeMessage(message: message, sender: sender) {
-            return response
+        if let context = contexts[extensionID] {
+            if let response = await context.deliverRuntimeMessage(message: message, sender: sender) {
+                // A `{__bbNoListener:true}` reply means the worker booted but registered no onMessage
+                // listener — keep looking. Any other reply is an actual answer.
+                if response["__bbNoListener"] == nil { return response }
+            } else {
+                sawReceiver = true   // had a listener that declined or never answered (channel existed)
+            }
         }
         for box in eventReceivers.values {
             guard let receiver = box.value, receiver.receiverExtensionID == extensionID else { continue }
+            sawReceiver = true   // an open page of this extension exists to receive
             if let response = await receiver.deliverRuntimeMessage(message: message, sender: sender,
                                                                    senderToken: senderToken) {
                 return response
             }
         }
-        return nil
+        // Nobody answered. If no context had a receiving listener at all, surface Chrome's no-receiver
+        // signal so the sending runtime can set chrome.runtime.lastError; otherwise the message was
+        // received but declined → resolve to undefined with no error.
+        return sawReceiver ? nil : ["__bbNoReceiver": true]
     }
 
     /// Append a popup/options PAGE's forwarded console line / uncaught error to this extension's log,

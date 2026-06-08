@@ -63,9 +63,20 @@
     try { manifest = _JSON.parse(data.manifestJSON || "{}"); } catch (e) { manifest = {}; }
     var messages = data.messages || {};
 
+    // chrome.runtime.lastError slot, per content script. Settable so the message/port paths can set
+    // it before invoking a callback (Chrome semantics), then clear it.
+    var _bbLastError = null;
     function settle(promise, callback) {
-      if (typeof callback === "function") { promise.then(function (v) { callback(v); }, function () { callback(undefined); }); return undefined; }
-      return promise;
+      if (typeof callback === "function") {
+        promise.then(function (v) { callback(v); }, function (e) {
+          // A `__bbLastError`-tagged rejection populates chrome.runtime.lastError for the callback's
+          // duration (Chrome calls the callback with lastError set, then clears it); result undefined.
+          if (e && e.__bbLastError) { _bbLastError = { message: e.message }; }
+          try { callback(undefined); } finally { _bbLastError = null; }
+        });
+        return undefined;
+      }
+      return promise;   // promise form: a tagged rejection propagates (Chrome rejects the promise)
     }
 
     function storageArea(area) {
@@ -560,14 +571,21 @@
           var cb = (args.length && typeof args[args.length - 1] === "function") ? args.pop() : null;
           var message = (typeof args[0] === "string" && args.length > 1) ? args[1] : args[0];
           var promise = bridge("runtime.sendMessage", { message: (message === undefined ? null : message), url: location.href }, token)
-            .then(function (resp) { return resp ? resp.value : undefined; });
+            .then(function (resp) {
+              if (resp && resp.__bbNoReceiver) {
+                // No context received the message — Chrome rejects (promise) / sets lastError (callback).
+                var e = new Error("Could not establish connection. Receiving end does not exist.");
+                e.__bbLastError = true; throw e;
+              }
+              return resp ? resp.value : undefined;
+            });
           return settle(promise, cb);
         },
         onMessage: makeEvent(messageListeners),
         onConnect: makeEvent(connectListeners),
         onInstalled: noopEvent,
         connect: runtimeConnect,
-        lastError: null,
+        get lastError() { return _bbLastError; },
         getPlatformInfo: function (cb) { var info = { os: "ios", arch: "arm64", nacl_arch: "arm64" }; if (typeof cb === "function") { cb(info); return undefined; } return _Promise.resolve(info); }
       },
       tabs: tabsApi(),
