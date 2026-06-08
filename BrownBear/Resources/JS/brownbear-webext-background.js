@@ -489,12 +489,86 @@
       globalThis.FormData = FormDataPoly;
     }
 
+    // AbortController / AbortSignal — extensions and fetch wrappers (uBO, ScriptCat, Grammarly) create
+    // `new AbortController()` and pass `signal` to fetch; without these, that throws "Can't find variable:
+    // AbortController" at init. A DOMException-shaped 'AbortError' is what callers branch on.
+    function bbAbortError(reason, name, message) {
+      if (reason !== undefined && reason !== null) { return reason; }
+      if (typeof globalThis.DOMException === 'function') { return new globalThis.DOMException(message, name); }
+      var e = new Error(message); e.name = name; return e;
+    }
+    if (typeof globalThis.AbortSignal !== 'function' || typeof globalThis.AbortController !== 'function') {
+      var BBAbortSignal = function () { this.aborted = false; this.reason = undefined; this.onabort = null; this._lst = []; };
+      BBAbortSignal.prototype.addEventListener = function (t, fn) { if (t === 'abort' && typeof fn === 'function') { this._lst.push(fn); } };
+      BBAbortSignal.prototype.removeEventListener = function (t, fn) {
+        if (t !== 'abort') { return; } var i = this._lst.indexOf(fn); if (i >= 0) { this._lst.splice(i, 1); }
+      };
+      BBAbortSignal.prototype.dispatchEvent = function () { return true; };
+      BBAbortSignal.prototype.throwIfAborted = function () { if (this.aborted) { throw this.reason; } };
+      BBAbortSignal.prototype._abort = function (reason) {
+        if (this.aborted) { return; }
+        this.aborted = true;
+        this.reason = bbAbortError(reason, 'AbortError', 'signal is aborted without reason');
+        var ev = { type: 'abort', target: this };
+        if (typeof this.onabort === 'function') { try { this.onabort(ev); } catch (e) { /* listener error */ } }
+        for (var i = 0; i < this._lst.length; i++) { try { this._lst[i].call(this, ev); } catch (e2) { /* listener error */ } }
+      };
+      BBAbortSignal.abort = function (reason) {
+        var s = new BBAbortSignal(); s.aborted = true;
+        s.reason = bbAbortError(reason, 'AbortError', 'signal is aborted without reason'); return s;
+      };
+      BBAbortSignal.timeout = function (ms) {
+        var s = new BBAbortSignal();
+        setTimeout(function () { s._abort(bbAbortError(null, 'TimeoutError', 'signal timed out')); }, ms || 0);
+        return s;
+      };
+      var BBAbortController = function () { this.signal = new BBAbortSignal(); };
+      BBAbortController.prototype.abort = function (reason) { this.signal._abort(reason); };
+      globalThis.AbortSignal = BBAbortSignal;
+      globalThis.AbortController = BBAbortController;
+    }
+
+    // Request — `new Request(input, init)` and `fetch(request)`. We store enough that fetch() below can
+    // read url/method/headers/body/signal off it; the body is kept verbatim for fetch's encoder.
+    if (typeof globalThis.Request !== 'function') {
+      var BBRequest = function (input, init) {
+        init = init || {};
+        var base = (input && typeof input === 'object' && input.url !== undefined) ? input : null;
+        this.url = base ? String(base.url) : String(input);
+        this.method = String(init.method || (base && base.method) || 'GET').toUpperCase();
+        this.headers = new Headers((init.headers !== undefined) ? init.headers : (base ? base.headers : {}));
+        this.credentials = init.credentials || (base && base.credentials) || 'same-origin';
+        this.mode = init.mode || (base && base.mode) || 'cors';
+        this.cache = init.cache || (base && base.cache) || 'default';
+        this.redirect = init.redirect || (base && base.redirect) || 'follow';
+        this.referrer = (init.referrer !== undefined) ? init.referrer : (base ? base.referrer : 'about:client');
+        this.integrity = init.integrity || (base && base.integrity) || '';
+        this.signal = (init.signal !== undefined) ? init.signal : (base ? base.signal : null);
+        this._bodyInit = (init.body !== undefined && init.body !== null) ? init.body
+                       : (base ? base._bodyInit : null);
+        this.bodyUsed = false;
+      };
+      BBRequest.prototype.clone = function () {
+        return new BBRequest(this.url, {
+          method: this.method, headers: this.headers, credentials: this.credentials, mode: this.mode,
+          cache: this.cache, redirect: this.redirect, referrer: this.referrer, integrity: this.integrity,
+          signal: this.signal, body: this._bodyInit
+        });
+      };
+      Object.defineProperty(BBRequest.prototype, Symbol.toStringTag, { get: function () { return 'Request'; } });
+      globalThis.Request = BBRequest;
+    }
+
     function fetch(input, init) {
       init = init || {};
+      // A Request (our shim, or anything carrying a `url`) supplies method/headers/body/signal unless
+      // `init` overrides them — so `fetch(new Request(url, {...}))` and `fetch(req, {signal})` both work.
+      var reqObj = (input && typeof input === 'object' && input.url !== undefined) ? input : null;
       var url, method = 'GET', headers = {}, body = null, bodyEncoding = 'utf8';
-      if (input && typeof input === 'object' && input.url) { url = String(input.url); method = input.method || method; }
-      else { url = String(input); }
+      url = reqObj ? String(reqObj.url) : String(input);
+      if (reqObj && reqObj.method) { method = reqObj.method; }
       if (init.method) { method = init.method; }
+      var signal = (init.signal !== undefined) ? init.signal : (reqObj ? reqObj.signal : null);
       // Resolve a relative URL ('/path' or 'path') against the worker's own origin, so fetching a
       // PACKAGED resource (e.g. ScriptCat's fetch('/src/content.js')) reaches the extension scheme
       // handler instead of an unparseable bare path. Absolute URLs pass through unchanged.
@@ -502,47 +576,67 @@
         var __fetchBase = (globalThis.location && globalThis.location.href) || globalThis.__bbBgBaseURL;
         if (__fetchBase) { url = new globalThis.URL(url, __fetchBase).href; }
       } catch (e) { /* leave url as written */ }
-      if (init.headers) {
-        if (init.headers._m) { headers = init.headers._m; }                       // our Headers instance
-        else if (typeof init.headers.forEach === 'function') {                    // a Map
-          init.headers.forEach(function (v, k) { headers[k] = v; });
-        } else { headers = init.headers; }                                        // a plain object
+      var headersInit = (init.headers !== undefined) ? init.headers : (reqObj ? reqObj.headers : null);
+      if (headersInit) {
+        if (headersInit._m) { headers = headersInit._m; }                         // our Headers instance
+        else if (typeof headersInit.forEach === 'function') {                     // a Map
+          headersInit.forEach(function (v, k) { headers[k] = v; });
+        } else { headers = headersInit; }                                         // a plain object
       }
-      if (init.body != null) {
+      var bodyInit = (init.body !== undefined && init.body !== null) ? init.body
+                   : (reqObj ? reqObj._bodyInit : null);
+      if (bodyInit != null) {
         var hasCT = false;
         for (var hk in headers) { if (hk.toLowerCase() === 'content-type') { hasCT = true; break; } }
-        if (typeof init.body === 'string') { body = init.body; bodyEncoding = 'utf8'; }
-        else if (typeof URLSearchParams === 'function' && init.body instanceof URLSearchParams) {
+        if (typeof bodyInit === 'string') { body = bodyInit; bodyEncoding = 'utf8'; }
+        else if (typeof URLSearchParams === 'function' && bodyInit instanceof URLSearchParams) {
           // x-www-form-urlencoded — serialize via the params' own toString, not JSON.
-          body = init.body.toString(); bodyEncoding = 'utf8';
+          body = bodyInit.toString(); bodyEncoding = 'utf8';
           if (!hasCT) { headers['Content-Type'] = 'application/x-www-form-urlencoded;charset=UTF-8'; }
-        } else if (typeof FormData === 'function' && init.body instanceof FormData
-                   && typeof init.body.__bbSerialize === 'function') {
-          var fd = init.body.__bbSerialize();   // multipart/form-data with a boundary
+        } else if (typeof FormData === 'function' && bodyInit instanceof FormData
+                   && typeof bodyInit.__bbSerialize === 'function') {
+          var fd = bodyInit.__bbSerialize();   // multipart/form-data with a boundary
           body = fd.body; bodyEncoding = 'utf8';
           if (!hasCT) { headers['Content-Type'] = fd.contentType; }
-        } else if (init.body instanceof ArrayBuffer || (init.body.buffer instanceof ArrayBuffer)) {
-          var u8 = init.body instanceof ArrayBuffer ? new Uint8Array(init.body)
-                 : new Uint8Array(init.body.buffer, init.body.byteOffset || 0, init.body.byteLength);
+        } else if (typeof globalThis.Blob === 'function' && bodyInit instanceof globalThis.Blob && bodyInit._bbBytes) {
+          var bb = bodyInit._bbBytes, bbin = '';
+          for (var bi = 0; bi < bb.length; bi++) { bbin += String.fromCharCode(bb[bi]); }
+          body = btoa(bbin); bodyEncoding = 'base64';
+          if (!hasCT && bodyInit.type) { headers['Content-Type'] = bodyInit.type; }
+        } else if (bodyInit instanceof ArrayBuffer || (bodyInit.buffer instanceof ArrayBuffer)) {
+          var u8 = bodyInit instanceof ArrayBuffer ? new Uint8Array(bodyInit)
+                 : new Uint8Array(bodyInit.buffer, bodyInit.byteOffset || 0, bodyInit.byteLength);
           var bin = '';
           for (var i = 0; i < u8.length; i++) { bin += String.fromCharCode(u8[i]); }
           body = btoa(bin); bodyEncoding = 'base64';
         } else {
-          try { body = JSON.stringify(init.body); } catch (e) { body = String(init.body); }
+          try { body = JSON.stringify(bodyInit); } catch (e) { body = String(bodyInit); }
           bodyEncoding = 'utf8';
         }
       }
       var reqJSON = JSON.stringify({ url: url, method: method, headers: headers, body: body, bodyEncoding: bodyEncoding });
       return new Promise(function (resolve, reject) {
-        if (typeof __bb_fetch !== 'function') { reject(new TypeError('fetch is unavailable')); return; }
+        // Honor an AbortSignal: reject immediately if already aborted, and on a later abort. The native
+        // request can't be cancelled mid-flight, but the caller's promise settles as Chrome's does.
+        if (signal && signal.aborted) { reject(bbAbortError(signal.reason, 'AbortError', 'The operation was aborted.')); return; }
+        var settled = false;
+        var onAbort = function () {
+          if (settled) { return; } settled = true;
+          reject(bbAbortError(signal && signal.reason, 'AbortError', 'The operation was aborted.'));
+        };
+        if (signal && typeof signal.addEventListener === 'function') { signal.addEventListener('abort', onAbort); }
+        if (typeof __bb_fetch !== 'function') { settled = true; reject(new TypeError('fetch is unavailable')); return; }
         try {
           __bb_fetch(reqJSON, function (resJSON) {
+            if (settled) { return; }
+            settled = true;
+            if (signal && typeof signal.removeEventListener === 'function') { signal.removeEventListener('abort', onAbort); }
             var r;
             try { r = JSON.parse(resJSON); } catch (e) { reject(new TypeError('Failed to fetch')); return; }
             if (r.error) { reject(new TypeError('Failed to fetch: ' + r.error)); return; }
             resolve(new Response(r));
           });
-        } catch (e) { reject(e); }
+        } catch (e) { settled = true; reject(e); }
       });
     }
     if (typeof globalThis.fetch !== 'function') { globalThis.fetch = fetch; }
