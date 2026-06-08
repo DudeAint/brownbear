@@ -83,6 +83,12 @@
             throw new Error("getRandomValues does not support 64-bit arrays");
           }
           var byteLen = typedArray.length * (typedArray.BYTES_PER_ELEMENT || 1);
+          // Web Crypto quota: >65536 bytes must FAIL CLOSED (never silently zero-fill → weak randomness).
+          if (byteLen > 65536) {
+            var qErr = new Error("getRandomValues: quota (65536 bytes) exceeded");
+            qErr.name = "QuotaExceededError";
+            throw qErr;
+          }
           var bytes = __bb_crypto_random(byteLen) || [];
           var view = new Uint8Array(typedArray.buffer, typedArray.byteOffset || 0, byteLen);
           for (var i = 0; i < byteLen; i++) { view[i] = bytes[i] & 0xff; }
@@ -263,6 +269,47 @@
     if (typeof globalThis.Headers !== 'function') { globalThis.Headers = Headers; }
     if (typeof globalThis.Response !== 'function') { globalThis.Response = Response; }
 
+    // FormData — JSC has no DOM, but extensions (e.g. Grammarly) construct FormData for fetch/XHR
+    // bodies; without it `new FormData()` throws "Can't find variable: FormData". __bbSerialize lets the
+    // fetch shim above turn it into a real multipart/form-data body.
+    if (typeof globalThis.FormData !== 'function') {
+      var FormDataPoly = function () { this._e = []; };   // entries: [name, value, filename?]
+      FormDataPoly.prototype.append = function (n, v, fn) { this._e.push([String(n), v, fn]); };
+      FormDataPoly.prototype.set = function (n, v, fn) {
+        n = String(n); var done = false, out = [];
+        for (var i = 0; i < this._e.length; i++) {
+          if (this._e[i][0] === n) { if (!done) { out.push([n, v, fn]); done = true; } } else { out.push(this._e[i]); }
+        }
+        if (!done) { out.push([n, v, fn]); }
+        this._e = out;
+      };
+      FormDataPoly.prototype['delete'] = function (n) { n = String(n); this._e = this._e.filter(function (x) { return x[0] !== n; }); };
+      FormDataPoly.prototype.get = function (n) { n = String(n); for (var i = 0; i < this._e.length; i++) { if (this._e[i][0] === n) { return this._e[i][1]; } } return null; };
+      FormDataPoly.prototype.getAll = function (n) { n = String(n); return this._e.filter(function (x) { return x[0] === n; }).map(function (x) { return x[1]; }); };
+      FormDataPoly.prototype.has = function (n) { return this.get(String(n)) !== null; };
+      FormDataPoly.prototype.forEach = function (cb, t) { for (var i = 0; i < this._e.length; i++) { cb.call(t, this._e[i][1], this._e[i][0], this); } };
+      FormDataPoly.prototype.keys = function () { return this._e.map(function (x) { return x[0]; }); };
+      FormDataPoly.prototype.values = function () { return this._e.map(function (x) { return x[1]; }); };
+      FormDataPoly.prototype.entries = function () { return this._e.map(function (x) { return [x[0], x[1]]; }); };
+      FormDataPoly.prototype.__bbSerialize = function () {
+        var boundary = '----BrownBearFormBoundary' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+        var parts = '';
+        for (var i = 0; i < this._e.length; i++) {
+          var name = this._e[i][0], value = this._e[i][1], filename = this._e[i][2];
+          parts += '--' + boundary + '\r\n';
+          if (value && typeof value === 'object' && (filename || typeof value.name === 'string')) {
+            parts += 'Content-Disposition: form-data; name="' + name + '"; filename="' + (filename || value.name || 'blob') + '"\r\n';
+            parts += 'Content-Type: ' + (value.type || 'application/octet-stream') + '\r\n\r\n';
+            parts += (typeof value === 'string' ? value : (value._text || '')) + '\r\n';
+          } else {
+            parts += 'Content-Disposition: form-data; name="' + name + '"\r\n\r\n' + String(value) + '\r\n';
+          }
+        }
+        return { body: parts + '--' + boundary + '--\r\n', contentType: 'multipart/form-data; boundary=' + boundary };
+      };
+      globalThis.FormData = FormDataPoly;
+    }
+
     function fetch(input, init) {
       init = init || {};
       var url, method = 'GET', headers = {}, body = null, bodyEncoding = 'utf8';
@@ -276,8 +323,19 @@
         } else { headers = init.headers; }                                        // a plain object
       }
       if (init.body != null) {
+        var hasCT = false;
+        for (var hk in headers) { if (hk.toLowerCase() === 'content-type') { hasCT = true; break; } }
         if (typeof init.body === 'string') { body = init.body; bodyEncoding = 'utf8'; }
-        else if (init.body instanceof ArrayBuffer || (init.body.buffer instanceof ArrayBuffer)) {
+        else if (typeof URLSearchParams === 'function' && init.body instanceof URLSearchParams) {
+          // x-www-form-urlencoded — serialize via the params' own toString, not JSON.
+          body = init.body.toString(); bodyEncoding = 'utf8';
+          if (!hasCT) { headers['Content-Type'] = 'application/x-www-form-urlencoded;charset=UTF-8'; }
+        } else if (typeof FormData === 'function' && init.body instanceof FormData
+                   && typeof init.body.__bbSerialize === 'function') {
+          var fd = init.body.__bbSerialize();   // multipart/form-data with a boundary
+          body = fd.body; bodyEncoding = 'utf8';
+          if (!hasCT) { headers['Content-Type'] = fd.contentType; }
+        } else if (init.body instanceof ArrayBuffer || (init.body.buffer instanceof ArrayBuffer)) {
           var u8 = init.body instanceof ArrayBuffer ? new Uint8Array(init.body)
                  : new Uint8Array(init.body.buffer, init.body.byteOffset || 0, init.body.byteLength);
           var bin = '';
@@ -872,6 +930,19 @@
     getAllFrames: function (details, cb) { if (typeof cb === 'function') { cb([]); } return Promise.resolve([]); }
   };
 
+  // ---------------------------------------------------------------- chrome.webRequest (observe-only no-op)
+  // WebKit can't intercept network requests, so these listeners never fire — but the event objects must
+  // EXIST so extensions that register handlers (ScriptCat, ad blockers) don't throw "undefined is not an
+  // object" on access. Blocking/redirect is handled via declarativeNetRequest where expressible.
+  var webRequest = {
+    onBeforeRequest: makeEvent([]), onBeforeSendHeaders: makeEvent([]), onSendHeaders: makeEvent([]),
+    onHeadersReceived: makeEvent([]), onBeforeRedirect: makeEvent([]), onAuthRequired: makeEvent([]),
+    onResponseStarted: makeEvent([]), onCompleted: makeEvent([]), onErrorOccurred: makeEvent([]),
+    onActionIgnored: makeEvent([]),
+    handlerBehaviorChanged: function (cb) { if (typeof cb === 'function') { cb(); } return Promise.resolve(); },
+    MAX_HANDLER_BEHAVIOR_CHANGED_CALLS_PER_10_MINUTES: 20
+  };
+
   // ---------------------------------------------------------------- chrome.scripting
   function scriptingCall(method, args) {
     return new Promise(function (resolve) {
@@ -1138,6 +1209,7 @@
     declarativeNetRequest: declarativeNetRequest,
     userScripts: userScripts,
     webNavigation: webNavigation,
+    webRequest: webRequest,
     alarms: alarms,
     commands: commands,
     contextMenus: contextMenus,
