@@ -81,8 +81,9 @@ final class WebExtensionCookieObserver: NSObject, WKHTTPCookieStoreObserver {
         let next = Self.index(newCookies)
         for (key, old) in snapshot {
             if let current = next[key] {
-                if current.value != old.value {
-                    // A value change is a remove (cause "overwrite") then an add (cause "explicit").
+                if Self.attributesDiffer(old, current) {
+                    // Any observable change (value OR secure/httpOnly/sameSite/expiry) is a remove
+                    // ("overwrite") then an add ("explicit"); Chrome fires onChanged for these too.
                     post(cookie: old, removed: true, cause: "overwrite")
                     post(cookie: current, removed: false, cause: "explicit")
                 }
@@ -104,6 +105,18 @@ final class WebExtensionCookieObserver: NSObject, WKHTTPCookieStoreObserver {
         ]
         NotificationCenter.default.post(name: .brownBearExtensionCookieDidChange,
                                         object: nil, userInfo: ["change": record])
+    }
+
+    /// Whether two cookies sharing the same (name, domain, path) Key differ in any attribute
+    /// chrome.cookies.onChanged should report. Path/name/domain are part of the Key (a change there is
+    /// already a remove+add), so this compares value, secure, httpOnly, sameSite, and expiry. Pure +
+    /// unit-tested — the old code only compared `value`, so secure/expiry/etc. flips fired nothing.
+    static func attributesDiffer(_ a: HTTPCookie, _ b: HTTPCookie) -> Bool {
+        a.value != b.value
+            || a.isSecure != b.isSecure
+            || a.isHTTPOnly != b.isHTTPOnly
+            || a.expiresDate != b.expiresDate
+            || a.sameSitePolicy != b.sameSitePolicy
     }
 
     private static func index(_ cookies: [HTTPCookie]) -> [Key: HTTPCookie] {
