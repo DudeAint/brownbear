@@ -592,6 +592,9 @@
   // ---------------------------------------------------------------- chrome.storage
 
   function storageArea(areaName) {
+    // Every method supports BOTH the callback form and (MV3) the promise form — returning a Promise when
+    // no callback is passed. Without this, `await chrome.storage.local.get(...)` resolved to undefined,
+    // and timeout-wrapped reads (e.g. Grammarly's chrome.storage.managed.get) never settled.
     return {
       get: function (keys, cb) {
         var defaults = null;
@@ -601,25 +604,40 @@
         else if (typeof keys === 'string') { keyList = [keys]; }
         else if (Array.isArray(keys)) { keyList = keys.slice(); }
         else if (typeof keys === 'object') { defaults = keys; keyList = Object.keys(keys); }
-        __bb_storage_get(areaName, keyList === null ? 'null' : JSON.stringify(keyList), function (resJSON) {
-          var raw = parseJSON(resJSON) || {};      // key -> JSON-encoded value
-          var out = {};
-          if (defaults) { for (var dk in defaults) { if (Object.prototype.hasOwnProperty.call(defaults, dk)) { out[dk] = deepClone(defaults[dk]); } } }
-          for (var k in raw) { if (Object.prototype.hasOwnProperty.call(raw, k)) { out[k] = parseJSON(raw[k]); } }
-          if (typeof cb === 'function') { cb(out); }
+        return new Promise(function (resolve) {
+          __bb_storage_get(areaName, keyList === null ? 'null' : JSON.stringify(keyList), function (resJSON) {
+            var raw = parseJSON(resJSON) || {};      // key -> JSON-encoded value
+            var out = {};
+            if (defaults) { for (var dk in defaults) { if (Object.prototype.hasOwnProperty.call(defaults, dk)) { out[dk] = deepClone(defaults[dk]); } } }
+            for (var k in raw) { if (Object.prototype.hasOwnProperty.call(raw, k)) { out[k] = parseJSON(raw[k]); } }
+            if (typeof cb === 'function') { cb(out); }
+            resolve(out);
+          });
         });
+      },
+      getBytesInUse: function (keys, cb) {
+        if (typeof keys === 'function') { cb = keys; }
+        // We don't track byte usage; report 0 (Chrome allows an approximate/zero value).
+        if (typeof cb === 'function') { cb(0); return undefined; }
+        return Promise.resolve(0);
       },
       set: function (items, cb) {
         var enc = {};
         for (var k in items) { if (Object.prototype.hasOwnProperty.call(items, k)) { enc[k] = JSON.stringify(items[k]); } }
-        __bb_storage_set(areaName, JSON.stringify(enc), function () { if (typeof cb === 'function') { cb(); } });
+        return new Promise(function (resolve) {
+          __bb_storage_set(areaName, JSON.stringify(enc), function () { if (typeof cb === 'function') { cb(); } resolve(); });
+        });
       },
       remove: function (keys, cb) {
         var list = Array.isArray(keys) ? keys : [keys];
-        __bb_storage_remove(areaName, JSON.stringify(list), function () { if (typeof cb === 'function') { cb(); } });
+        return new Promise(function (resolve) {
+          __bb_storage_remove(areaName, JSON.stringify(list), function () { if (typeof cb === 'function') { cb(); } resolve(); });
+        });
       },
       clear: function (cb) {
-        __bb_storage_clear(areaName, function () { if (typeof cb === 'function') { cb(); } });
+        return new Promise(function (resolve) {
+          __bb_storage_clear(areaName, function () { if (typeof cb === 'function') { cb(); } resolve(); });
+        });
       },
       // chrome.storage.session.setAccessLevel: controls content-script visibility of session storage.
       // BrownBear doesn't expose a separate untrusted tier, so this is a no-op that resolves — its
@@ -943,6 +961,25 @@
     MAX_HANDLER_BEHAVIOR_CHANGED_CALLS_PER_10_MINUTES: 20
   };
 
+  // ---------------------------------------------------------------- chrome.offscreen (unsupported)
+  // Offscreen documents need a hidden DOM host iOS/WebKit can't give a headless worker. Present the API
+  // so an extension that calls chrome.offscreen.createDocument doesn't crash on it being undefined;
+  // createDocument rejects (well-behaved callers fall back, as ScriptCat already does). hasDocument is
+  // false and closeDocument is a no-op.
+  var offscreen = {
+    Reason: { AUDIO_PLAYBACK: 'AUDIO_PLAYBACK', BLOBS: 'BLOBS', CLIPBOARD: 'CLIPBOARD',
+              DISPLAY_MEDIA: 'DISPLAY_MEDIA', DOM_PARSER: 'DOM_PARSER', DOM_SCRAPING: 'DOM_SCRAPING',
+              GEOLOCATION: 'GEOLOCATION', IFRAME_SCRIPTING: 'IFRAME_SCRIPTING', LOCAL_STORAGE: 'LOCAL_STORAGE',
+              MATCH_MEDIA: 'MATCH_MEDIA', TESTING: 'TESTING', USER_MEDIA: 'USER_MEDIA', WORKERS: 'WORKERS' },
+    createDocument: function (_opts, cb) {
+      var err = new Error('chrome.offscreen is not supported on this platform');
+      if (typeof cb === 'function') { cb(); return undefined; }
+      return Promise.reject(err);
+    },
+    closeDocument: function (cb) { if (typeof cb === 'function') { cb(); return undefined; } return Promise.resolve(); },
+    hasDocument: function (cb) { if (typeof cb === 'function') { cb(false); return undefined; } return Promise.resolve(false); }
+  };
+
   // ---------------------------------------------------------------- chrome.scripting
   function scriptingCall(method, args) {
     return new Promise(function (resolve) {
@@ -1210,6 +1247,7 @@
     userScripts: userScripts,
     webNavigation: webNavigation,
     webRequest: webRequest,
+    offscreen: offscreen,
     alarms: alarms,
     commands: commands,
     contextMenus: contextMenus,
