@@ -389,11 +389,20 @@
     }
     function GM_setValues(obj) {
       var enc = {};
-      _Object.keys(obj).forEach(function (k) { enc[k] = _JSON.stringify(obj[k]); cache[k] = enc[k]; });
+      _Object.keys(obj).forEach(function (k) {
+        var oldValue = (k in cache) ? safeParse(cache[k]) : undefined;
+        enc[k] = _JSON.stringify(obj[k]);
+        cache[k] = enc[k];
+        fireValueChange(k, oldValue, obj[k], false);   // bulk path must fire listeners like the singular
+      });
       call("GM_setValues", { values: enc });
     }
     function GM_deleteValues(keys) {
-      keys.forEach(function (k) { delete cache[k]; });
+      keys.forEach(function (k) {
+        var oldValue = (k in cache) ? safeParse(cache[k]) : undefined;
+        delete cache[k];
+        fireValueChange(k, oldValue, undefined, false);
+      });
       call("GM_deleteValues", { keys: keys });
     }
     function GM_addStyle(css) {

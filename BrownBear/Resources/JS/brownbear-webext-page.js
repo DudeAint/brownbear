@@ -536,7 +536,8 @@
     scripting: scriptingApi(),
     i18n: {
       getMessage: i18nGetMessage,
-      getUILanguage: function () { return (W.navigator && W.navigator.language) || "en"; }
+      getUILanguage: function () { return (W.navigator && W.navigator.language) || "en"; },
+      getAcceptLanguages: function (cb) { var langs = [(W.navigator && W.navigator.language) || "en"]; if (typeof cb === "function") { cb(langs); return undefined; } return _Promise.resolve(langs); }
     },
     extension: { getURL: getURL, inIncognitoContext: false }
   };

@@ -186,4 +186,27 @@
       toString: function () { return this.href; }
     };
   }
+
+  // FormData — background userscripts that build form bodies (for GM_xmlhttpRequest) need it; JSC has none.
+  if (typeof g.FormData !== 'function') {
+    var FD = function () { this._e = []; };
+    FD.prototype.append = function (n, v, fn) { this._e.push([String(n), v, fn]); };
+    FD.prototype.set = function (n, v, fn) {
+      n = String(n); var done = false, out = [];
+      for (var i = 0; i < this._e.length; i++) {
+        if (this._e[i][0] === n) { if (!done) { out.push([n, v, fn]); done = true; } } else { out.push(this._e[i]); }
+      }
+      if (!done) { out.push([n, v, fn]); }
+      this._e = out;
+    };
+    FD.prototype['delete'] = function (n) { n = String(n); this._e = this._e.filter(function (x) { return x[0] !== n; }); };
+    FD.prototype.get = function (n) { n = String(n); for (var i = 0; i < this._e.length; i++) { if (this._e[i][0] === n) { return this._e[i][1]; } } return null; };
+    FD.prototype.getAll = function (n) { n = String(n); return this._e.filter(function (x) { return x[0] === n; }).map(function (x) { return x[1]; }); };
+    FD.prototype.has = function (n) { return this.get(String(n)) !== null; };
+    FD.prototype.forEach = function (cb, t) { for (var i = 0; i < this._e.length; i++) { cb.call(t, this._e[i][1], this._e[i][0], this); } };
+    FD.prototype.keys = function () { return this._e.map(function (x) { return x[0]; }); };
+    FD.prototype.values = function () { return this._e.map(function (x) { return x[1]; }); };
+    FD.prototype.entries = function () { return this._e.map(function (x) { return [x[0], x[1]]; }); };
+    g.FormData = FD;
+  }
 })();

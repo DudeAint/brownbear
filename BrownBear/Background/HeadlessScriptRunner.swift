@@ -138,8 +138,19 @@ final class HeadlessScriptRunner: @unchecked Sendable {
           if (!this.crypto) {
             this.crypto = {
               getRandomValues: function (arr) {
-                var bytes = __bbCryptoRandom((arr && arr.length) || 0);
-                for (var i = 0; i < bytes.length && i < arr.length; i++) { arr[i] = bytes[i]; }
+                if (!arr || typeof arr.length !== 'number') {
+                  throw new TypeError('getRandomValues expects an integer TypedArray');
+                }
+                var byteLen = arr.length * (arr.BYTES_PER_ELEMENT || 1);
+                // Web Crypto quota: >65536 bytes fails closed (never silently short/zero-fill).
+                if (byteLen > 65536) {
+                  var qErr = new Error('getRandomValues: quota (65536 bytes) exceeded');
+                  qErr.name = 'QuotaExceededError';
+                  throw qErr;
+                }
+                var bytes = __bbCryptoRandom(byteLen);
+                var view = new Uint8Array(arr.buffer, arr.byteOffset || 0, byteLen);
+                for (var i = 0; i < byteLen && i < bytes.length; i++) { view[i] = bytes[i] & 0xff; }
                 return arr;
               },
               randomUUID: function () { return __bbCryptoUUID(); },
@@ -371,15 +382,24 @@ final class HeadlessScriptRunner: @unchecked Sendable {
             }
             let semaphore = DispatchSemaphore(value: 0)
             var source: String?
+            // Bound the wait (and the URLSession timeout) to the remaining run budget, reserving the same
+            // ~2s headroom GM_xmlhttpRequest uses — otherwise a slow/hung host blocks the JSContext queue
+            // up to 20s past the deadline, starving the post-run value flush + setTaskCompleted.
+            let waitBudget = max(0.5, deadline.timeIntervalSinceNow - 2.0)
             var request = URLRequest(url: url)
-            request.timeoutInterval = 20
+            request.timeoutInterval = min(20, waitBudget)
             let task = URLSession.shared.dataTask(with: request) { data, _, _ in
                 if let data { source = String(data: data, encoding: .utf8) }
                 semaphore.signal()
             }
             task.delegate = GMRedirectGuard(connects: connects, pageHost: nil)
             task.resume()
-            semaphore.wait()
+            if semaphore.wait(timeout: .now() + waitBudget) == .timedOut {
+                task.cancel()
+                scratch.logs.append(self.log(script, .warn,
+                    "importScripts timed out (deadline): \(url.host ?? urlString)"))
+                return nil
+            }
             return source
         }
         context.setObject(importScript, forKeyedSubscript: "__bbImportScript" as NSString)
