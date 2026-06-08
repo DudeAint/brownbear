@@ -21,11 +21,12 @@ final class WebViewConfigurationFactory {
     /// The persistent store every normal tab shares (cookies/cache survive launches).
     private let websiteDataStore = WKWebsiteDataStore.default()
 
-    /// One non-persistent store shared by all private tabs: they share a cookie jar with each other
-    /// (so a login flow that spans a popup works) but are fully isolated from normal browsing, and
-    /// everything is discarded when the store is released or explicitly wiped on closing the last
-    /// private tab. Created lazily so apps that never use private mode pay nothing.
-    private lazy var privateDataStore = WKWebsiteDataStore.nonPersistent()
+    /// The non-persistent store shared by the CURRENT batch of private tabs (they share a cookie jar so
+    /// a login flow spanning a popup works, fully isolated from normal browsing). Made disposable rather
+    /// than wiped-in-place: closing the last private tab detaches this reference and wipes the detached
+    /// object, so a brand-new private session always gets a FRESH store and can never share one with a
+    /// pending wipe. nil until the first private tab is created.
+    private var privateDataStore: WKWebsiteDataStore?
 
     init(injection: InjectionOrchestrator) {
         self.injection = injection
@@ -37,7 +38,13 @@ final class WebViewConfigurationFactory {
         let config = WKWebViewConfiguration()
         config.processPool = processPool
         config.userContentController = injection.userContentController
-        config.websiteDataStore = isPrivate ? privateDataStore : websiteDataStore
+        if isPrivate {
+            let store = privateDataStore ?? WKWebsiteDataStore.nonPersistent()
+            privateDataStore = store
+            config.websiteDataStore = store
+        } else {
+            config.websiteDataStore = websiteDataStore
+        }
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
         config.suppressesIncrementalRendering = false
@@ -63,11 +70,19 @@ final class WebViewConfigurationFactory {
         }
     }
 
-    /// Erase all data (cookies, cache, local storage) from the private store. Called when the last
-    /// private tab closes so a private session leaves nothing behind, even though the store object
-    /// itself is reused for the app's lifetime.
-    func wipePrivateData() async {
-        let types = WKWebsiteDataStore.allWebsiteDataTypes()
-        await privateDataStore.removeData(ofTypes: types, modifiedSince: .distantPast)
+    /// Synchronously detach the current private store (so any NEW private tab gets a fresh one) and
+    /// return it for wiping. Called at last-private-tab close BEFORE the async wipe, so a private tab
+    /// opened in the same run loop can never end up sharing a store that's about to be erased. Returns
+    /// nil if no private store was ever created.
+    func detachPrivateDataStoreForWipe() -> WKWebsiteDataStore? {
+        let old = privateDataStore
+        privateDataStore = nil
+        return old
+    }
+
+    /// Erase all data (cookies, cache, local storage) from a detached private store so a private
+    /// session leaves nothing behind. Pass the object returned by detachPrivateDataStoreForWipe().
+    func wipePrivateData(_ store: WKWebsiteDataStore) async {
+        await store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
     }
 }

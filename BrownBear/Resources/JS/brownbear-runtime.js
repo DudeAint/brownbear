@@ -239,9 +239,27 @@
       anonymous: !!details.anonymous
     };
     if (details.timeout) { req.timeout = details.timeout; }
-    if (typeof details.data === "string") { req.data = details.data; }
-    else if (details.data != null) {
-      try { req.data = _JSON.stringify(details.data); } catch (e) { req.data = String(details.data); }
+    req.headers = _Object.assign({}, details.headers || {});   // clone so we can default Content-Type
+    function hasContentType() {
+      for (var hk in req.headers) { if (hk.toLowerCase() === "content-type") { return true; } }
+      return false;
+    }
+    var data = details.data;
+    if (typeof data === "string") { req.data = data; }
+    else if (data != null && typeof URLSearchParams === "function" && data instanceof URLSearchParams) {
+      req.data = data.toString();   // x-www-form-urlencoded, NOT JSON
+      if (!hasContentType()) { req.headers["Content-Type"] = "application/x-www-form-urlencoded;charset=UTF-8"; }
+    } else if (data != null && typeof FormData === "function" && data instanceof FormData) {
+      // Serialize text fields as urlencoded (file parts aren't supported over this sync path).
+      var pairs = [];
+      data.forEach(function (v, k) { if (typeof v === "string") { pairs.push(encodeURIComponent(k) + "=" + encodeURIComponent(v)); } });
+      req.data = pairs.join("&");
+      if (!hasContentType()) { req.headers["Content-Type"] = "application/x-www-form-urlencoded;charset=UTF-8"; }
+    } else if (data != null) {
+      // Don't JSON.stringify ArrayBuffers/typed arrays into "{}" — send their string form; a real string
+      // body should be passed as a string (handled above). Objects still serialize to JSON.
+      if (data instanceof ArrayBuffer || (data.buffer instanceof ArrayBuffer)) { req.data = String(data); }
+      else { try { req.data = _JSON.stringify(data); } catch (e) { req.data = String(data); } }
     }
     return req;
   }

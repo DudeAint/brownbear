@@ -216,6 +216,9 @@ final class TabManager {
     }
 
     private func wipePrivateDataStore() {
-        Task { await configurationFactory.wipePrivateData() }
+        // Detach synchronously NOW (so a private tab opened in this same run loop gets a fresh store and
+        // can't be caught by the wipe), then erase the detached store off the main actor.
+        guard let detached = configurationFactory.detachPrivateDataStoreForWipe() else { return }
+        Task { await configurationFactory.wipePrivateData(detached) }
     }
 }
