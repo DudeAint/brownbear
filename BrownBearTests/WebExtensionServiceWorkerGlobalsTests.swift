@@ -187,8 +187,13 @@ final class WebExtensionServiceWorkerGlobalsTests: XCTestCase {
             var pk = await crypto.subtle.importKey('raw', enc.encode('password'), { name: 'PBKDF2' }, false, ['deriveBits']);
             var bits = await crypto.subtle.deriveBits(
                        { name: 'PBKDF2', salt: enc.encode('salt'), iterations: 1000, hash: 'SHA-256' }, pk, 256);
+            var ck = await crypto.subtle.importKey('raw', new Uint8Array(16), { name: 'AES-CBC' }, false, ['encrypt', 'decrypt']);
+            var civ = crypto.getRandomValues(new Uint8Array(16));
+            var cbcCt = await crypto.subtle.encrypt({ name: 'AES-CBC', iv: civ }, ck, enc.encode('cbc-msg'));
+            var cbcPt = await crypto.subtle.decrypt({ name: 'AES-CBC', iv: civ }, ck, cbcCt);
             sendResponse({ sigLen: sig.byteLength, verifyOk: ok, verifyBad: bad,
-                           roundtrip: new TextDecoder().decode(pt), bitsLen: bits.byteLength });
+                           roundtrip: new TextDecoder().decode(pt), bitsLen: bits.byteLength,
+                           cbc: new TextDecoder().decode(cbcPt) });
           })().catch(function (e) { sendResponse({ error: String((e && e.message) || e) }); });
           return true;
         });
@@ -202,6 +207,7 @@ final class WebExtensionServiceWorkerGlobalsTests: XCTestCase {
         XCTAssertEqual(r["verifyBad"] as? Bool, false)
         XCTAssertEqual(r["roundtrip"] as? String, "secret-msg")
         XCTAssertEqual(r["bitsLen"] as? Int, 32, "256-bit derived = 32 bytes")
+        XCTAssertEqual(r["cbc"] as? String, "cbc-msg", "AES-CBC encrypt→decrypt round-trips")
     }
 
     func testRegisterContentScriptsExistsAndGatesOnPermission() async throws {

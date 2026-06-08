@@ -198,9 +198,12 @@
           encrypt: function (algorithm, key, data) {
             return new Promise(function (resolve, reject) {
               try {
-                var a = __subAlgo(algorithm);
-                if ((a.name || '').toUpperCase() !== 'AES-GCM') { reject(new Error('encrypt: only AES-GCM is supported')); return; }
-                var r = __subCall('aesGcmEncrypt', { key: key.__raw, data: __subB64(data), iv: __subB64(a.iv), additionalData: a.additionalData ? __subB64(a.additionalData) : '' });
+                var a = __subAlgo(algorithm), name = (a.name || '').toUpperCase(), r;
+                if (name === 'AES-GCM') {
+                  r = __subCall('aesGcmEncrypt', { key: key.__raw, data: __subB64(data), iv: __subB64(a.iv), additionalData: a.additionalData ? __subB64(a.additionalData) : '' });
+                } else if (name === 'AES-CBC') {
+                  r = __subCall('aesCbcEncrypt', { key: key.__raw, data: __subB64(data), iv: __subB64(a.iv) });
+                } else { reject(new Error('encrypt: unsupported algorithm ' + name)); return; }
                 resolve(__subFromB64(r.data).buffer);
               } catch (e) { reject(e); }
             });
@@ -208,9 +211,12 @@
           decrypt: function (algorithm, key, data) {
             return new Promise(function (resolve, reject) {
               try {
-                var a = __subAlgo(algorithm);
-                if ((a.name || '').toUpperCase() !== 'AES-GCM') { reject(new Error('decrypt: only AES-GCM is supported')); return; }
-                var r = __subCall('aesGcmDecrypt', { key: key.__raw, data: __subB64(data), iv: __subB64(a.iv), additionalData: a.additionalData ? __subB64(a.additionalData) : '' });
+                var a = __subAlgo(algorithm), name = (a.name || '').toUpperCase(), r;
+                if (name === 'AES-GCM') {
+                  r = __subCall('aesGcmDecrypt', { key: key.__raw, data: __subB64(data), iv: __subB64(a.iv), additionalData: a.additionalData ? __subB64(a.additionalData) : '' });
+                } else if (name === 'AES-CBC') {
+                  r = __subCall('aesCbcDecrypt', { key: key.__raw, data: __subB64(data), iv: __subB64(a.iv) });
+                } else { reject(new Error('decrypt: unsupported algorithm ' + name)); return; }
                 resolve(__subFromB64(r.data).buffer);
               } catch (e) { reject(e); }
             });

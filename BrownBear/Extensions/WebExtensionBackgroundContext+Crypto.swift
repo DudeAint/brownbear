@@ -121,6 +121,14 @@ extension WebExtensionBackgroundContext {
                                                 tag: combined.suffix(16))
                 return okData(try AES.GCM.open(box, using: SymmetricKey(data: bytes("key")),
                                                authenticating: bytes("additionalData")))
+            case "aesCbcEncrypt":
+                let out = Self.aesCBC(operation: CCOperation(kCCEncrypt),
+                                      key: bytes("key"), iv: bytes("iv"), data: bytes("data"))
+                return out.map(okData) ?? fail("AES-CBC encrypt failed")
+            case "aesCbcDecrypt":
+                let out = Self.aesCBC(operation: CCOperation(kCCDecrypt),
+                                      key: bytes("key"), iv: bytes("iv"), data: bytes("data"))
+                return out.map(okData) ?? fail("AES-CBC decrypt failed")
             case "pbkdf2":
                 return Self.pbkdf2(password: bytes("password"), salt: bytes("salt"),
                                    iterations: (p["iterations"] as? Int) ?? 100_000,
@@ -144,6 +152,27 @@ extension WebExtensionBackgroundContext {
         } catch {
             return fail(String(describing: error))
         }
+    }
+
+    /// AES-CBC with PKCS#7 padding (CryptoKit has no CBC). iv is 16 bytes; key is 16/24/32 bytes.
+    private static func aesCBC(operation: CCOperation, key: Data, iv: Data, data: Data) -> Data? {
+        guard iv.count == kCCBlockSizeAES128, [16, 24, 32].contains(key.count) else { return nil }
+        let outLen = data.count + kCCBlockSizeAES128
+        var out = Data(count: outLen)
+        var moved = 0
+        let status = out.withUnsafeMutableBytes { outPtr in
+            data.withUnsafeBytes { dataPtr in
+                iv.withUnsafeBytes { ivPtr in
+                    key.withUnsafeBytes { keyPtr in
+                        CCCrypt(operation, CCAlgorithm(kCCAlgorithmAES), CCOptions(kCCOptionPKCS7Padding),
+                                keyPtr.baseAddress, key.count, ivPtr.baseAddress,
+                                dataPtr.baseAddress, data.count,
+                                outPtr.baseAddress, outLen, &moved)
+                    }
+                }
+            }
+        }
+        return status == kCCSuccess ? out.prefix(moved) : nil
     }
 
     private static func pbkdf2(password: Data, salt: Data, iterations: Int, bits: Int, hash: String) -> Data? {
