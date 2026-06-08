@@ -33,7 +33,8 @@ extension WebExtensionBackgroundContext {
         let activeTabGrant = manifest.permissions.contains("activeTab")
             && record["id"] as? Int == host.webExtActionActiveTabId()
         if !activeTabGrant {
-            let matcher = URLMatcher(matches: manifest.effectiveHostPatterns,
+            // host_permissions ONLY — a content_scripts.matches host is not host access (Chrome).
+            let matcher = URLMatcher(matches: manifest.hostPermissions,
                                      includes: [], excludes: [], excludeMatches: [])
             guard matcher.matches(tabURL) else { return denied }
         }
