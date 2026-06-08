@@ -479,4 +479,47 @@ final class WebExtensionServiceWorkerGlobalsTests: XCTestCase {
         XCTAssertEqual(r["period"] as? Double, 1.0, "periodInMinutes 0.1 must clamp to Chrome's 1-minute minimum")
         XCTAssertEqual(r["hasScheduled"] as? Bool, true, "the Alarm object must carry a numeric scheduledTime")
     }
+
+    // MARK: - crypto.subtle ECDSA (P-256 / P-384)
+
+    /// ECDSA sign/verify round-trips, a tampered message is rejected, the public key round-trips through
+    /// JWK export→import and still verifies, and P-384 works too — the asymmetric WebCrypto surface
+    /// extensions use for JWT/OAuth. (crypto.subtle is async; the worker awaits then answers.)
+    func testEcdsaSignVerifyAndJwkRoundTrip() async throws {
+        let context = try makeContext(background: """
+        chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+          if (!msg || msg.check !== 'ecdsa') { return; }
+          (async function () {
+            try {
+              var enc = new TextEncoder();
+              var data = enc.encode('hello ecdsa');
+              var pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+              var sig = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, pair.privateKey, data);
+              var okSelf = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, pair.publicKey, sig, data);
+              var okTamper = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, pair.publicKey, sig, enc.encode('tampered'));
+              var jwk = await crypto.subtle.exportKey('jwk', pair.publicKey);
+              var imported = await crypto.subtle.importKey('jwk', jwk, { name: 'ECDSA', namedCurve: 'P-256' }, true, ['verify']);
+              var okJwk = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, imported, sig, data);
+              var p384 = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-384' }, true, ['sign', 'verify']);
+              var sig384 = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-384' }, p384.privateKey, data);
+              var ok384 = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-384' }, p384.publicKey, sig384, data);
+              sendResponse({ okSelf: okSelf, okTamper: okTamper, okJwk: okJwk, ok384: ok384,
+                             kty: jwk.kty, crv: jwk.crv, sigLen: sig.byteLength });
+            } catch (e) { sendResponse({ error: String(e) }); }
+          })();
+          return true;   // async response
+        });
+        """)
+        defer { context.shutdown() }
+        let response = await context.deliverRuntimeMessage(message: ["check": "ecdsa"], sender: [:])
+        let r = try XCTUnwrap(response?["value"] as? [String: Any], "the worker must answer")
+        XCTAssertNil(r["error"], "ECDSA should not error: \(r["error"] ?? "")")
+        XCTAssertEqual(r["okSelf"] as? Bool, true, "a fresh signature must verify")
+        XCTAssertEqual(r["okTamper"] as? Bool, false, "a tampered message must NOT verify")
+        XCTAssertEqual(r["okJwk"] as? Bool, true, "the JWK-round-tripped public key must still verify")
+        XCTAssertEqual(r["ok384"] as? Bool, true, "P-384 sign/verify must round-trip")
+        XCTAssertEqual(r["kty"] as? String, "EC")
+        XCTAssertEqual(r["crv"] as? String, "P-256")
+        XCTAssertEqual(r["sigLen"] as? Int, 64, "a P-256 ECDSA signature is raw r||s = 64 bytes")
+    }
 }
