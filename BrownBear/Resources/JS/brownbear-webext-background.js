@@ -250,11 +250,15 @@
         for (var i = 0; i < arguments.length; i++) {
           var spec = String(arguments[i]);
           var src = __bb_import_script(spec);
-          if (typeof src === 'string') {
-            (0, eval)(src);
-          } else {
+          if (typeof src !== 'string') {
             throw new Error("importScripts failed to load: " + spec);
           }
+          // Evaluate in the worker's GLOBAL scope (shared lexical env) via native evaluateScript, NOT
+          // indirect (0,eval): a real worker shares ONE global scope across importScripts'd scripts, so
+          // a chunk's top-level let/const/class must be visible to other chunks. (0,eval) scoped those
+          // to the eval, breaking bundles that split shared top-level symbols across chunks.
+          var err = __bb_eval_global(src, spec);
+          if (err) { throw new Error("importScripts error in " + spec + ": " + err); }
         }
       };
     }

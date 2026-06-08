@@ -78,6 +78,25 @@ extension WebExtensionBackgroundContext {
             return source
         }
         context.setObject(importScript, forKeyedSubscript: "__bb_import_script" as NSString)
+
+        // Evaluate an importScripts chunk in the worker's GLOBAL scope. A real service worker shares ONE
+        // global lexical environment across importScripts'd scripts, so a chunk's top-level
+        // let/const/class (not just var/function) is visible to other chunks and the main worker. The JS
+        // shim's indirect `(0,eval)(src)` scopes let/const/class to the eval, so bundles whose chunks
+        // share top-level symbols broke (Violentmonkey's `M`, Best AdBlocker's `fn` declared with
+        // let/const). JSContext.evaluateScript puts top-level lexical declarations into the SHARED global
+        // lexical env, fixing cross-chunk references. Returns the exception text, or nil on success.
+        let evalGlobal: @convention(block) (String, String) -> String? = { [weak self] src, sourceLabel in
+            guard let self, let ctx = self.context else { return "service worker context is gone" }
+            let url = URL(string: "brownbear://webext/\(self.extensionID)/\(sourceLabel)")
+            ctx.evaluateScript(src, withSourceURL: url)
+            if let exception = ctx.exception {
+                ctx.exception = nil   // consume so it doesn't bleed into the next evaluation
+                return exception.toString() ?? "importScripts chunk threw"
+            }
+            return nil
+        }
+        context.setObject(evalGlobal, forKeyedSubscript: "__bb_eval_global" as NSString)
     }
 
     // MARK: - crypto.subtle (symmetric)

@@ -38,7 +38,9 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
     private var grantedPermissions: Set<String> = []
 
     private let queue: DispatchQueue
-    private var context: JSContext?
+    /// Internal (not private) so +Crypto's importScripts shim can evaluate a loaded chunk in this
+    /// worker's GLOBAL scope (shared lexical env), like importScripts in a real service worker.
+    var context: JSContext?
     private var isAlive = true
 
     // Pending content→background message replies, keyed by a per-context response id.
