@@ -185,15 +185,25 @@ class WebExtensionRuntime {
     private func startContext(for ext: WebExtension) async {
         guard let manifest = ext.manifest, let background = manifest.background else { return }
 
+        // A module service worker is linked from its package in-context, so we pass the entry PATH
+        // (and the ESM linker runtime) instead of pre-reading a single classic source.
+        let isModuleWorker = background.isModule && background.serviceWorker != nil
         var source = ""
+        var moduleEntry: String?
         if let serviceWorker = background.serviceWorker {
-            source = await store.text(extensionID: ext.id, path: serviceWorker) ?? ""
+            if isModuleWorker {
+                moduleEntry = serviceWorker
+                // Confirm the entry exists up front so a typo'd manifest fails fast rather than at link.
+                guard await store.text(extensionID: ext.id, path: serviceWorker) != nil else { return }
+            } else {
+                source = await store.text(extensionID: ext.id, path: serviceWorker) ?? ""
+            }
         } else {
             for path in background.scripts {
                 if let text = await store.text(extensionID: ext.id, path: path) { source += text + "\n;\n" }
             }
         }
-        guard !source.isEmpty else { return }
+        guard isModuleWorker || !source.isEmpty else { return }
 
         let messages = await loadMessages(ext, manifest: manifest)
         let logStore = self.logStore
@@ -218,12 +228,25 @@ class WebExtensionRuntime {
         permissionsByExtension[ext.id] = granted
         context.setGrantedPermissions(granted)
         contexts[ext.id] = context
+        // Synchronous, path-contained package reader for the ESM linker (the store actor's
+        // `nonisolated fileSync` is safe to call off-actor on the worker's serial queue).
+        let moduleSource: (@Sendable (String) -> Data?)?
+        if moduleEntry != nil {
+            let storeRef = store
+            let extID = ext.id
+            moduleSource = { path in storeRef.fileSync(extensionID: extID, path: path) }
+        } else {
+            moduleSource = nil
+        }
         context.boot(runtimeJS: Self.backgroundRuntimeJS,
                      backgroundSource: source,
                      manifestJSON: ext.manifestJSON,
                      baseURL: ext.baseURLString,
                      messages: messages,
-                     firstInstall: Self.consumeFirstInstall(ext.id))
+                     firstInstall: Self.consumeFirstInstall(ext.id),
+                     moduleEntry: moduleEntry,
+                     esmRuntimeJS: moduleEntry != nil ? Self.esmRuntimeJS : nil,
+                     moduleSource: moduleSource)
     }
 
     /// True exactly once per extension id (its first-ever boot), so chrome.runtime.onInstalled fires
@@ -315,6 +338,24 @@ class WebExtensionRuntime {
         }
         return source
     }()
+
+    /// The ES-module linker runtime (acorn parser + brownbear-esm-linker), concatenated and loaded
+    /// once, lazily — only an extension with a module service worker pays the ~110 KB acorn parse.
+    /// acorn must precede the linker (the linker captures `globalThis.__bbAcorn` at load).
+    private static let esmRuntimeJS: String = {
+        let acorn = bundledJS("brownbear-acorn")
+        let linker = bundledJS("brownbear-esm-linker")
+        return acorn + "\n;\n" + linker
+    }()
+
+    private static func bundledJS(_ name: String) -> String {
+        guard let url = Bundle.main.url(forResource: name, withExtension: "js", subdirectory: nil)
+                ?? Bundle.main.url(forResource: name, withExtension: "js", subdirectory: "JS"),
+              let source = try? String(contentsOf: url, encoding: .utf8) else {
+            return "/* \(name).js missing */"
+        }
+        return source
+    }
 }
 
 // MARK: - WebExtensionPortBackgroundDeliverer

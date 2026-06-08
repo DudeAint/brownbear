@@ -22,7 +22,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
     let extensionID: String
     private let extensionName: String
     private let storage: WebExtensionStorage
-    private let logSink: @Sendable (LogEntry) -> Void
+    let logSink: @Sendable (LogEntry) -> Void
     /// chrome.tabs bridge to the browser, set by WebExtensionRuntime. Every use hops to the main actor
     /// (the native block runs on this context's serial queue; tab ops are MainActor/UIKit).
     weak var host: WebExtensionBridgeHost?
@@ -69,9 +69,17 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
 
     /// Boot the context: install the native bridge, evaluate the chrome.* runtime, then the
     /// extension's own background source, then fire onInstalled/onStartup.
+    /// `moduleEntry`/`esmRuntimeJS`/`moduleSource` are non-nil only for an MV3 `"type":"module"`
+    /// service worker. JSC ships no ES-module loader, so instead of evaluating `backgroundSource` as
+    /// a classic script we evaluate the ESM linker runtime (acorn + brownbear-esm-linker) and let it
+    /// resolve and run the entry module's graph from the package via `moduleSource` — see
+    /// runModuleWorker. `moduleSource` is a `@Sendable` synchronous reader (the store actor's
+    /// `nonisolated fileSync`), safe to call on this context's serial queue.
     func boot(runtimeJS: String, backgroundSource: String,
               manifestJSON: String, baseURL: String, messages: [String: String],
-              firstInstall: Bool = true) {
+              firstInstall: Bool = true,
+              moduleEntry: String? = nil, esmRuntimeJS: String? = nil,
+              moduleSource: (@Sendable (String) -> Data?)? = nil) {
         queue.async { [self] in
             guard let context = JSContext() else {
                 logSink(makeLog(.error, "could not create a background JS context"))
@@ -108,11 +116,17 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
             // IndexedDB engine + rehydrate this extension's snapshot before its background source runs.
             BrownBearIDBStore.shared.install(into: context, namespace: .ext(extensionID))
             context.evaluateScript(runtimeJS, withSourceURL: URL(string: "brownbear://webext/\(extensionID)/runtime.js"))
-            // Wrap in a function so a worker/background script using a top-level `return` (some
-            // ScriptCat-derived bundles do) is valid — a bare top-level `return` is a SyntaxError.
-            // Body starts on line 1 of the wrapper so error line numbers still line up.
-            let wrappedSource = "(function(){" + backgroundSource + "\n})();"
-            context.evaluateScript(wrappedSource, withSourceURL: URL(string: "brownbear://webext/\(extensionID)/background.js"))
+            if let moduleEntry, let esmRuntimeJS, let moduleSource {
+                // MV3 module service worker: link the module graph in-context (no native ESM loader).
+                runModuleWorker(in: context, esmRuntimeJS: esmRuntimeJS,
+                                entryPath: moduleEntry, moduleSource: moduleSource)
+            } else {
+                // Wrap in a function so a worker/background script using a top-level `return` (some
+                // ScriptCat-derived bundles do) is valid — a bare top-level `return` is a SyntaxError.
+                // Body starts on line 1 of the wrapper so error line numbers still line up.
+                let wrappedSource = "(function(){" + backgroundSource + "\n})();"
+                context.evaluateScript(wrappedSource, withSourceURL: URL(string: "brownbear://webext/\(extensionID)/background.js"))
+            }
 
             // onInstalled fires ONLY on the first-ever boot of this extension (Chrome contract);
             // onStartup fires on every boot. Firing 'install' on each launch/reload would re-run
@@ -537,7 +551,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
         JSONSanitize.string(value)
     }
 
-    private func makeLog(_ level: LogEntry.Level, _ message: String) -> LogEntry {
+    func makeLog(_ level: LogEntry.Level, _ message: String) -> LogEntry {
         LogEntry(scriptID: nil, scriptName: extensionName, level: level,
                  message: message, context: .background, source: .engine)
     }

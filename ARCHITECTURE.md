@@ -176,6 +176,15 @@ content-script injection in the isolated world, and `chrome.storage`/`runtime`/`
   (`WebExtensionBackgroundContext` + `WebExtensionRuntime` + `brownbear-webext-background.js`) with
   `chrome.runtime`/`storage`/`alarms`/`i18n`, `console.*`, `setTimeout`/`setInterval`, web globals
   (`fetch`/`URL`/`navigator`/`location`/Web Crypto), and **IndexedDB**.
+- **ES-module service workers** (`"background": { "type": "module" }`, e.g. uBlock Origin Lite):
+  JavaScriptCore on iOS has no native ES-module loader, and its private loader SPI (`JSScript`,
+  `moduleLoaderDelegate`) is absent from the public SDK, so we link the module graph in pure JS.
+  `brownbear-acorn.js` (vendored acorn) parses each module and `brownbear-esm-linker.js` AST-rewrites
+  its `import`/`export` into calls against a synchronous registry, resolving sibling modules from the
+  package on demand via a native reader (`WebExtensionStore.fileSync`, path-contained). The graph runs
+  inside the ordinary classic-script context — no private API. See `WebExtensionBackgroundContext+`
+  `ModuleWorker.swift`. Limitations: named-import cycles snapshot (CommonJS-cycle semantics; namespace
+  imports and re-exports stay live), and top-level `await` is unsupported (fails closed).
 - **IndexedDB in headless contexts**: JavaScriptCore ships no IndexedDB, so both the extension worker
   and the userscript background runner load an in-memory engine (`brownbear-indexeddb.js`, a vendored
   fake-indexeddb IIFE) plus a snapshot/rehydrate layer (`brownbear-idb-persist.js`). The JS side
