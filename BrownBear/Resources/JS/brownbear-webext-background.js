@@ -315,6 +315,14 @@
     // `self` is the service-worker global alias.
     if (typeof globalThis.self === 'undefined') { globalThis.self = globalThis; }
 
+    // MV2 extensions run their background as a background PAGE — a real DOM window, so `window` IS the
+    // global. MV3 service workers have NO window (libraries feature-detect `typeof window` to tell a
+    // worker from a page), so we expose `window` ONLY for MV2. Violentmonkey's MV2 background bundle
+    // ends with `window._bg = 1`; without this the final statement throws and the module aborts.
+    if (typeof globalThis.window === 'undefined' && (manifest.manifest_version || 2) < 3) {
+      globalThis.window = globalThis;
+    }
+
     var B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
     function btoa(str) {
       str = String(str);
@@ -1242,6 +1250,17 @@
     onHeadersReceived: makeEvent([]), onBeforeRedirect: makeEvent([]), onAuthRequired: makeEvent([]),
     onResponseStarted: makeEvent([]), onCompleted: makeEvent([]), onErrorOccurred: makeEvent([]),
     onActionIgnored: makeEvent([]),
+    // Chrome exposes the addListener `extraInfoSpec` enums on chrome.webRequest. Extensions read them
+    // at top level — Violentmonkey's background does `webRequest.OnBeforeSendHeadersOptions.EXTRA_HEADERS`
+    // and `OnHeadersReceivedOptions.EXTRA_HEADERS` during init, so the enum objects MUST exist or that
+    // access throws "undefined is not an object" and aborts the whole background bundle.
+    OnBeforeSendHeadersOptions: { REQUEST_HEADERS: 'requestHeaders', BLOCKING: 'blocking', EXTRA_HEADERS: 'extraHeaders' },
+    OnSendHeadersOptions: { REQUEST_HEADERS: 'requestHeaders', EXTRA_HEADERS: 'extraHeaders' },
+    OnHeadersReceivedOptions: { BLOCKING: 'blocking', RESPONSE_HEADERS: 'responseHeaders', EXTRA_HEADERS: 'extraHeaders' },
+    OnAuthRequiredOptions: { RESPONSE_HEADERS: 'responseHeaders', BLOCKING: 'blocking', ASYNC_BLOCKING: 'asyncBlocking', EXTRA_HEADERS: 'extraHeaders' },
+    OnResponseStartedOptions: { RESPONSE_HEADERS: 'responseHeaders', EXTRA_HEADERS: 'extraHeaders' },
+    OnBeforeRedirectOptions: { RESPONSE_HEADERS: 'responseHeaders', EXTRA_HEADERS: 'extraHeaders' },
+    OnCompletedOptions: { RESPONSE_HEADERS: 'responseHeaders', EXTRA_HEADERS: 'extraHeaders' },
     handlerBehaviorChanged: function (cb) { if (typeof cb === 'function') { cb(); } return Promise.resolve(); },
     MAX_HANDLER_BEHAVIOR_CHANGED_CALLS_PER_10_MINUTES: 20
   };
