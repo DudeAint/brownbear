@@ -59,7 +59,15 @@ final class WebExtensionServiceWorkerGlobalsTests: XCTestCase {
             updateReason: chrome.runtime.OnInstalledReason.UPDATE,
             hasAddEventListener: typeof self.addEventListener === 'function',
             hasClientsClaim: typeof clients === 'object' && typeof clients.claim === 'function',
-            hasRegistration: typeof registration === 'object'
+            hasRegistration: typeof registration === 'object',
+            structuredCloneOk: (function () {
+              if (typeof structuredClone !== 'function') { return false; }
+              var src = { n: 1, d: new Date(5), a: [1, { x: 2 }], m: new Map([['k', 3]]) };
+              src.self = src;   // circular
+              var c = structuredClone(src);
+              return c !== src && c.a[1] !== src.a[1] && c.a[1].x === 2
+                && c.d.getTime() === 5 && c.m.get('k') === 3 && c.self === c;
+            })()
           });
         });
         """)
@@ -80,6 +88,7 @@ final class WebExtensionServiceWorkerGlobalsTests: XCTestCase {
         XCTAssertEqual(r["hasAddEventListener"] as? Bool, true)
         XCTAssertEqual(r["hasClientsClaim"] as? Bool, true)
         XCTAssertEqual(r["hasRegistration"] as? Bool, true)
+        XCTAssertEqual(r["structuredCloneOk"] as? Bool, true)
     }
 
     func testFetchHostGateFailsClosedWithoutHostPermission() async throws {
