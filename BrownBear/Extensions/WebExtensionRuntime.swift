@@ -117,6 +117,16 @@ class WebExtensionRuntime {
         return nil
     }
 
+    /// Append a popup/options PAGE's forwarded console line / uncaught error to this extension's log,
+    /// so an otherwise-invisible blank-page failure is diagnosable in the dashboard. `source: .page`.
+    func logFromPage(extensionID: String, level: String, message: String) async {
+        let name = await store.ext(for: extensionID)?.displayName
+        let entry = LogEntry(scriptID: nil, scriptName: name,
+                             level: LogEntry.Level(rawValue: level) ?? .info,
+                             message: message, context: .foreground, source: .page)
+        await logStore.append(entry)
+    }
+
     /// Deliver chrome.action.onClicked to an extension's background worker (when the action has no
     /// popup). No-op if the extension has no running background context. `tab` is a chrome.tabs Tab
     /// record (or nil if there's no active tab).

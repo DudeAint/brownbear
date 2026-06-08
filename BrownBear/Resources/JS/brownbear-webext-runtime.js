@@ -30,9 +30,35 @@
     catch (e) { return _Promise.reject(e); }
   }
 
+  // Forward UNCAUGHT content-script errors (the isolated content world's failures are otherwise
+  // invisible — the page console capture only sees the main world). We deliberately do NOT wrap
+  // `console` here: in an isolated world it's the shared page console and wrapping it could disturb
+  // the page. `__bbLogToken` is set to the first content script's token (best-effort attribution).
+  var __bbLogToken = null;
+  (function () {
+    if (handler === null) { return; }
+    function emit(message) {
+      if (!__bbLogToken) { return; }
+      var s = String(message);
+      try { bridge("runtime.pageLog", { level: "error", message: "[content] " + (s.length > 4000 ? s.slice(0, 4000) + "…" : s) }, __bbLogToken).catch(function () {}); }
+      catch (e) {}
+    }
+    W.addEventListener("error", function (e) {
+      var msg = (e && e.message) ? e.message : "script error";
+      if (e && e.filename) { msg += " (" + e.filename + ":" + (e.lineno || 0) + ")"; }
+      if (e && e.error && e.error.stack) { msg += "\n" + e.error.stack; }
+      emit(msg);
+    });
+    W.addEventListener("unhandledrejection", function (e) {
+      var r = e && e.reason;
+      emit("Unhandled promise rejection: " + ((r && r.message) ? r.message : String(r)));
+    });
+  })();
+
   // --- chrome.* surface for one content script ------------------------------------------------
   function buildChrome(data) {
     var token = data.token;
+    if (__bbLogToken === null && token) { __bbLogToken = token; }   // attribute content-world errors
     var manifest = {};
     try { manifest = _JSON.parse(data.manifestJSON || "{}"); } catch (e) { manifest = {}; }
     var messages = data.messages || {};
