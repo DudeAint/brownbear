@@ -164,4 +164,24 @@ final class WebExtensionModuleWorkerTests: XCTestCase {
         let found = await waitForLog(logs) { $0.lowercased().contains("parse error") || $0.lowercased().contains("uncaught") }
         XCTAssertTrue(found, "expected a parse error in the log; got: \(logs.all)")
     }
+
+    /// A module that THROWS during evaluation must surface its real error ATTRIBUTED to its module path
+    /// (once), not propagate as a bare confusing crash. The linker marks the module failed so it is not
+    /// re-evaluated (ESM: evaluate-once; a failed module stays failed) — this is the error boundary that
+    /// stops a downstream re-run from mutating into a misleading later error.
+    func testFailingModuleSurfacesAttributedErrorOnce() async throws {
+        let logs = LogCollector()
+        let context = try bootModuleWorker(entry: "sw.js", files: [
+            "sw.js": """
+            import './bad.js';
+            chrome.runtime.onMessage.addListener(function () {});
+            """,
+            "bad.js": "throw new Error('boom in bad');"
+        ], logs: logs)
+        defer { context.shutdown() }
+        let found = await waitForLog(logs) {
+            $0.contains("bad.js") && $0.contains("failed to initialize") && $0.contains("boom in bad")
+        }
+        XCTAssertTrue(found, "the failing module's error must be attributed to its path; got: \(logs.all)")
+    }
 }
