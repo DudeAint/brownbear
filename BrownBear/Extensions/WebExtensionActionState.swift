@@ -55,6 +55,10 @@ final class WebExtensionActionState {
     /// Cache of each extension's manifest-declared action (title/popup/icon), so the resolved state
     /// falls back to what the manifest shipped before the extension ever calls a setter.
     private var manifestAction: [String: WebExtensionManifest.Action] = [:]
+    /// Cache of each extension's top-level manifest `icons`. Chrome uses these for the toolbar action
+    /// when `action.default_icon` is absent, which is common — without this fallback such extensions
+    /// render the generic puzzle glyph instead of their real icon.
+    private var manifestIcons: [String: [String: String]] = [:]
 
     private let userDefaults: UserDefaults
     private static let persistKey = "brownbear.webext.actionDefaults.v1"
@@ -67,12 +71,20 @@ final class WebExtensionActionState {
     // MARK: - Manifest seeding
 
     /// Record an extension's manifest-declared action so resolved state has a sensible base. Called
-    /// when the browser builds the menu; cheap and idempotent.
-    func registerManifestAction(extensionID: String, action: WebExtensionManifest.Action?) {
+    /// when the browser builds the menu; cheap and idempotent. `fallbackIcons` is the manifest's
+    /// top-level `icons`, used for the action icon when the action declares none (Chrome behaviour).
+    func registerManifestAction(extensionID: String,
+                                action: WebExtensionManifest.Action?,
+                                fallbackIcons: [String: String] = [:]) {
         if let action {
             manifestAction[extensionID] = action
         } else {
             manifestAction.removeValue(forKey: extensionID)
+        }
+        if fallbackIcons.isEmpty {
+            manifestIcons.removeValue(forKey: extensionID)
+        } else {
+            manifestIcons[extensionID] = fallbackIcons
         }
     }
 
@@ -100,7 +112,7 @@ final class WebExtensionActionState {
         } else {
             popup = manifest?.defaultPopup
         }
-        let iconPath = pick(\.iconPath) ?? bestManifestIcon(manifest)
+        let iconPath = pick(\.iconPath) ?? bestManifestIcon(manifest, fallbackIcons: manifestIcons[extensionID])
         let enabled = pick(\.enabled) ?? true
 
         return Resolved(badgeText: badgeText, badgeColor: badgeColor, title: title,
@@ -195,6 +207,7 @@ final class WebExtensionActionState {
         defaults.removeValue(forKey: extensionID)
         perTab.removeValue(forKey: extensionID)
         manifestAction.removeValue(forKey: extensionID)
+        manifestIcons.removeValue(forKey: extensionID)
         if had {
             persistDefaults()
             NotificationCenter.default.post(name: Self.didChangeNotification, object: nil,
@@ -222,9 +235,13 @@ final class WebExtensionActionState {
         NotificationCenter.default.post(name: Self.didChangeNotification, object: nil, userInfo: userInfo)
     }
 
-    private func bestManifestIcon(_ action: WebExtensionManifest.Action?) -> String? {
-        guard let icons = action?.defaultIcon, !icons.isEmpty else { return nil }
-        return Self.bestIcon(icons)
+    /// The action's declared icon, or — when it declares none — the manifest's top-level `icons`
+    /// (Chrome falls back to these for the toolbar action).
+    private func bestManifestIcon(_ action: WebExtensionManifest.Action?,
+                                  fallbackIcons: [String: String]?) -> String? {
+        if let icons = action?.defaultIcon, let best = Self.bestIcon(icons) { return best }
+        if let fallbackIcons { return Self.bestIcon(fallbackIcons) }
+        return nil
     }
 
     /// Resolve a chrome.action.setIcon `path` argument (a String, or a size→path map) to one path,
@@ -235,14 +252,17 @@ final class WebExtensionActionState {
         return nil
     }
 
-    /// Pick the best entry of a size→path map: a sane toolbar size, then the largest, then any.
-    private static func bestIcon(_ icons: [String: String]) -> String? {
+    /// Pick the best entry of a size→path map: a sane toolbar size, then the largest, then any. Empty
+    /// path values are ignored (a `"48": ""` entry would otherwise be "chosen" and then fail to load,
+    /// dropping the row to the generic glyph).
+    private static func bestIcon(_ rawIcons: [String: String]) -> String? {
+        let icons = rawIcons.filter { !$0.value.isEmpty }
         guard !icons.isEmpty else { return nil }
         for size in ["32", "24", "19", "16", "48", "128"] {
             if let path = icons[size] { return path }
         }
         let largest = icons.max { (Int($0.key) ?? 0) < (Int($1.key) ?? 0) }
-        return largest?.value ?? icons["0"]
+        return largest?.value
     }
 
     // MARK: - Persistence (default layer only; per-tab is session-scoped)

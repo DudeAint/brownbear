@@ -23,9 +23,11 @@ enum WebExtensionManagementInfo {
         let manifest = ext.manifest
         var info: [String: Any] = [
             "id": ext.id,
-            "name": manifest?.name ?? ext.id,
-            "shortName": manifest?.name ?? ext.id,
-            "description": manifest?.descriptionText ?? "",
+            // displayName/displayDescription resolve `__MSG_*__` i18n placeholders (Chrome resolves
+            // these before exposing them via chrome.management); the raw manifest fields can be tokens.
+            "name": ext.displayName,
+            "shortName": ext.displayName,
+            "description": ext.displayDescription ?? "",
             "version": manifest?.version ?? "",
             "mayDisable": true,
             "enabled": ext.enabled,
