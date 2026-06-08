@@ -527,12 +527,13 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
             let actionTabId = webExtActionActiveTabId()
             for ext in await BrownBearServices.shared.webExtensionStore.enabledExtensions() {
                 guard let action = ext.manifest?.action else { continue }
-                actionState.registerManifestAction(extensionID: ext.id, action: action)
+                actionState.registerManifestAction(extensionID: ext.id, action: action,
+                                                   fallbackIcons: ext.manifest?.icons ?? [:])
                 let resolved = actionState.resolved(extensionID: ext.id, tabId: actionTabId)
                 guard resolved.enabled else { continue }
                 extensionActions.append(MenuExtensionAction(
                     extensionID: ext.id,
-                    title: resolved.title.isEmpty ? ext.displayName : resolved.title,
+                    title: Self.webExtMenuActionTitle(resolved.title, ext: ext),
                     badgeText: resolved.badgeText,
                     badgeColor: Self.actionBadgeColor(actionState.badgeColorBytes(extensionID: ext.id, tabId: actionTabId)),
                     iconPath: resolved.iconPath,

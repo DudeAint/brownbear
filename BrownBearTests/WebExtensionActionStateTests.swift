@@ -35,6 +35,26 @@ final class WebExtensionActionStateTests: XCTestCase {
         XCTAssertTrue(resolved.enabled)
     }
 
+    func testActionIconFallsBackToTopLevelManifestIcons() {
+        // An action that declares no icon must fall back to the manifest's top-level `icons` (Chrome
+        // behaviour) instead of leaving the toolbar entry on the generic glyph.
+        let (state, _) = makeState()
+        state.registerManifestAction(extensionID: "ext",
+                                     action: .init(defaultTitle: "T", defaultPopup: nil, defaultIcon: [:]),
+                                     fallbackIcons: ["16": "icons/16.png", "48": "icons/48.png"])
+        // Prefers a toolbar-sane size from the fallback set.
+        XCTAssertEqual(state.resolved(extensionID: "ext", tabId: nil).iconPath, "icons/16.png")
+    }
+
+    func testActionIconPrefersActionOverTopLevelAndSkipsEmptyPaths() {
+        let (state, _) = makeState()
+        // An empty action-icon path must not be chosen; fall through to the non-empty fallback.
+        state.registerManifestAction(extensionID: "ext",
+                                     action: .init(defaultTitle: "T", defaultPopup: nil, defaultIcon: ["32": ""]),
+                                     fallbackIcons: ["32": "fallback.png"])
+        XCTAssertEqual(state.resolved(extensionID: "ext", tabId: nil).iconPath, "fallback.png")
+    }
+
     func testDefaultLayerOverridesManifest() {
         let (state, _) = makeState()
         state.registerManifestAction(extensionID: "ext", action: .init(
