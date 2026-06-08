@@ -176,9 +176,11 @@ struct URLMatcher {
         guard let components = URLComponents(string: urlString),
               let scheme = components.scheme else { return nil }
         var host = components.host ?? ""
-        // URLComponents strips the brackets off an IPv6 host (::1); restore them so the host matches a
-        // bracketed match-pattern host ([::1]). A normal hostname/IPv4 never contains a colon.
-        if host.contains(":") { host = "[\(host)]" }
+        // Normalize an IPv6 host to the bracketed form ([::1]) so it lines up with a bracketed
+        // match-pattern host. URLComponents.host may return it WITH or WITHOUT brackets across SDKs, so
+        // only add them when absent (double-wrapping to [[::1]] would never match). Hostname/IPv4 has no
+        // colon, so this is a no-op for them.
+        if host.contains(":") && !host.hasPrefix("[") { host = "[\(host)]" }
         var path = components.percentEncodedPath
         if path.isEmpty { path = "/" }
         if let query = components.percentEncodedQuery, !query.isEmpty {
