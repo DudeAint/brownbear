@@ -93,4 +93,39 @@ final class URLMatcherTests: XCTestCase {
         XCTAssertTrue(m.matches("https://example.com/"))
         XCTAssertFalse(m.matches("ftp://example.com/"))
     }
+
+    // MARK: - IPv6 literals
+
+    func testIPv6LiteralMatchPattern() {
+        let m = matcher(match: ["https://[::1]/*"])
+        XCTAssertTrue(m.matches("https://[::1]/dashboard"))
+        XCTAssertTrue(m.matches("https://[::1]/"))
+        XCTAssertFalse(m.matches("http://[::1]/x"), "scheme must still be honored")
+        XCTAssertFalse(m.matches("https://[::2]/x"), "a different address must not match")
+        XCTAssertFalse(m.matches("https://example.com/x"))
+    }
+
+    func testFullIPv6AddressMatchPattern() {
+        let m = matcher(match: ["*://[2001:db8::1]/*"])
+        XCTAssertTrue(m.matches("https://[2001:db8::1]/app"))
+        XCTAssertTrue(m.matches("http://[2001:db8::1]/"))
+        XCTAssertTrue(m.matches("https://[2001:DB8::1]/x"), "IPv6 hex is case-insensitive")
+        XCTAssertFalse(m.matches("https://[2001:db8::2]/"))
+    }
+
+    func testWildcardHostAndAllUrlsCoverIPv6() {
+        XCTAssertTrue(matcher(match: ["*://*/*"]).matches("https://[::1]/x"))
+        XCTAssertTrue(matcher(match: ["<all_urls>"]).matches("https://[fe80::1]/y"))
+    }
+
+    // MARK: - Regression: existing host classes must be UNCHANGED by the IPv6 alternation
+
+    func testHostClassesStillMatchAfterIPv6Support() {
+        XCTAssertTrue(matcher(match: ["https://example.com/*"]).matches("https://example.com/a"))
+        XCTAssertTrue(matcher(match: ["https://*.example.com/*"]).matches("https://www.example.com/a"))
+        XCTAssertTrue(matcher(match: ["https://127.0.0.1/*"]).matches("https://127.0.0.1/a"))
+        XCTAssertTrue(matcher(match: ["http://localhost/*"]).matches("http://localhost/a"))
+        XCTAssertFalse(matcher(match: ["https://example.com/*"]).matches("https://evil.com/a"))
+        XCTAssertFalse(matcher(match: ["https://127.0.0.1/*"]).matches("https://127.0.0.2/a"))
+    }
 }
