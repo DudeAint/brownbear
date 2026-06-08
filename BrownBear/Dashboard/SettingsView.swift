@@ -15,6 +15,7 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Key.searchEngine) private var searchEngineRaw = SearchEngine.google.rawValue
     @AppStorage(AppSettings.Key.autoUpdateScripts) private var autoUpdateScripts = true
     @AppStorage(AppSettings.Key.hideBarsOnScroll) private var hideBarsOnScroll = true
+    @AppStorage(AppSettings.Key.addressBarPosition) private var addressBarPositionRaw = AddressBarPosition.top.rawValue
     @State private var isClearing = false
     @State private var didClear = false
     @State private var confirmingClear = false
@@ -30,8 +31,17 @@ struct SettingsView: View {
             }
 
             Section("Appearance") {
+                Picker("Address bar", selection: $addressBarPositionRaw) {
+                    ForEach(AddressBarPosition.allCases) { pos in
+                        Text(pos.title).tag(pos.rawValue)
+                    }
+                }
+                .onChange(of: addressBarPositionRaw) { _ in
+                    NotificationCenter.default.post(name: .brownBearChromeLayoutChanged, object: nil)
+                }
                 Toggle("Hide bar while scrolling", isOn: $hideBarsOnScroll)
-                Text("The address bar slides away as you scroll down a page and returns when you scroll up.")
+                Text("The address bar slides away as you scroll down a page and returns when you scroll up. "
+                    + "Set it at the top or, Safari-style, at the bottom (where the toolbar hides with it).")
                     .font(.caption)
                     .foregroundStyle(BBTheme.Color.textSecondary)
             }
