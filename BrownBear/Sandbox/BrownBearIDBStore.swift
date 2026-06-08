@@ -120,6 +120,12 @@ final class BrownBearIDBStore: @unchecked Sendable {
         }
     }
 
+    /// Block until all queued writes/clears have completed. The queue is serial, so a sync barrier flushes
+    /// everything submitted before it. For tests, so save/clear become deterministic without polling.
+    func waitForPendingWrites() {
+        queue.sync {}
+    }
+
     // MARK: - Paths + resources
 
     private func fileURL(for namespace: Namespace) -> URL {
