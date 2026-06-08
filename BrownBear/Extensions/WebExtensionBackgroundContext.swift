@@ -407,10 +407,14 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
 
     // MARK: - Alarms / timers (on `queue`)
 
-    private func createAlarm(name: String, whenMs: Double, periodMinutes: Double) {
+    private func createAlarm(name: String, whenMs: Double, periodMinutes rawPeriodMinutes: Double) {
         // Cancel a same-named alarm first (Chrome replaces it).
         alarmTimers[name]?.cancel()
 
+        // Chrome clamps a periodic alarm to a 1-minute minimum. Clamp ONCE up front so the stored value
+        // (what get()/getAll()/onAlarm report) matches the timer that actually fires — they diverged
+        // before (raw period stored, but the timer floored at 1s).
+        let periodMinutes = rawPeriodMinutes > 0 ? max(1.0, rawPeriodMinutes) : rawPeriodMinutes
         let nowMs = Date().timeIntervalSince1970 * 1000
         let firstDelaySeconds: Double
         if whenMs > 0 {
@@ -432,11 +436,18 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
         }
         timer.setEventHandler { [weak self] in
             guard let self, self.isAlive else { return }
-            self.fire(method: "dispatchAlarm", arguments: [self.jsonString(name)])
+            // Fire onAlarm with the REAL alarm object (name + scheduledTime + periodInMinutes), not a
+            // name with a reconstructed Date.now() scheduledTime.
+            let alarm = self.alarms[name]
+                ?? AlarmState(scheduledTime: Date().timeIntervalSince1970 * 1000, periodInMinutes: periodMinutes)
+            self.fire(method: "dispatchAlarm", arguments: [self.jsonString(self.alarmObject(name: name, alarm: alarm))])
             if periodMinutes <= 0 {
                 self.alarmTimers[name]?.cancel()
                 self.alarmTimers.removeValue(forKey: name)
                 self.alarms.removeValue(forKey: name)
+            } else {
+                // Advance the stored scheduledTime to the next firing so a later get()/onAlarm is accurate.
+                self.alarms[name]?.scheduledTime = Date().timeIntervalSince1970 * 1000 + periodMinutes * 60 * 1000
             }
         }
         alarmTimers[name] = timer

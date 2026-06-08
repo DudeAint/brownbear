@@ -1542,9 +1542,11 @@
         messageListeners.length === 0 ? JSON.stringify({ __bbNoListener: true }) : null);
     },
 
-    dispatchAlarm: function (nameJSON) {
-      var name = parseJSON(nameJSON);
-      var alarm = { name: name || '', scheduledTime: Date.now() };
+    dispatchAlarm: function (alarmJSON) {
+      // Native sends the real Alarm object (name + scheduledTime + periodInMinutes), not just a name —
+      // so onAlarm reports the actual scheduled time and period, like Chrome.
+      var alarm = parseJSON(alarmJSON);
+      if (!alarm || typeof alarm !== 'object') { alarm = { name: '', scheduledTime: Date.now() }; }
       for (var i = 0; i < alarmListeners.length; i++) {
         try { alarmListeners[i](alarm); } catch (e) { __bb_log('error', 'alarms.onAlarm listener threw: ' + (e && e.message ? e.message : e)); }
       }

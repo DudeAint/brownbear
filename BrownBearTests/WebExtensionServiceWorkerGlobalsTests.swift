@@ -430,4 +430,32 @@ final class WebExtensionServiceWorkerGlobalsTests: XCTestCase {
         XCTAssertEqual(r["probe"] as? String, "77:88:fn:cls",
                        "a chunk's top-level let/const/function/class must be visible to the worker (shared global scope)")
     }
+
+    // MARK: - chrome.alarms (period clamp + real Alarm object)
+
+    /// A periodic alarm's period is clamped to Chrome's 1-minute minimum, and get() reports the real
+    /// Alarm object (name + scheduledTime + the clamped periodInMinutes) — the same shape onAlarm now
+    /// fires. (`when` is far-future so the timer can't fire during the test; this is deterministic.)
+    func testAlarmPeriodIsClampedAndObjectShapeIsCorrect() async throws {
+        let context = try makeContext(background: """
+        chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+          if (!msg || msg.check !== 'alarm') { return; }
+          chrome.alarms.create('tick', { periodInMinutes: 0.1, when: Date.now() + 600000 });
+          chrome.alarms.get('tick', function (a) {
+            sendResponse({
+              name: a ? a.name : null,
+              period: a ? a.periodInMinutes : null,
+              hasScheduled: !!a && typeof a.scheduledTime === 'number'
+            });
+          });
+          return true;   // async response
+        });
+        """)
+        defer { context.shutdown() }
+        let response = await context.deliverRuntimeMessage(message: ["check": "alarm"], sender: [:])
+        let r = try XCTUnwrap(response?["value"] as? [String: Any])
+        XCTAssertEqual(r["name"] as? String, "tick")
+        XCTAssertEqual(r["period"] as? Double, 1.0, "periodInMinutes 0.1 must clamp to Chrome's 1-minute minimum")
+        XCTAssertEqual(r["hasScheduled"] as? Bool, true, "the Alarm object must carry a numeric scheduledTime")
+    }
 }
