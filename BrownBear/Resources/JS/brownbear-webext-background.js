@@ -316,6 +316,13 @@
       if (input && typeof input === 'object' && input.url) { url = String(input.url); method = input.method || method; }
       else { url = String(input); }
       if (init.method) { method = init.method; }
+      // Resolve a relative URL ('/path' or 'path') against the worker's own origin, so fetching a
+      // PACKAGED resource (e.g. ScriptCat's fetch('/src/content.js')) reaches the extension scheme
+      // handler instead of an unparseable bare path. Absolute URLs pass through unchanged.
+      try {
+        var __fetchBase = (globalThis.location && globalThis.location.href) || globalThis.__bbBgBaseURL;
+        if (__fetchBase) { url = new globalThis.URL(url, __fetchBase).href; }
+      } catch (e) { /* leave url as written */ }
       if (init.headers) {
         if (init.headers._m) { headers = init.headers._m; }                       // our Headers instance
         else if (typeof init.headers.forEach === 'function') {                    // a Map
@@ -1195,7 +1202,11 @@
       if (typeof filter === 'function') { cb = filter; filter = null; }
       return settleBg(userScriptsCall('getScripts', { filter: filter || null }), cb);
     },
-    configureWorld: function (properties, cb) { return settleBg(userScriptsCall('configureWorld', { properties: properties || {} }).then(function () { return undefined; }), cb); }
+    configureWorld: function (properties, cb) { return settleBg(userScriptsCall('configureWorld', { properties: properties || {} }).then(function () { return undefined; }), cb); },
+    resetWorldConfiguration: function (worldId, cb) {
+      if (typeof worldId === 'function') { cb = worldId; worldId = null; }
+      return settleBg(userScriptsCall('resetWorldConfiguration', { worldId: worldId || null }).then(function () { return undefined; }), cb);
+    }
   };
 
   // ---------------------------------------------------------------- chrome.cookies
