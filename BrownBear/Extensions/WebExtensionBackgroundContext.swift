@@ -117,9 +117,13 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
             // Device-derived inputs for the navigator polyfill (JSC has no DOM; see HeadlessEnvironment).
             context.setObject(HeadlessEnvironment.userAgent, forKeyedSubscript: "__bbUserAgent" as NSString)
             context.setObject(HeadlessEnvironment.language, forKeyedSubscript: "__bbLanguage" as NSString)
-            // IndexedDB engine + rehydrate this extension's snapshot before its background source runs.
-            BrownBearIDBStore.shared.install(into: context, namespace: .ext(extensionID))
+            // IndexedDB engine first (so `indexedDB` exists), then the runtime (which defines the web
+            // globals — Blob/File/FileReader — the engine's structured-clone needs), THEN rehydrate the
+            // snapshot: replaying it before Blob/File exist would revive a persisted Blob as a raw
+            // tagged record. All three happen before the background/module source runs.
+            BrownBearIDBStore.shared.install(into: context, namespace: .ext(extensionID), rehydrate: false)
             context.evaluateScript(runtimeJS, withSourceURL: URL(string: "brownbear://webext/\(extensionID)/runtime.js"))
+            BrownBearIDBStore.shared.rehydrate(into: context, namespace: .ext(extensionID))
             if let moduleEntry, let esmRuntimeJS, let moduleSource {
                 // MV3 module service worker: link the module graph in-context (no native ESM loader).
                 runModuleWorker(in: context, esmRuntimeJS: esmRuntimeJS,
