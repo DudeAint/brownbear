@@ -391,8 +391,8 @@ final class WebExtensionServiceWorkerGlobalsTests: XCTestCase {
         });
         """)
         defer { context.shutdown() }
-        let r = try XCTUnwrap(
-            (await context.deliverRuntimeMessage(message: ["check": "identity"], sender: [:]))?["value"] as? [String: Any])
+        let response = await context.deliverRuntimeMessage(message: ["check": "identity"], sender: [:])
+        let r = try XCTUnwrap(response?["value"] as? [String: Any])
         XCTAssertEqual(r["hasIdentity"] as? Bool, true)
         XCTAssertEqual(r["hasLaunch"] as? Bool, true)
         XCTAssertEqual(r["hasAuthToken"] as? Bool, true)
