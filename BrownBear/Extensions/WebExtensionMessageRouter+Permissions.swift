@@ -30,7 +30,10 @@ extension WebExtensionMessageRouter {
            let activeId = host.webExtActionActiveTabId(), record["id"] as? Int == activeId {
             return true
         }
-        let matcher = URLMatcher(matches: manifest.effectiveHostPatterns,
+        // Gate on host_permissions ONLY — content_scripts.matches lets a script INJECT but confers no
+        // host access in Chrome (declare-permissions). Using effectiveHostPatterns here would let a
+        // content-script-only host silently read cookies / fetch cross-origin / executeScript there.
+        let matcher = URLMatcher(matches: manifest.hostPermissions,
                                  includes: [], excludes: [], excludeMatches: [])
         return matcher.matches(tabURL)
     }
@@ -62,9 +65,10 @@ extension WebExtensionMessageRouter {
                 return await host.webExtGetAllCookies(filter: details, storeId: storeId)
             }
             // Unscoped getAll({}) must NOT return every cookie — filter to the extension's host
-            // permissions, as Chrome does (else "cookies" alone exfiltrates all sessions). Fail closed.
+            // permissions ONLY (a content_scripts match is not host access in Chrome; else "cookies"
+            // alone exfiltrates all sessions). Fail closed.
             guard let manifest = await store.ext(for: extensionID)?.manifest else { return [] }
-            let matcher = URLMatcher(matches: manifest.effectiveHostPatterns,
+            let matcher = URLMatcher(matches: manifest.hostPermissions,
                                      includes: [], excludes: [], excludeMatches: [])
             let all = await host.webExtGetAllCookies(filter: details, storeId: storeId)
             return all.filter { cookie in
@@ -100,7 +104,10 @@ extension WebExtensionMessageRouter {
 
     func cookieHostAllowed(extensionID: String, details: [String: Any]) async throws -> Bool {
         guard let manifest = await store.ext(for: extensionID)?.manifest else { return false }
-        let matcher = URLMatcher(matches: manifest.effectiveHostPatterns,
+        // Gate on host_permissions ONLY — content_scripts.matches lets a script INJECT but confers no
+        // host access in Chrome (declare-permissions). Using effectiveHostPatterns here would let a
+        // content-script-only host silently read cookies / fetch cross-origin / executeScript there.
+        let matcher = URLMatcher(matches: manifest.hostPermissions,
                                  includes: [], excludes: [], excludeMatches: [])
         // Gate on the cookie's EFFECTIVE domain (an explicit `domain` wins over `url`) — see
         // WebExtensionCookieMapper.scopeAllowed. Closes the cross-domain cookies.set bypass.

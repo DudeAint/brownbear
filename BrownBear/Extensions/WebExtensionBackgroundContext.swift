@@ -99,7 +99,9 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
             if let json = (try? JSONSerialization.jsonObject(with: Data(manifestJSON.utf8))) as? [String: Any],
                let parsed = try? WebExtensionManifest.parse(json) {
                 cookiePermissions = Set(parsed.permissions)
-                let matcher = URLMatcher(matches: parsed.effectiveHostPatterns,
+                // host_permissions ONLY — content_scripts.matches is not host access (Chrome). The
+                // worker's chrome.cookies/fetch gate must not be widened by a content-script match.
+                let matcher = URLMatcher(matches: parsed.hostPermissions,
                                          includes: [], excludes: [], excludeMatches: [])
                 cookieHostMatcher = { matcher.matches($0) }
             }

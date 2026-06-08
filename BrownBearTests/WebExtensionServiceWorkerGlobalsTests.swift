@@ -111,6 +111,28 @@ final class WebExtensionServiceWorkerGlobalsTests: XCTestCase {
         XCTAssertTrue((r["message"] as? String ?? "").contains("host permission"))
     }
 
+    func testContentScriptMatchDoesNotGrantHostFetchAccess() async throws {
+        // SECURITY: a content_scripts match for example.com must NOT confer host access. In Chrome,
+        // content_scripts.matches only allows INJECTION; cookie/fetch/scripting require host_permissions.
+        // The manifest below has a content-script match for example.com but NO host_permissions, so a
+        // worker fetch to example.com must still fail closed (regression guard for the privilege-
+        // escalation where effectiveHostPatterns widened the gate with content-script matches).
+        let manifest = #"{"manifest_version":3,"name":"T","version":"1.0","content_scripts":[{"matches":["https://example.com/*"],"js":["c.js"]}]}"#
+        let context = try makeContext(background: """
+        chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+          if (!msg || msg.check !== 'fetchGate') { return; }
+          fetch('https://example.com/data.json')
+            .then(function () { sendResponse({ rejected: false }); })
+            .catch(function (e) { sendResponse({ rejected: true }); });
+          return true;
+        });
+        """, manifestJSON: manifest)
+        defer { context.shutdown() }
+        let response = await context.deliverRuntimeMessage(message: ["check": "fetchGate"], sender: [:])
+        let r = try XCTUnwrap(response?["value"] as? [String: Any])
+        XCTAssertEqual(r["rejected"] as? Bool, true, "a content_scripts match must NOT grant host fetch access")
+    }
+
     func testURLLocationPerformanceAndStorageSetAccessLevel() async throws {
         let context = try makeContext(background: """
         chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
