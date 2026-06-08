@@ -68,9 +68,12 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
 
         // --- declarativeNetRequest managers (ScriptCat). Gather rules, then match OFF the main actor (an
         //     extension's regexFilter is untrusted; a pathological pattern must not freeze the UI). ---
+        // Iterate by sorted id so the target/picker order is deterministic — `byID.values` (and the runtime's
+        // `contexts` dict) have undefined iteration order, which would make `routeToSingleManager` and the
+        // picker's button order flip across runs / OS versions / extension-state changes.
         var candidates: [(id: String, rulesJSON: String)] = []
-        for ext in byID.values {
-            guard let manifest = ext.manifest else { continue }
+        for id in byID.keys.sorted() {
+            guard let ext = byID[id], let manifest = ext.manifest else { continue }
             var rules = await dnr.getSessionRules(extensionID: ext.id)
             rules += await dnr.getDynamicRules(extensionID: ext.id)
             let manifestDefaults = manifest.declarativeNetRequest.filter(\.enabled).map(\.id)

@@ -151,7 +151,10 @@ class WebExtensionRuntime {
     func userScriptWebRequestManagerIDs(url: URL) async -> [String] {
         let urlString = url.absoluteString
         var ids: [String] = []
-        for (extID, context) in contexts {
+        // Sorted iteration: `contexts` is a Dictionary (undefined order); the picker/route order must be
+        // deterministic so the offered target doesn't flip between runs.
+        for extID in contexts.keys.sorted() {
+            guard let context = contexts[extID] else { continue }
             if await context.hasUserScriptWebRequestListener(url: urlString) { ids.append(extID) }
         }
         return ids

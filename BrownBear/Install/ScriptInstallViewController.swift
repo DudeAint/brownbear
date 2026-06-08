@@ -81,7 +81,10 @@ final class ScriptInstallViewController: UIViewController {
     private let spinner = UIActivityIndicatorView(style: .large)
     private let statusTitle = UILabel()
     private let statusSubtitle = UILabel()
-    private lazy var installButton = makeFilledButton(title: "Install")
+    // Built only in the no-manager path (the manager-picker path puts Install in the "Install with" card and
+    // omits the bottom-bar button) — so it's an Optional, not a lazy var that would allocate a never-shown
+    // button the first time the property is touched on the picker path.
+    private var installButton: UIButton?
     private var sourceTextView: UITextView?
     private var sourceExpanded = false
 
@@ -297,8 +300,9 @@ final class ScriptInstallViewController: UIViewController {
         // With manager targets the install/hand-off choices live in the "Install with" card, so the bar
         // is just Cancel (+ View source); without, it carries the primary Install button.
         if managerTargets.isEmpty {
-            installButton = makeFilledButton(title: preview.isUpdate ? "Update" : "Install", action: #selector(installTapped))
-            actionBar.addArrangedSubview(installButton)
+            let button = makeFilledButton(title: preview.isUpdate ? "Update" : "Install", action: #selector(installTapped))
+            installButton = button
+            actionBar.addArrangedSubview(button)
         }
 
         if let sourceURL = preview.sourceURL {
