@@ -10,11 +10,13 @@
 //
 //  GENERATED — do not hand-edit. Vendored from fake-indexeddb v3.1.7 (Apache-2.0, © Jeremy Scheff),
 //  bundled to an IIFE with a setImmediate→microtask prelude (so IndexedDB async work drains between
-//  JSContext.evaluateScript turns). Reproduce with:
+//  JSContext.evaluateScript turns). The `--define`s rewrite Node globals JSC lacks (`global`,
+//  `process`, `Deno`) so the bundle loads in a bare JSContext instead of throwing at load. Reproduce:
 //    npm i fake-indexeddb@3.1.7 esbuild
-//    esbuild entry.mjs --bundle --format=iife --target=es2017   (entry exposes the IDB* globals)
-//  See References/REFERENCES.md and the Apache-2.0 NOTICE for attribution. v3.1.7 is chosen because it
-//  carries its own structured-clone (no global structuredClone needed) and needs no DOM globals.
+//    esbuild entry.mjs --bundle --format=iife --target=es2017 \
+//      --define:global=globalThis --define:process=undefined --define:Deno=undefined
+//    (entry exposes the IDB* globals; prepend the setImmediate→microtask shim)
+//  v3.1.7 is chosen because it carries its own structured-clone (no global structuredClone needed).
 //
 /* setImmediate → microtask, so IndexedDB work drains between evaluateScript turns (see persistence). */
 (function(){var g=globalThis;if(typeof g.setImmediate!=='function'){g.setImmediate=function(fn){var a=Array.prototype.slice.call(arguments,1);Promise.resolve().then(function(){fn.apply(null,a);});return 0;};g.clearImmediate=function(){};}})();
@@ -561,8 +563,8 @@
           var g2;
           if (typeof window !== "undefined") {
             g2 = window;
-          } else if (typeof global !== "undefined") {
-            g2 = global;
+          } else if (typeof globalThis !== "undefined") {
+            g2 = globalThis;
           } else if (typeof self !== "undefined") {
             g2 = self;
           } else {
@@ -602,7 +604,7 @@
           var DOMException2 = _dereq_("domexception");
           var Typeson = _dereq_("typeson");
           var structuredCloningThrowing = _dereq_("typeson-registry/dist/presets/structured-cloning-throwing");
-          var globalVar = typeof window !== "undefined" ? window : typeof WorkerGlobalScope !== "undefined" ? self : typeof global !== "undefined" ? global : Function("return this;")();
+          var globalVar = typeof window !== "undefined" ? window : typeof WorkerGlobalScope !== "undefined" ? self : typeof globalThis !== "undefined" ? globalThis : Function("return this;")();
           if (!globalVar.DOMException) {
             globalVar.DOMException = DOMException2;
           }
@@ -917,7 +919,7 @@
           };
           module3.exports = // eslint-disable-next-line es/no-global-this -- safe
           check((typeof globalThis === "undefined" ? "undefined" : _typeof(globalThis)) == "object" && globalThis) || check((typeof window === "undefined" ? "undefined" : _typeof(window)) == "object" && window) || // eslint-disable-next-line no-restricted-globals -- safe
-          check((typeof self === "undefined" ? "undefined" : _typeof(self)) == "object" && self) || check((typeof global === "undefined" ? "undefined" : _typeof(global)) == "object" && global) || // eslint-disable-next-line no-new-func -- fallback
+          check((typeof self === "undefined" ? "undefined" : _typeof(self)) == "object" && self) || check((typeof globalThis === "undefined" ? "undefined" : _typeof(globalThis)) == "object" && globalThis) || // eslint-disable-next-line no-new-func -- fallback
           /* @__PURE__ */ (function() {
             return this;
           })() || Function("return this")();
@@ -2789,7 +2791,7 @@
               if (t2.buffers || (t2.buffers = []), "object" === _typeof$1(e2)) return t2.buffers[e2.index];
               var r2 = T(e2);
               return t2.buffers.push(r2), r2;
-            } } }, A = "undefined" == typeof self ? global : self, P = {};
+            } } }, A = "undefined" == typeof self ? globalThis : self, P = {};
             ["Int8Array", "Uint8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array", "Int32Array", "Uint32Array", "Float32Array", "Float64Array"].forEach(function(e2) {
               var t2 = e2, r2 = A[t2];
               r2 && (P[e2.toLowerCase()] = { test: function test(e3) {
@@ -5764,8 +5766,8 @@
         if (typeof globalThis !== "undefined") {
           return globalThis;
         }
-        if (typeof global !== "undefined") {
-          return global;
+        if (typeof globalThis !== "undefined") {
+          return globalThis;
         }
         if (typeof self !== "undefined") {
           return self;
