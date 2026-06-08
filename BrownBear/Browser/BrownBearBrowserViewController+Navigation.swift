@@ -195,9 +195,13 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
     /// Present the install card for a userscript URL, with a "View source" escape that re-loads the
     /// raw file (allowed through the interceptor once). Internal because the WKUIDelegate
     /// (target="_blank" → install card) in the main controller file also calls it across files.
-    func presentScriptInstall(for url: URL) {
+    func presentScriptInstall(for url: URL,
+                              managerTargets: [ScriptInstallTarget] = [],
+                              showNativeInstall: Bool = true) {
         let installer = ScriptInstallViewController(
             url: url,
+            managerTargets: managerTargets,
+            showNativeInstall: showNativeInstall,
             onViewSource: { [weak self] sourceURL in
                 guard let self else { return }
                 self.viewSourceAllowOnce.insert(sourceURL)

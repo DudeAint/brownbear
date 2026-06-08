@@ -53,21 +53,23 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
         return path.isEmpty ? nil : path
     }
 
-    /// If an enabled userscript-manager extension claims this `.user.js` URL via a declarativeNetRequest
-    /// `redirect` rule (ScriptCat registers one targeting `install.html?url=<original>`), the extension +
-    /// the page to open. WebKit can't perform a DNR redirect of a main-frame request, so we evaluate the
-    /// stored rule ourselves and open the computed page — exactly what the redirect would have done. The
-    /// first enabled extension with a matching rule wins.
+    /// Every installed userscript-manager extension that CLAIMS this `.user.js` — as a hand-off target the
+    /// install picker can offer. A manager claims it either via a declarativeNetRequest `redirect` rule
+    /// (ScriptCat — we evaluate it since WebKit can't redirect a main-frame request) or a
+    /// `webRequest.onBeforeRequest` filter (Violentmonkey). Each target's `route` opens that manager's own
+    /// install/confirm flow. Detection only — nothing is invoked here.
     @MainActor
-    func userScriptInstallRedirect(for url: URL) async -> (ext: WebExtension, target: URL)? {
+    func userScriptInstallTargets(for url: URL) async -> [ScriptInstallTarget] {
         let store = BrownBearServices.shared.webExtensionStore
         let dnr = BrownBearServices.shared.webExtensionDNRStore
-        // Gather each enabled extension's DNR rules (session + dynamic first — Chrome's runtime-over-static
-        // precedence — then enabled static rulesets), serialized to JSON so the matching (which runs an
-        // UNTRUSTED regexFilter) can cross to a background task as a Sendable string.
-        var candidates: [(id: String, rulesJSON: String)] = []
+        let runtime = BrownBearServices.shared.webExtensionRuntime
         var byID: [String: WebExtension] = [:]
-        for ext in await store.enabledExtensions() {
+        for ext in await store.enabledExtensions() { byID[ext.id] = ext }
+
+        // --- declarativeNetRequest managers (ScriptCat). Gather rules, then match OFF the main actor (an
+        //     extension's regexFilter is untrusted; a pathological pattern must not freeze the UI). ---
+        var candidates: [(id: String, rulesJSON: String)] = []
+        for ext in byID.values {
             guard let manifest = ext.manifest else { continue }
             var rules = await dnr.getSessionRules(extensionID: ext.id)
             rules += await dnr.getDynamicRules(extensionID: ext.id)
@@ -75,50 +77,61 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
             let enabledIDs = await dnr.enabledRulesetIDs(extensionID: ext.id, manifestDefaults: manifestDefaults)
             for ruleset in manifest.declarativeNetRequest where enabledIDs.contains(ruleset.id) {
                 if let data = await store.file(extensionID: ext.id, path: ruleset.path),
-                   let arr = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] {
-                    rules += arr
-                }
+                   let arr = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] { rules += arr }
             }
             guard !rules.isEmpty,
                   let data = try? JSONSerialization.data(withJSONObject: rules),
                   let json = String(data: data, encoding: .utf8) else { continue }
             candidates.append((ext.id, json))
-            byID[ext.id] = ext
         }
-        guard !candidates.isEmpty else { return nil }
-
-        // Run the match OFF the main actor: an extension's regexFilter is untrusted, so a pathological
-        // (ReDoS) pattern must not freeze the UI. The await suspends the main actor (it keeps servicing the
-        // UI); worst case the hand-off just doesn't resolve and the caller falls back to the native card.
         let urlString = url.absoluteString
-        let matched: (id: String, target: String)? = await Task.detached(priority: .userInitiated) {
+        let dnrMatches: [(id: String, target: String)] = await Task.detached(priority: .userInitiated) {
+            var out: [(String, String)] = []
             for candidate in candidates {
                 guard let candidateURL = URL(string: urlString),
                       let rules = (try? JSONSerialization.jsonObject(with: Data(candidate.rulesJSON.utf8))) as? [[String: Any]],
                       let redirect = UserScriptInstallRouter.redirect(for: candidateURL, extensionID: candidate.id, rules: rules)
                 else { continue }
-                return (candidate.id, redirect.target.absoluteString)
+                out.append((candidate.id, redirect.target.absoluteString))
             }
-            return nil
+            return out
         }.value
-        guard let matched, let target = URL(string: matched.target), let ext = byID[matched.id] else { return nil }
-        return (ext, target)
+
+        var targets: [ScriptInstallTarget] = []
+        var seen = Set<String>()
+        for (id, targetString) in dnrMatches {
+            guard !seen.contains(id), let ext = byID[id], let target = URL(string: targetString),
+                  let path = Self.extensionPageRelativePath(from: target) else { continue }
+            seen.insert(id)
+            targets.append(ScriptInstallTarget(name: ext.displayName, route: { [weak self] in
+                self?.openExtensionPageTab(ext: ext, kind: .options, path: path, activate: true)
+            }))
+        }
+        // --- webRequest managers (Violentmonkey): dispatch the navigation into the chosen worker's listener.
+        for id in await runtime.userScriptWebRequestManagerIDs(url: url) where !seen.contains(id) {
+            guard let ext = byID[id] else { continue }
+            seen.insert(id)
+            targets.append(ScriptInstallTarget(name: ext.displayName, route: {
+                Task { @MainActor in _ = await runtime.dispatchUserScript(extensionID: id, url: url) }
+            }))
+        }
+        return targets
     }
 
-    /// Hand a `.user.js` URL to an installed userscript manager that claims it (Chrome behavior), or fall
-    /// back to BrownBear's own install card. Async because it consults extensions' DNR rules; call it
-    /// AFTER cancelling the navigation that hit the `.user.js`.
+    /// Handle a `.user.js` navigation: per the user's install-target policy, show BrownBear's install sheet
+    /// (with hand-off buttons for every installed manager that claims it), route straight to a manager, or
+    /// just show the native card. Call AFTER cancelling the navigation that hit the `.user.js`.
     @MainActor
     func handleUserScriptInstall(for url: URL) {
         Task { @MainActor in
-            if let redirect = await self.userScriptInstallRedirect(for: url),
-               let path = Self.extensionPageRelativePath(from: redirect.target) {
-                // An MV3 declarativeNetRequest manager (ScriptCat) → open its computed install page.
-                self.openExtensionPageTab(ext: redirect.ext, kind: .options, path: path, activate: true)
-            } else if await BrownBearServices.shared.webExtensionRuntime.handleUserScriptNavigation(url: url) {
-                // An MV2 webRequest manager (Violentmonkey) took it and opens its own confirm page.
-            } else {
+            let targets = await self.userScriptInstallTargets(for: url)
+            switch AppSettings.userScriptInstallPolicy.decision(managerCount: targets.count) {
+            case .nativeCard:
                 self.presentScriptInstall(for: url)
+            case .routeToSingleManager:
+                targets.first?.route()
+            case .picker(let showNativeInstall):
+                self.presentScriptInstall(for: url, managerTargets: targets, showNativeInstall: showNativeInstall)
             }
         }
     }

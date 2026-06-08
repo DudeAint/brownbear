@@ -1791,6 +1791,19 @@
     }
     return handled;
   };
+  // Detection-only twin of the dispatcher: does this worker have a main-frame onBeforeRequest listener
+  // whose filter matches `url`? Used to list this extension as an install TARGET without invoking the
+  // listener (which would start the install). No side effects.
+  globalThis.__bbHasWebRequestUserScriptListener = function (url) {
+    if (typeof url !== 'string' || !url) { return false; }
+    for (var i = 0; i < __bbWebRequestOnBeforeRequest.length; i++) {
+      var entry = __bbWebRequestOnBeforeRequest[i];
+      if (entry.types && entry.types.indexOf('main_frame') < 0) { continue; }
+      if (!entry.urls || entry.urls.length === 0) { return true; }
+      for (var j = 0; j < entry.urls.length; j++) { if (__bbMatchPattern(entry.urls[j], url)) { return true; } }
+    }
+    return false;
+  };
 
   var webRequest = {
     onBeforeRequest: makeWebRequestEvent(__bbWebRequestOnBeforeRequest), onBeforeSendHeaders: makeEvent([]), onSendHeaders: makeEvent([]),

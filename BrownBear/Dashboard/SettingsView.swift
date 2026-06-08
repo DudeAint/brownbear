@@ -16,6 +16,7 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Key.autoUpdateScripts) private var autoUpdateScripts = true
     @AppStorage(AppSettings.Key.hideBarsOnScroll) private var hideBarsOnScroll = true
     @AppStorage(AppSettings.Key.addressBarPosition) private var addressBarPositionRaw = AddressBarPosition.top.rawValue
+    @AppStorage(AppSettings.Key.userScriptInstallPolicy) private var installPolicyRaw = UserScriptInstallPolicy.ask.rawValue
     @State private var isClearing = false
     @State private var didClear = false
     @State private var confirmingClear = false
@@ -49,6 +50,17 @@ struct SettingsView: View {
             Section("Userscripts") {
                 Toggle("Update scripts automatically", isOn: $autoUpdateScripts)
                 Text("Checks each script's @updateURL/@downloadURL for a newer @version and reinstalls it.")
+                    .font(.caption)
+                    .foregroundStyle(BBTheme.Color.textSecondary)
+
+                Picker("Install .user.js with", selection: $installPolicyRaw) {
+                    ForEach(UserScriptInstallPolicy.allCases) { policy in
+                        Text(policy.title).tag(policy.rawValue)
+                    }
+                }
+                Text("When you open a userscript and a manager extension (ScriptCat, Violentmonkey, …) is "
+                    + "installed: ask each time, always use BrownBear's built-in installer, or always hand off "
+                    + "to a userscript extension.")
                     .font(.caption)
                     .foregroundStyle(BBTheme.Color.textSecondary)
             }

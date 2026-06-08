@@ -13,6 +13,13 @@
 
 import UIKit
 
+/// A hand-off target shown in the install sheet's "Install with" picker — a userscript-manager extension
+/// that claims this `.user.js`. `route` opens the manager's own install/confirm flow.
+struct ScriptInstallTarget {
+    let name: String
+    let route: @MainActor () -> Void
+}
+
 @MainActor
 final class ScriptInstallViewController: UIViewController {
 
@@ -33,12 +40,20 @@ final class ScriptInstallViewController: UIViewController {
     private let installer = UserScriptInstaller.shared
     private let onFinished: (() -> Void)?
     private let onViewSource: ((URL) -> Void)?
+    /// Userscript-manager extensions that also claim this URL — shown as "Open in <name>" in the picker.
+    private let managerTargets: [ScriptInstallTarget]
+    /// Whether to offer BrownBear's own install alongside the managers (false in always-extension mode
+    /// when several managers are present, so the sheet picks among extensions only).
+    private let showNativeInstall: Bool
 
     // MARK: - Init
 
-    init(url: URL, onFinished: (() -> Void)? = nil, onViewSource: ((URL) -> Void)? = nil) {
+    init(url: URL, managerTargets: [ScriptInstallTarget] = [], showNativeInstall: Bool = true,
+         onFinished: (() -> Void)? = nil, onViewSource: ((URL) -> Void)? = nil) {
         self.url = url
         self.presetSource = nil
+        self.managerTargets = managerTargets
+        self.showNativeInstall = showNativeInstall
         self.onFinished = onFinished
         self.onViewSource = onViewSource
         super.init(nibName: nil, bundle: nil)
@@ -47,6 +62,8 @@ final class ScriptInstallViewController: UIViewController {
     init(source: String, url: URL? = nil, onFinished: (() -> Void)? = nil) {
         self.url = url
         self.presetSource = source
+        self.managerTargets = []
+        self.showNativeInstall = true
         self.onFinished = onFinished
         self.onViewSource = nil
         super.init(nibName: nil, bundle: nil)
@@ -249,6 +266,9 @@ final class ScriptInstallViewController: UIViewController {
         if let description = meta.descriptionText, !description.isEmpty {
             contentStack.addArrangedSubview(makeBodyLabel(description))
         }
+        if !managerTargets.isEmpty {
+            contentStack.addArrangedSubview(makeInstallTargetsCard(preview))
+        }
         contentStack.addArrangedSubview(makeStatStrip(preview))
         contentStack.addArrangedSubview(makeRunsOnCard(preview))
         contentStack.addArrangedSubview(makePermissionsCard(preview))
@@ -274,8 +294,12 @@ final class ScriptInstallViewController: UIViewController {
             let viewSource = makeBorderedButton(symbol: "doc.plaintext", action: #selector(viewSourceTapped))
             actionBar.addArrangedSubview(viewSource)
         }
-        installButton = makeFilledButton(title: preview.isUpdate ? "Update" : "Install", action: #selector(installTapped))
-        actionBar.addArrangedSubview(installButton)
+        // With manager targets the install/hand-off choices live in the "Install with" card, so the bar
+        // is just Cancel (+ View source); without, it carries the primary Install button.
+        if managerTargets.isEmpty {
+            installButton = makeFilledButton(title: preview.isUpdate ? "Update" : "Install", action: #selector(installTapped))
+            actionBar.addArrangedSubview(installButton)
+        }
 
         if let sourceURL = preview.sourceURL {
             urlFootnote.text = sourceURL.absoluteString
@@ -543,6 +567,53 @@ extension ScriptInstallViewController {
         let button = UIButton(configuration: config)
         button.addTarget(self, action: action, for: .touchUpInside)
         if title == nil { button.setContentHuggingPriority(.required, for: .horizontal) }
+        return button
+    }
+
+    /// The "Install with" picker card: a full-width button per install target. BrownBear's own install is
+    /// the primary (filled) action; each userscript-manager extension is an "Open in <name>" hand-off.
+    private func makeInstallTargetsCard(_ preview: UserScriptInstaller.Preview) -> UIView {
+        let stack = UIStackView()
+        stack.axis = .vertical
+        stack.spacing = 10
+
+        let heading = UILabel()
+        heading.text = "Install with"
+        heading.font = .systemFont(ofSize: 13, weight: .semibold)
+        heading.textColor = BrownBearTheme.Palette.textSecondary
+        stack.addArrangedSubview(heading)
+
+        if showNativeInstall {
+            let title = preview.isUpdate ? "Update in BrownBear" : "Install in BrownBear"
+            stack.addArrangedSubview(makeTargetButton(title: title, systemImage: "scroll.fill", filled: true) { [weak self] in
+                self?.installTapped()
+            })
+        }
+        for target in managerTargets {
+            stack.addArrangedSubview(makeTargetButton(title: "Open in \(target.name)",
+                                                      systemImage: "puzzlepiece.extension.fill", filled: false) { [weak self] in
+                self?.dismiss(animated: true) { target.route() }
+            })
+        }
+        return stack
+    }
+
+    private func makeTargetButton(title: String, systemImage: String, filled: Bool,
+                                  handler: @escaping @MainActor () -> Void) -> UIButton {
+        var config = filled ? UIButton.Configuration.filled() : UIButton.Configuration.gray()
+        config.title = title
+        config.image = UIImage(systemName: systemImage)
+        config.imagePadding = 8
+        config.cornerStyle = .large
+        config.contentInsets = NSDirectionalEdgeInsets(top: 13, leading: 16, bottom: 13, trailing: 16)
+        if filled {
+            config.baseBackgroundColor = BrownBearTheme.Palette.accent
+            config.baseForegroundColor = .white
+        } else {
+            config.baseForegroundColor = BrownBearTheme.Palette.textPrimary
+        }
+        let button = UIButton(configuration: config, primaryAction: UIAction { _ in handler() })
+        button.contentHorizontalAlignment = .leading
         return button
     }
 

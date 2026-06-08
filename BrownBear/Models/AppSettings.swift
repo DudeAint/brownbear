@@ -61,6 +61,49 @@ enum AddressBarPosition: String, CaseIterable, Identifiable {
     var title: String { self == .top ? "Top" : "Bottom" }
 }
 
+/// What happens when a `.user.js` is opened and one or more installed userscript-manager extensions
+/// (ScriptCat, Violentmonkey, Tampermonkey, …) claim it. The user keeps the power: BrownBear's own
+/// installer and any extension are both available.
+enum UserScriptInstallPolicy: String, CaseIterable, Identifiable {
+    /// Show the install sheet with a target for BrownBear AND each manager — the user picks (default).
+    case ask
+    /// Always install with BrownBear's built-in engine; never hand off to an extension.
+    case brownBear
+    /// Always hand off to a userscript-manager extension (route directly if there's one, pick if several);
+    /// fall back to BrownBear only when no manager claims the script.
+    case alwaysExtension
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .ask: return "Ask each time"
+        case .brownBear: return "Always BrownBear"
+        case .alwaysExtension: return "Always a userscript extension"
+        }
+    }
+
+    /// What the navigation delegate should do for a `.user.js` given this policy and how many installed
+    /// managers claim the URL. Pure (table-tested) so the routing code stays a thin switch.
+    enum Decision: Equatable {
+        case nativeCard                  // BrownBear's install sheet, no manager targets
+        case picker(showNativeInstall: Bool)   // the sheet with manager targets (+ optionally BrownBear)
+        case routeToSingleManager        // exactly one manager and the policy says always-extension
+    }
+
+    func decision(managerCount: Int) -> Decision {
+        switch self {
+        case .brownBear:
+            return .nativeCard
+        case .ask:
+            return managerCount == 0 ? .nativeCard : .picker(showNativeInstall: true)
+        case .alwaysExtension:
+            if managerCount == 0 { return .nativeCard }
+            return managerCount == 1 ? .routeToSingleManager : .picker(showNativeInstall: false)
+        }
+    }
+}
+
 /// Namespaced UserDefaults-backed app preferences. The SwiftUI Settings screen uses `@AppStorage`
 /// on the same keys, so reads here and edits there stay in sync.
 enum AppSettings {
@@ -71,6 +114,14 @@ enum AppSettings {
         static let lastScriptUpdateCheck = "bbLastScriptUpdateCheck"
         static let hideBarsOnScroll = "bbHideBarsOnScroll"
         static let addressBarPosition = "bbAddressBarPosition"
+        static let userScriptInstallPolicy = "bbUserScriptInstallPolicy"
+    }
+
+    /// How a `.user.js` open is routed when userscript-manager extensions are installed. Default `.ask`
+    /// (the Settings picker uses @AppStorage on the same key).
+    static var userScriptInstallPolicy: UserScriptInstallPolicy {
+        get { UserScriptInstallPolicy(rawValue: UserDefaults.standard.string(forKey: Key.userScriptInstallPolicy) ?? "") ?? .ask }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.userScriptInstallPolicy) }
     }
 
     /// Where the address bar sits. Default `.top`. Changing it posts `.brownBearChromeLayoutChanged`
