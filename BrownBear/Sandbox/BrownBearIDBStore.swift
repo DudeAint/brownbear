@@ -83,10 +83,18 @@ final class BrownBearIDBStore: @unchecked Sendable {
 
     // MARK: - Disk I/O
 
-    /// Read the last snapshot for `namespace`, or nil if none was ever written. Synchronous: callers
-    /// invoke it during boot on a background thread, and snapshots are small JSON blobs.
+    /// Hard ceiling on a snapshot we'll read back at boot, so a corrupt/hostile blob can't OOM or block
+    /// the launch. Comfortably above any realistic per-namespace store; oversized → fail closed.
+    private static let maxSnapshotBytes = 48 * 1024 * 1024
+
+    /// Read the last snapshot for `namespace`, or nil if none was ever written (or it's implausibly
+    /// large). Synchronous: callers invoke it during boot on a background thread.
     func load(namespace: Namespace) -> String? {
         let url = fileURL(for: namespace)
+        if let size = (try? fileManager.attributesOfItem(atPath: url.path)[.size]) as? Int,
+           size > Self.maxSnapshotBytes {
+            return nil   // refuse an oversized snapshot rather than materialize it at launch
+        }
         guard let data = try? Data(contentsOf: url) else { return nil }
         return String(data: data, encoding: .utf8)
     }

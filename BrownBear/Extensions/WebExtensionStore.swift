@@ -131,6 +131,7 @@ actor WebExtensionStore {
         loadIfNeeded()
         extensions.removeAll { $0.id == id }
         try? FileManager.default.removeItem(at: directory(for: id))
+        BrownBearIDBStore.shared.clear(namespace: .ext(id))   // drop its headless IndexedDB snapshot too
         persist()
     }
 

@@ -13,21 +13,45 @@
   var g = globalThis;
   if (!g.indexedDB || !g.indexedDB._databases) { return; }
 
+  // Structured-clone-aware JSON. IndexedDB stores real structured-clone values (the engine clones
+  // every put), so a snapshot must round-trip Date/RegExp/Map/Set/BigInt/ArrayBuffer/typed arrays —
+  // not just plain JSON. We tag each via `__bbT` and reconstruct on revive. The replacer reads the RAW
+  // value via `this[k]` because JSON.stringify applies toJSON (e.g. Date→ISO string) before `val`, and
+  // because a BigInt left untouched would make stringify THROW (losing the whole snapshot).
   function encode(obj) {
-    // Read the RAW value via this[k]: JSON.stringify applies Date.prototype.toJSON (→ ISO string)
-    // before the replacer sees `val`, so we'd otherwise lose the Date type.
     return JSON.stringify(obj, function (k, val) {
       var raw = this[k];
+      if (typeof raw === 'bigint') { return { __bbT: 'BigInt', v: raw.toString() }; }
       if (raw instanceof Date) { return { __bbT: 'Date', v: raw.getTime() }; }
+      if (raw instanceof RegExp) { return { __bbT: 'RegExp', s: raw.source, f: raw.flags }; }
+      if (raw instanceof Map) { return { __bbT: 'Map', v: Array.from(raw.entries()) }; }
+      if (raw instanceof Set) { return { __bbT: 'Set', v: Array.from(raw.values()) }; }
+      if (raw instanceof ArrayBuffer) { return { __bbT: 'ArrayBuffer', v: Array.prototype.slice.call(new Uint8Array(raw)) }; }
+      if (typeof DataView !== 'undefined' && raw instanceof DataView) {
+        return { __bbT: 'DataView', v: Array.prototype.slice.call(new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength)) };
+      }
+      if (raw && ArrayBuffer.isView(raw)) {
+        return { __bbT: 'TypedArray', c: (raw.constructor && raw.constructor.name) || 'Uint8Array',
+                 v: Array.prototype.slice.call(raw) };
+      }
       return val;
     });
   }
   function revive(val) {
-    if (val && typeof val === 'object') {
-      if (val.__bbT === 'Date') { return new Date(val.v); }
-      if (Array.isArray(val)) { for (var i = 0; i < val.length; i++) { val[i] = revive(val[i]); } return val; }
-      for (var k in val) { if (Object.prototype.hasOwnProperty.call(val, k)) { val[k] = revive(val[k]); } }
+    if (!val || typeof val !== 'object') { return val; }
+    switch (val.__bbT) {
+      case 'BigInt': return (typeof BigInt === 'function') ? BigInt(val.v) : Number(val.v);
+      case 'Date': return new Date(val.v);
+      case 'RegExp': return new RegExp(val.s, val.f);
+      case 'Map': { var m = new Map(); var e = val.v || []; for (var i = 0; i < e.length; i++) { m.set(revive(e[i][0]), revive(e[i][1])); } return m; }
+      case 'Set': { var s = new Set(); var a = val.v || []; for (var j = 0; j < a.length; j++) { s.add(revive(a[j])); } return s; }
+      case 'ArrayBuffer': return new Uint8Array(val.v || []).buffer;
+      case 'DataView': return new DataView(new Uint8Array(val.v || []).buffer);
+      case 'TypedArray': { var Ctor = g[val.c] || Uint8Array; try { return new Ctor(val.v || []); } catch (e) { return new Uint8Array(val.v || []); } }
+      default: break;
     }
+    if (Array.isArray(val)) { for (var x = 0; x < val.length; x++) { val[x] = revive(val[x]); } return val; }
+    for (var key in val) { if (Object.prototype.hasOwnProperty.call(val, key)) { val[key] = revive(val[key]); } }
     return val;
   }
   function decode(s) { return revive(JSON.parse(s)); }
