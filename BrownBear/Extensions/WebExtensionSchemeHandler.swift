@@ -54,9 +54,13 @@ final class WebExtensionSchemeHandler: NSObject, WKURLSchemeHandler {
         if path.isEmpty { path = "index.html" }
         let resolvedPath = path
 
+        let isHTMLPage = Self.mimeType(forPath: resolvedPath).hasPrefix("text/html")
         Task { [weak self] in
             guard let self else { return }
             let data = await self.store.file(extensionID: extensionID, path: resolvedPath)
+            // Only HTML documents carry the page CSP (it governs the document + its subresources); fetch
+            // the declared policy lazily so JS/CSS/image responses don't touch the store actor twice.
+            let csp = isHTMLPage ? await self.store.ext(for: extensionID)?.manifest?.contentSecurityPolicy : nil
             await MainActor.run {
                 guard self.liveTasks.contains(key) else { return }   // stopped while we were reading
                 self.liveTasks.remove(key)
@@ -64,13 +68,8 @@ final class WebExtensionSchemeHandler: NSObject, WKURLSchemeHandler {
                     urlSchemeTask.didFailWithError(BrownBearError.bridgeRejected("not found: \(resolvedPath)"))
                     return
                 }
-                // CORS scoped to this extension's own origin (not "*"), so even a same-handler
-                // response isn't blanket-readable by another origin.
-                let headers = [
-                    "Content-Type": Self.mimeType(forPath: resolvedPath),
-                    "Content-Length": "\(data.count)",
-                    "Access-Control-Allow-Origin": "\(Self.scheme)://\(extensionID)"
-                ]
+                let headers = Self.responseHeaders(path: resolvedPath, dataCount: data.count,
+                                                   extensionID: extensionID, csp: csp)
                 if let response = HTTPURLResponse(url: url, statusCode: 200,
                                                   httpVersion: "HTTP/1.1", headerFields: headers) {
                     urlSchemeTask.didReceive(response)
@@ -91,6 +90,25 @@ final class WebExtensionSchemeHandler: NSObject, WKURLSchemeHandler {
         guard liveTasks.contains(key) else { return }
         liveTasks.remove(key)
         task.didFailWithError(BrownBearError.bridgeRejected(reason))
+    }
+
+    /// The response headers for a served extension resource: content type, content length, and CORS
+    /// scoped to the extension's OWN origin (not "*"). An HTML PAGE additionally carries the manifest's
+    /// Content-Security-Policy when one is declared, so a CSP-declaring extension's inline-script / eval
+    /// restrictions actually apply (matching Chrome); non-HTML resources never carry it, and a CSP-less
+    /// manifest is left unchanged (no default injected — that would break pages that work without one).
+    /// Pure mapping — unit-tested directly (the WKURLSchemeHandler response path needs a live web view).
+    static func responseHeaders(path: String, dataCount: Int, extensionID: String, csp: String?) -> [String: String] {
+        let contentType = mimeType(forPath: path)
+        var headers = [
+            "Content-Type": contentType,
+            "Content-Length": "\(dataCount)",
+            "Access-Control-Allow-Origin": "\(scheme)://\(extensionID)"
+        ]
+        if contentType.hasPrefix("text/html"), let csp, !csp.isEmpty {
+            headers["Content-Security-Policy"] = csp
+        }
+        return headers
     }
 
     /// A small content-type table — enough for the HTML/JS/CSS/image/font assets an extension page
