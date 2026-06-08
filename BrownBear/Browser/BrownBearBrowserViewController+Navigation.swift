@@ -152,11 +152,12 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
                     decisionHandler(.allow, preferences)   // user picked "View source" — load as text
                     return
                 }
-                // Not navigating — we show the install card instead. Drop the captured target so it
-                // can't be mis-consumed by the next navigation's onBeforeNavigate.
+                // Not navigating — hand the .user.js to an installed userscript manager that claims it
+                // (Chrome behavior) or show BrownBear's native install card. Drop the captured target so
+                // it can't be mis-consumed by the next navigation's onBeforeNavigate.
                 pendingNavTargets.removeValue(forKey: ObjectIdentifier(webView))
                 decisionHandler(.cancel, preferences)
-                presentScriptInstall(for: url)
+                handleUserScriptInstall(for: url)
                 return
             }
         }

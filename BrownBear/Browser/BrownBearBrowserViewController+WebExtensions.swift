@@ -53,6 +53,51 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
         return path.isEmpty ? nil : path
     }
 
+    /// If an enabled userscript-manager extension claims this `.user.js` URL via a declarativeNetRequest
+    /// `redirect` rule (ScriptCat registers one targeting `install.html?url=<original>`), the extension +
+    /// the page to open. WebKit can't perform a DNR redirect of a main-frame request, so we evaluate the
+    /// stored rule ourselves and open the computed page — exactly what the redirect would have done. The
+    /// first enabled extension with a matching rule wins.
+    @MainActor
+    func userScriptInstallRedirect(for url: URL) async -> (ext: WebExtension, target: URL)? {
+        let store = BrownBearServices.shared.webExtensionStore
+        let dnr = BrownBearServices.shared.webExtensionDNRStore
+        for ext in await store.enabledExtensions() {
+            guard let manifest = ext.manifest else { continue }
+            // Session + dynamic rules first (Chrome gives runtime rules precedence over static), then the
+            // enabled static rulesets — the same sources the content blocker merges.
+            var rules = await dnr.getSessionRules(extensionID: ext.id)
+            rules += await dnr.getDynamicRules(extensionID: ext.id)
+            let manifestDefaults = manifest.declarativeNetRequest.filter(\.enabled).map(\.id)
+            let enabledIDs = await dnr.enabledRulesetIDs(extensionID: ext.id, manifestDefaults: manifestDefaults)
+            for ruleset in manifest.declarativeNetRequest where enabledIDs.contains(ruleset.id) {
+                if let data = await store.file(extensionID: ext.id, path: ruleset.path),
+                   let arr = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] {
+                    rules += arr
+                }
+            }
+            if let redirect = UserScriptInstallRouter.redirect(for: url, extensionID: ext.id, rules: rules) {
+                return (ext, redirect.target)
+            }
+        }
+        return nil
+    }
+
+    /// Hand a `.user.js` URL to an installed userscript manager that claims it (Chrome behavior), or fall
+    /// back to BrownBear's own install card. Async because it consults extensions' DNR rules; call it
+    /// AFTER cancelling the navigation that hit the `.user.js`.
+    @MainActor
+    func handleUserScriptInstall(for url: URL) {
+        Task { @MainActor in
+            if let redirect = await self.userScriptInstallRedirect(for: url),
+               let path = Self.extensionPageRelativePath(from: redirect.target) {
+                self.openExtensionPageTab(ext: redirect.ext, kind: .options, path: path, activate: true)
+            } else {
+                self.presentScriptInstall(for: url)
+            }
+        }
+    }
+
     func webExtCreateTab(url: String?, active: Bool) -> [String: Any] {
         // A chrome-extension://<id>/<path> URL needs the per-extension scheme handler + chrome.* page
         // bridge a normal tab lacks (else it loads blank). Route it to the real extension-page tab. The

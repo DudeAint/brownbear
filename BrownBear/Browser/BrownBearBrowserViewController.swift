@@ -679,12 +679,13 @@ extension BrownBearBrowserViewController: WKUIDelegate {
                  createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction,
                  windowFeatures: WKWindowFeatures) -> WKWebView? {
-        // A target="_blank" link to a *.user.js (common on Greasy Fork / GitHub raw) must NOT spawn
-        // a blank tab that then dumps raw JS — show the install card and open no window.
+        // A target="_blank" link to a *.user.js (common on Greasy Fork / GitHub raw) must NOT spawn a
+        // blank tab that then dumps raw JS — hand it to an installed userscript manager that claims it,
+        // or show BrownBear's native install card, and open no window.
         if let url = navigationAction.request.url,
            ["http", "https", "file"].contains(url.scheme?.lowercased() ?? ""),
            UserScriptInstaller.isUserScriptURL(url) {
-            presentScriptInstall(for: url)
+            handleUserScriptInstall(for: url)
             return nil
         }
         // A link asked to open in a new window/tab — honor it by creating a real new tab whose
