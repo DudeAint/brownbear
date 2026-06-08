@@ -101,6 +101,7 @@ actor ScriptStore {
     func remove(id: UUID) async {
         loadIfNeeded()
         scripts.removeAll { $0.id == id }
+        BrownBearIDBStore.shared.clear(namespace: .script(id.uuidString))   // drop its IndexedDB snapshot too
         persist()
     }
 

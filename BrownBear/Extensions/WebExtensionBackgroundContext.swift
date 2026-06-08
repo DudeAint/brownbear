@@ -105,7 +105,8 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
             // Device-derived inputs for the navigator polyfill (JSC has no DOM; see HeadlessEnvironment).
             context.setObject(HeadlessEnvironment.userAgent, forKeyedSubscript: "__bbUserAgent" as NSString)
             context.setObject(HeadlessEnvironment.language, forKeyedSubscript: "__bbLanguage" as NSString)
-
+            // IndexedDB engine + rehydrate this extension's snapshot before its background source runs.
+            BrownBearIDBStore.shared.install(into: context, namespace: .ext(extensionID))
             context.evaluateScript(runtimeJS, withSourceURL: URL(string: "brownbear://webext/\(extensionID)/runtime.js"))
             // Wrap in a function so a worker/background script using a top-level `return` (some
             // ScriptCat-derived bundles do) is valid — a bare top-level `return` is a SyntaxError.
@@ -124,6 +125,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
     func shutdown() {
         queue.async { [self] in
             isAlive = false
+            BrownBearIDBStore.shared.flush(context: context)   // persist any writes before timers die
             for timer in alarmTimers.values { timer.cancel() }
             for timer in timers.values { timer.cancel() }
             alarmTimers.removeAll()

@@ -96,12 +96,17 @@ final class HeadlessScriptRunner: @unchecked Sendable {
 
         installAPIs(into: context, script: script, scratch: scratch, deadline: deadline)
         installPrelude(into: context)
+        // IndexedDB (JSC has none): install the engine + rehydrate this script's snapshot before its
+        // body runs. This one-shot runner has no setTimeout, so the JS auto-save can't debounce — we
+        // flush once after the body (and its microtask-scheduled IndexedDB work) has drained.
+        BrownBearIDBStore.shared.install(into: context, namespace: .script(script.id.uuidString))
 
         // Wrap in a function so a background script using a top-level `return` (common in ScriptCat
         // background scripts) is valid — bare top-level `return` is a SyntaxError. The body starts on
         // line 1 of the wrapper so error line numbers still line up with the script source.
         let wrappedBody = "(function(){" + script.executableBody + "\n})();"
         context.evaluateScript(wrappedBody, withSourceURL: URL(string: "brownbear://\(script.id.uuidString).user.js"))
+        BrownBearIDBStore.shared.flush(context: context)   // persist any IndexedDB writes the run made
 
         return (HeadlessRunOutcome(scriptID: script.id, error: runError), scratch)
     }
