@@ -4,7 +4,7 @@
 
 <br/>
 
-**The first iOS browser to bring ScriptCat-class power to userscripts — background execution, `@crontab` scheduling, and a sandboxed GM API — wrapped in a Chromium-inspired interface.**
+**The first iOS browser to bring ScriptCat-class power to userscripts — background execution, `@crontab` scheduling, and a sandboxed GM API — _and_ run real Chrome Web Store extensions, all wrapped in a Chromium-inspired interface.**
 
 <br/>
 
@@ -97,6 +97,24 @@ and save-time metadata validation**.
 
 </td>
 </tr>
+<tr>
+<td colspan="2" valign="top">
+
+### 🧩 Chrome Web Store Extensions
+Install and run **real browser extensions** (MV2 **and** MV3) from the Chrome Web Store, Edge
+Add-ons, or Firefox AMO — paste a link or install a `.crx`/`.zip`. A broad native-backed
+`chrome.*` / `browser.*` surface: **service workers** (classic *and* ES-module, e.g. uBlock Origin
+Lite) in a headless `JSContext`, **content scripts**, **popup/options pages** over a
+`chrome-extension://` scheme, `storage` · `tabs` · `windows` · `webNavigation` · `scripting` ·
+`cookies` · `notifications` · `contextMenus` · `identity` · `alarms` · `i18n` · `runtime`
+messaging + long-lived ports, **`declarativeNetRequest`** ad-blocking via `WKContentRuleList`,
+a polyfilled **IndexedDB**, and web platform APIs JavaScriptCore lacks (`fetch`/`Headers`/`Request`/
+`Response`/`AbortController`/`FormData`/`Blob`/`File`/`XMLHttpRequest`/Web Crypto/`structuredClone`).
+Userscript-manager extensions (e.g. **ScriptCat**) are first-class — a `.user.js` link can be
+handed off to them. Constrained, partial, and unsupported APIs are [documented honestly](docs/WEB_EXTENSIONS.md).
+
+</td>
+</tr>
 </table>
 
 ---
@@ -112,7 +130,7 @@ and save-time metadata validation**.
 | **Background scripts (no tab)** | ✅ | ⚠️ limited | ❌ | ❌ | ✅ |
 | **`@crontab` scheduling** | ✅ | ❌ | ❌ | ❌ | ✅ |
 | Built-in code editor | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Chrome Web Store extensions** | 🔜 planned (Module 6) | ✅ | ❌ | ❌ | ❌ |
+| **Chrome Web Store extensions** | ✅ MV2/MV3 | ✅ | ❌ | ❌ | ❌ |
 | Open source | ✅ MIT | ❌ | ✅ GPL | ✅ | ✅ GPL |
 
 > ⚠️ iOS background execution is **budgeted and best-effort** by design — `@crontab` is a
@@ -148,9 +166,13 @@ engine, a security bridge, and a background scheduler:
 
 ## 🚀 Project Status
 
-🚧 **Pre-alpha — actively being built.** The repository is being scaffolded module by module.
-The engineering bar is App-Store-shippable code: no stubs, no mocks, no truncation
-(see [`CLAUDE.md`](CLAUDE.md) and [`AGENTS.md`](AGENTS.md)).
+🚧 **Pre-alpha — actively being built.** All six modules have landed — the Chromium-style browser,
+the userscript engine + sandbox, the `@crontab` background runner, the dashboard/editor, and the
+Chrome Web Store extension runtime (Module 6) — and the focus now is real-world hardening against
+shipping extensions (ScriptCat, uBlock Origin Lite, Violentmonkey, Grammarly, …). The engineering
+bar is App-Store-shippable code: no stubs, no mocks, no truncation (see [`CLAUDE.md`](CLAUDE.md) and
+[`AGENTS.md`](AGENTS.md)). Where WebKit's extension-less model forces a limit, we degrade honestly
+and [document it](docs/WEB_EXTENSIONS.md).
 
 ---
 
