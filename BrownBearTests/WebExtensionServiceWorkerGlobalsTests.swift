@@ -91,6 +91,35 @@ final class WebExtensionServiceWorkerGlobalsTests: XCTestCase {
         XCTAssertEqual(r["structuredCloneOk"] as? Bool, true)
     }
 
+    func testClassicSWTopLevelDeclarationsAreGlobalLikeChrome() async throws {
+        // Chrome evaluates a classic service worker at GLOBAL scope, so top-level `var`/`function`
+        // become globals — visible across importScripts() chunks and to code that references them as
+        // globals. Wrapping the source in an IIFE made them closure-local, breaking real bundles
+        // (Violentmonkey's `M`, Best AdBlocker's `fn`). globalThis.<topLevel> must be defined.
+        let context = try makeContext(background: """
+        var topLevelVar = 42;
+        function topLevelFn() { return 'fn-ok'; }
+        self.sharedAcrossChunks = 'shared';
+        chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+          if (!msg || msg.check !== 'scope') { return; }
+          sendResponse({
+            varIsGlobal: globalThis.topLevelVar === 42,
+            fnIsGlobal: typeof globalThis.topLevelFn === 'function',
+            fnResult: (typeof topLevelFn === 'function') ? topLevelFn() : null,
+            selfShared: self.sharedAcrossChunks === 'shared'
+          });
+        });
+        """)
+        defer { context.shutdown() }
+
+        let response = await context.deliverRuntimeMessage(message: ["check": "scope"], sender: [:])
+        let r = try XCTUnwrap(response?["value"] as? [String: Any], "the worker must register its listener")
+        XCTAssertEqual(r["varIsGlobal"] as? Bool, true, "top-level var must be GLOBAL (Chrome scope), not closure-local")
+        XCTAssertEqual(r["fnIsGlobal"] as? Bool, true, "top-level function must be GLOBAL")
+        XCTAssertEqual(r["fnResult"] as? String, "fn-ok")
+        XCTAssertEqual(r["selfShared"] as? String, "shared")
+    }
+
     func testFetchHostGateFailsClosedWithoutHostPermission() async throws {
         // Manifest declares NO host_permissions, so a cross-origin fetch must be rejected (fail closed).
         let context = try makeContext(background: """

@@ -121,11 +121,24 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
                 runModuleWorker(in: context, esmRuntimeJS: esmRuntimeJS,
                                 entryPath: moduleEntry, moduleSource: moduleSource)
             } else {
-                // Wrap in a function so a worker/background script using a top-level `return` (some
-                // ScriptCat-derived bundles do) is valid — a bare top-level `return` is a SyntaxError.
-                // Body starts on line 1 of the wrapper so error line numbers still line up.
-                let wrappedSource = "(function(){" + backgroundSource + "\n})();"
-                context.evaluateScript(wrappedSource, withSourceURL: URL(string: "brownbear://webext/\(extensionID)/background.js"))
+                // Evaluate the classic SW at GLOBAL scope, exactly like Chrome: top-level `var` /
+                // `function` declarations must become GLOBALS so they're visible across importScripts()
+                // chunks and to later code that references them as globals. Wrapping the source in an
+                // IIFE made those declarations closure-local, which broke real bundles whose chunks
+                // share top-level symbols (Violentmonkey's `M`, Best AdBlocker's `fn`). Only if the
+                // source is a non-Chrome bundle with a bare top-level `return` (a SyntaxError at global
+                // scope) do we retry inside a function wrapper.
+                let bgURL = URL(string: "brownbear://webext/\(extensionID)/background.js")
+                context.evaluateScript(backgroundSource, withSourceURL: bgURL)
+                if let exception = context.exception {
+                    context.exception = nil   // clear so it can't bleed into the onInstalled/onStartup fires
+                    // A bare top-level `return` is a SyntaxError at global scope (some non-Chrome bundles
+                    // do this). Only then retry inside a function wrapper; a genuine runtime error was
+                    // already logged by the exceptionHandler and must NOT be re-run.
+                    if (exception.toString() ?? "").localizedCaseInsensitiveContains("return statement") {
+                        context.evaluateScript("(function(){" + backgroundSource + "\n})();", withSourceURL: bgURL)
+                    }
+                }
             }
 
             // onInstalled fires ONLY on the first-ever boot of this extension (Chrome contract);
