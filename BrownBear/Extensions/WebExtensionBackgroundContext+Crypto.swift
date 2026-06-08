@@ -165,12 +165,131 @@ extension WebExtensionBackgroundContext {
             case "generateAesKey":
                 let key = SymmetricKey(size: SymmetricKeySize(bitCount: (p["length"] as? Int) ?? 256))
                 return okData(key.withUnsafeBytes { Data($0) })
+            case "ecdsaGenerate", "ecdsaSign", "ecdsaVerify", "ecdsaImportJwk", "ecdsaExportJwk":
+                return Self.ecdsa(op: op, params: p)
             default:
                 return fail("unsupported subtle op: \(op)")
             }
         } catch {
             return fail(String(describing: error))
         }
+    }
+
+    // MARK: - crypto.subtle (ECDSA P-256 / P-384, via CryptoKit)
+
+    /// ECDSA sign/verify/generateKey + JWK/raw key import-export, P-256 and P-384, via CryptoKit. A key
+    /// is carried JS-side as base64 of its CryptoKit rawRepresentation (private = the scalar, public =
+    /// x||y); we reconstruct it here per call. The WebCrypto signature is the raw r||s — exactly
+    /// CryptoKit's ECDSASignature.rawRepresentation — so no DER↔raw conversion is needed.
+    private static func ecdsa(op: String, params p: [String: Any]) -> String {
+        func b64(_ k: String) -> Data { Data(base64Encoded: (p[k] as? String) ?? "") ?? Data() }
+        func fail(_ m: String) -> String { encodeSubtle(["error": m]) }
+        let isP384 = (p["curve"] as? String ?? "P-256").uppercased() == "P-384"
+        let hash = ((p["hash"] as? String) ?? "SHA-256").uppercased().replacingOccurrences(of: "-", with: "")
+        do {
+            switch op {
+            case "ecdsaGenerate":
+                if isP384 {
+                    let k = P384.Signing.PrivateKey()
+                    return encodeSubtle(["privateRaw": k.rawRepresentation.base64EncodedString(),
+                                         "publicRaw": k.publicKey.rawRepresentation.base64EncodedString()])
+                }
+                let k = P256.Signing.PrivateKey()
+                return encodeSubtle(["privateRaw": k.rawRepresentation.base64EncodedString(),
+                                     "publicRaw": k.publicKey.rawRepresentation.base64EncodedString()])
+            case "ecdsaSign":
+                let sig = isP384
+                    ? try Self.ecdsaSign384(try P384.Signing.PrivateKey(rawRepresentation: b64("privateRaw")), b64("data"), hash)
+                    : try Self.ecdsaSign256(try P256.Signing.PrivateKey(rawRepresentation: b64("privateRaw")), b64("data"), hash)
+                return encodeSubtle(["data": sig.base64EncodedString()])
+            case "ecdsaVerify":
+                let valid = isP384
+                    ? Self.ecdsaVerify384(try? P384.Signing.PublicKey(rawRepresentation: b64("publicRaw")), b64("data"), b64("signature"), hash)
+                    : Self.ecdsaVerify256(try? P256.Signing.PublicKey(rawRepresentation: b64("publicRaw")), b64("data"), b64("signature"), hash)
+                return encodeSubtle(["valid": valid])
+            case "ecdsaImportJwk":
+                let x = Self.base64urlDecode(p["x"] as? String ?? "")
+                let y = Self.base64urlDecode(p["y"] as? String ?? "")
+                if let dStr = p["d"] as? String, !dStr.isEmpty {
+                    let d = Self.base64urlDecode(dStr)
+                    if isP384 { _ = try P384.Signing.PrivateKey(rawRepresentation: d) }
+                    else { _ = try P256.Signing.PrivateKey(rawRepresentation: d) }
+                    return encodeSubtle(["raw": d.base64EncodedString(), "type": "private"])
+                }
+                let pub = x + y
+                if isP384 { _ = try P384.Signing.PublicKey(rawRepresentation: pub) }
+                else { _ = try P256.Signing.PublicKey(rawRepresentation: pub) }
+                return encodeSubtle(["raw": pub.base64EncodedString(), "type": "public"])
+            case "ecdsaExportJwk":
+                let raw = b64("raw")
+                let crv = isP384 ? "P-384" : "P-256"
+                let publicRaw: Data
+                if p["type"] as? String == "private" {
+                    publicRaw = isP384 ? try P384.Signing.PrivateKey(rawRepresentation: raw).publicKey.rawRepresentation
+                                       : try P256.Signing.PrivateKey(rawRepresentation: raw).publicKey.rawRepresentation
+                } else {
+                    publicRaw = raw
+                }
+                let half = publicRaw.count / 2
+                var jwk: [String: Any] = ["kty": "EC", "crv": crv,
+                                          "x": Self.base64urlEncode(publicRaw.prefix(half)),
+                                          "y": Self.base64urlEncode(publicRaw.suffix(half))]
+                if p["type"] as? String == "private" { jwk["d"] = Self.base64urlEncode(raw) }
+                return encodeSubtle(["jwk": jwk])
+            default:
+                return fail("unsupported ecdsa op: \(op)")
+            }
+        } catch {
+            return fail(String(describing: error))
+        }
+    }
+
+    private static func ecdsaSign256(_ k: P256.Signing.PrivateKey, _ data: Data, _ hash: String) throws -> Data {
+        switch hash {
+        case "SHA384": return try k.signature(for: SHA384.hash(data: data)).rawRepresentation
+        case "SHA512": return try k.signature(for: SHA512.hash(data: data)).rawRepresentation
+        default: return try k.signature(for: SHA256.hash(data: data)).rawRepresentation
+        }
+    }
+
+    private static func ecdsaSign384(_ k: P384.Signing.PrivateKey, _ data: Data, _ hash: String) throws -> Data {
+        switch hash {
+        case "SHA256": return try k.signature(for: SHA256.hash(data: data)).rawRepresentation
+        case "SHA512": return try k.signature(for: SHA512.hash(data: data)).rawRepresentation
+        default: return try k.signature(for: SHA384.hash(data: data)).rawRepresentation
+        }
+    }
+
+    private static func ecdsaVerify256(_ k: P256.Signing.PublicKey?, _ data: Data, _ sig: Data, _ hash: String) -> Bool {
+        guard let k, let s = try? P256.Signing.ECDSASignature(rawRepresentation: sig) else { return false }
+        switch hash {
+        case "SHA384": return k.isValidSignature(s, for: SHA384.hash(data: data))
+        case "SHA512": return k.isValidSignature(s, for: SHA512.hash(data: data))
+        default: return k.isValidSignature(s, for: SHA256.hash(data: data))
+        }
+    }
+
+    private static func ecdsaVerify384(_ k: P384.Signing.PublicKey?, _ data: Data, _ sig: Data, _ hash: String) -> Bool {
+        guard let k, let s = try? P384.Signing.ECDSASignature(rawRepresentation: sig) else { return false }
+        switch hash {
+        case "SHA256": return k.isValidSignature(s, for: SHA256.hash(data: data))
+        case "SHA512": return k.isValidSignature(s, for: SHA512.hash(data: data))
+        default: return k.isValidSignature(s, for: SHA384.hash(data: data))
+        }
+    }
+
+    /// base64url (RFC 4648 §5, no padding) ↔ Data — the JWK coordinate encoding.
+    private static func base64urlEncode(_ d: Data) -> String {
+        d.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    private static func base64urlDecode(_ s: String) -> Data {
+        var b = s.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        while b.count % 4 != 0 { b += "=" }
+        return Data(base64Encoded: b) ?? Data()
     }
 
     /// AES-CBC with PKCS#7 padding (CryptoKit has no CBC). iv is 16 bytes; key is 16/24/32 bytes.

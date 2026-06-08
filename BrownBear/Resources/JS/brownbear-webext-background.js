@@ -146,16 +146,41 @@
           importKey: function (format, keyData, algorithm, extractable, usages) {
             return new Promise(function (resolve, reject) {
               try {
-                if (format !== 'raw') { reject(new Error("importKey: only 'raw' format is supported")); return; }
+                var ia = __subAlgo(algorithm), iname = (ia.name || '').toUpperCase();
+                if (iname === 'ECDSA') {
+                  var curve = ia.namedCurve || (keyData && keyData.crv) || 'P-256';
+                  if (format === 'jwk') {
+                    var ir = __subCall('ecdsaImportJwk', { curve: keyData.crv || curve, x: keyData.x || '', y: keyData.y || '', d: keyData.d || '' });
+                    resolve({ type: ir.type, extractable: extractable !== false, algorithm: { name: 'ECDSA', namedCurve: keyData.crv || curve }, usages: usages || [], __raw: ir.raw });
+                    return;
+                  }
+                  if (format === 'raw') {   // a bare public key: the x||y point bytes
+                    resolve({ type: 'public', extractable: extractable !== false, algorithm: { name: 'ECDSA', namedCurve: curve }, usages: usages || [], __raw: __subB64(keyData) });
+                    return;
+                  }
+                  reject(new Error("importKey: ECDSA supports 'jwk' and 'raw' (spki/pkcs8 pending)")); return;
+                }
+                if (format !== 'raw') { reject(new Error("importKey: only 'raw' format is supported for symmetric keys")); return; }
                 resolve(__subKey(__subB64(keyData), __subAlgo(algorithm), extractable, usages));
               } catch (e) { reject(e); }
             });
           },
           exportKey: function (format, key) {
             return new Promise(function (resolve, reject) {
-              if (format !== 'raw') { reject(new Error("exportKey: only 'raw' format is supported")); return; }
-              if (!key || !key.extractable) { reject(new Error('exportKey: key is not extractable')); return; }
-              try { resolve(__subFromB64(key.__raw).buffer); } catch (e) { reject(e); }
+              try {
+                if (!key || !key.extractable) { reject(new Error('exportKey: key is not extractable')); return; }
+                var ename = (key.algorithm && key.algorithm.name || '').toUpperCase();
+                if (ename === 'ECDSA') {
+                  if (format === 'jwk') {
+                    var jr = __subCall('ecdsaExportJwk', { curve: key.algorithm.namedCurve || 'P-256', raw: key.__raw, type: key.type });
+                    resolve(jr.jwk); return;
+                  }
+                  if (format === 'raw' && key.type === 'public') { resolve(__subFromB64(key.__raw).buffer); return; }
+                  reject(new Error("exportKey: ECDSA supports 'jwk' and public 'raw' (spki/pkcs8 pending)")); return;
+                }
+                if (format !== 'raw') { reject(new Error("exportKey: only 'raw' format is supported for symmetric keys")); return; }
+                resolve(__subFromB64(key.__raw).buffer);
+              } catch (e) { reject(e); }
             });
           },
           generateKey: function (algorithm, extractable, usages) {
@@ -171,7 +196,15 @@
                   var u8 = new Uint8Array(rnd.length);
                   for (var i = 0; i < rnd.length; i++) { u8[i] = rnd[i] & 0xff; }
                   resolve(__subKey(__subB64(u8), a, extractable, usages));
-                } else { reject(new Error('generateKey: unsupported algorithm ' + name + ' (asymmetric keys are not yet supported)')); }
+                } else if (name === 'ECDSA') {
+                  var curve = a.namedCurve || 'P-256';
+                  var ek = __subCall('ecdsaGenerate', { curve: curve });
+                  var ealg = { name: 'ECDSA', namedCurve: curve };
+                  resolve({
+                    privateKey: { type: 'private', extractable: extractable !== false, algorithm: ealg, usages: usages || [], __raw: ek.privateRaw },
+                    publicKey: { type: 'public', extractable: true, algorithm: ealg, usages: usages || [], __raw: ek.publicRaw }
+                  });
+                } else { reject(new Error('generateKey: unsupported algorithm ' + name + ' (RSA is not yet supported)')); }
               } catch (e) { reject(e); }
             });
           },
@@ -179,7 +212,11 @@
             return new Promise(function (resolve, reject) {
               try {
                 var name = (__subAlgo(algorithm).name || key.algorithm.name || '').toUpperCase();
-                if (name !== 'HMAC') { reject(new Error('sign: only HMAC is supported (ECDSA/RSA pending)')); return; }
+                if (name === 'ECDSA') {
+                  var er = __subCall('ecdsaSign', { curve: (key.algorithm.namedCurve || 'P-256'), privateRaw: key.__raw, hash: __subHash(algorithm, key), data: __subB64(data) });
+                  resolve(__subFromB64(er.data).buffer); return;
+                }
+                if (name !== 'HMAC') { reject(new Error('sign: unsupported algorithm ' + name + ' (RSA pending)')); return; }
                 var r = __subCall('hmacSign', { key: key.__raw, data: __subB64(data), hash: __subHash(algorithm, key) });
                 resolve(__subFromB64(r.data).buffer);
               } catch (e) { reject(e); }
@@ -189,7 +226,11 @@
             return new Promise(function (resolve, reject) {
               try {
                 var name = (__subAlgo(algorithm).name || key.algorithm.name || '').toUpperCase();
-                if (name !== 'HMAC') { reject(new Error('verify: only HMAC is supported (ECDSA/RSA pending)')); return; }
+                if (name === 'ECDSA') {
+                  var ev = __subCall('ecdsaVerify', { curve: (key.algorithm.namedCurve || 'P-256'), publicRaw: key.__raw, hash: __subHash(algorithm, key), data: __subB64(data), signature: __subB64(signature) });
+                  resolve(!!ev.valid); return;
+                }
+                if (name !== 'HMAC') { reject(new Error('verify: unsupported algorithm ' + name + ' (RSA pending)')); return; }
                 var r = __subCall('hmacVerify', { key: key.__raw, data: __subB64(data), signature: __subB64(signature), hash: __subHash(algorithm, key) });
                 resolve(!!r.valid);
               } catch (e) { reject(e); }
