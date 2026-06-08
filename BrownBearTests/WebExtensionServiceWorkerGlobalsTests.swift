@@ -148,4 +148,57 @@ final class WebExtensionServiceWorkerGlobalsTests: XCTestCase {
         XCTAssertEqual(r["perfIsNumber"] as? Bool, true)
         XCTAssertEqual(r["setAccessLevelOk"] as? Bool, true)
     }
+
+    func testRelativeFetchResolvesToPackagedSchemeNotInvalidURL() async throws {
+        // ScriptCat fetches its own packaged files via a root-relative path (fetch('/src/content.js')).
+        // That must resolve against the worker origin and hit the extension scheme handler (404 for a
+        // missing file here), NOT reject as an unparseable bare URL — the "Unable to fetch …" bug.
+        let context = try makeContext(background: """
+        chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+          if (!msg || msg.check !== 'relfetch') { return; }
+          fetch('/does-not-exist.js').then(
+            function (r) { sendResponse({ ok: true, status: r.status }); },
+            function (e) { sendResponse({ ok: false, error: String((e && e.message) || e) }); });
+          return true;   // async sendResponse
+        });
+        """)
+        defer { context.shutdown() }
+        let response = await context.deliverRuntimeMessage(message: ["check": "relfetch"], sender: [:])
+        let r = try XCTUnwrap(response?["value"] as? [String: Any])
+        XCTAssertEqual(r["ok"] as? Bool, true, "relative fetch must resolve, not reject: \(r)")
+        XCTAssertEqual(r["status"] as? Int, 404, "missing packaged file → 404 response")
+    }
+
+    func testRegisterContentScriptsExistsAndGatesOnPermission() async throws {
+        // The default manifest has no "scripting" permission, so register must reject (fail closed) —
+        // proving both that the method exists (ScriptCat's "is not a function" is gone) and the gate works.
+        let context = try makeContext(background: """
+        chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+          if (!msg || msg.check !== 'regcs') { return; }
+          var isFn = typeof chrome.scripting.registerContentScripts === 'function';
+          chrome.scripting.registerContentScripts([{ id: 's1', matches: ['*://*/*'], js: ['cs.js'] }]).then(
+            function () { sendResponse({ isFn: isFn, rejected: false }); },
+            function (e) { sendResponse({ isFn: isFn, rejected: true }); });
+          return true;
+        });
+        """)
+        defer { context.shutdown() }
+        let response = await context.deliverRuntimeMessage(message: ["check": "regcs"], sender: [:])
+        let r = try XCTUnwrap(response?["value"] as? [String: Any])
+        XCTAssertEqual(r["isFn"] as? Bool, true)
+        XCTAssertEqual(r["rejected"] as? Bool, true, "register without the scripting permission must reject")
+    }
+
+    func testUserScriptsResetWorldConfigurationExists() async throws {
+        let context = try makeContext(background: """
+        chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+          if (!msg || msg.check !== 'reset') { return; }
+          sendResponse({ isFn: typeof chrome.userScripts.resetWorldConfiguration === 'function' });
+        });
+        """)
+        defer { context.shutdown() }
+        let response = await context.deliverRuntimeMessage(message: ["check": "reset"], sender: [:])
+        let r = try XCTUnwrap(response?["value"] as? [String: Any])
+        XCTAssertEqual(r["isFn"] as? Bool, true)
+    }
 }

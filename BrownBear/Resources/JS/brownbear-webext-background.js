@@ -316,6 +316,13 @@
       if (input && typeof input === 'object' && input.url) { url = String(input.url); method = input.method || method; }
       else { url = String(input); }
       if (init.method) { method = init.method; }
+      // Resolve a relative URL ('/path' or 'path') against the worker's own origin, so fetching a
+      // PACKAGED resource (e.g. ScriptCat's fetch('/src/content.js')) reaches the extension scheme
+      // handler instead of an unparseable bare path. Absolute URLs pass through unchanged.
+      try {
+        var __fetchBase = (globalThis.location && globalThis.location.href) || globalThis.__bbBgBaseURL;
+        if (__fetchBase) { url = new globalThis.URL(url, __fetchBase).href; }
+      } catch (e) { /* leave url as written */ }
       if (init.headers) {
         if (init.headers._m) { headers = init.headers._m; }                       // our Headers instance
         else if (typeof init.headers.forEach === 'function') {                    // a Map
@@ -1052,10 +1059,25 @@
     if (injection.files) { payload.files = injection.files; } else { payload.css = injection.css || ''; }
     return payload;
   }
+  function scriptingVoid(method, args) {
+    return scriptingCall(method, args).then(function (r) { if (r && r.error) { throw new Error(r.error); } return undefined; });
+  }
   var scripting = {
     executeScript: function (injection, cb) { return settleBg(scriptingCall('executeScript', serializeInjection(injection)), cb); },
     insertCSS: function (injection, cb) { return settleBg(scriptingCall('insertCSS', cssInjection(injection)).then(function () { return undefined; }), cb); },
-    removeCSS: function (injection, cb) { return settleBg(scriptingCall('removeCSS', cssInjection(injection)).then(function () { return undefined; }), cb); }
+    removeCSS: function (injection, cb) { return settleBg(scriptingCall('removeCSS', cssInjection(injection)).then(function () { return undefined; }), cb); },
+    // MV3 dynamic content scripts — registered scripts inject into matching pages exactly like
+    // manifest content_scripts (ScriptCat registers its userscripts this way).
+    registerContentScripts: function (scripts, cb) { return settleBg(scriptingVoid('registerContentScripts', { scripts: scripts || [] }), cb); },
+    updateContentScripts: function (scripts, cb) { return settleBg(scriptingVoid('updateContentScripts', { scripts: scripts || [] }), cb); },
+    getRegisteredContentScripts: function (filter, cb) {
+      if (typeof filter === 'function') { cb = filter; filter = null; }
+      return settleBg(scriptingCall('getRegisteredContentScripts', { filter: filter || null }).then(function (r) { return (r && r.error) ? [] : r; }), cb);
+    },
+    unregisterContentScripts: function (filter, cb) {
+      if (typeof filter === 'function') { cb = filter; filter = null; }
+      return settleBg(scriptingVoid('unregisterContentScripts', { filter: filter || null }), cb);
+    }
   };
 
   // ---------------------------------------------------------------- chrome.windows
@@ -1195,7 +1217,11 @@
       if (typeof filter === 'function') { cb = filter; filter = null; }
       return settleBg(userScriptsCall('getScripts', { filter: filter || null }), cb);
     },
-    configureWorld: function (properties, cb) { return settleBg(userScriptsCall('configureWorld', { properties: properties || {} }).then(function () { return undefined; }), cb); }
+    configureWorld: function (properties, cb) { return settleBg(userScriptsCall('configureWorld', { properties: properties || {} }).then(function () { return undefined; }), cb); },
+    resetWorldConfiguration: function (worldId, cb) {
+      if (typeof worldId === 'function') { cb = worldId; worldId = null; }
+      return settleBg(userScriptsCall('resetWorldConfiguration', { worldId: worldId || null }).then(function () { return undefined; }), cb);
+    }
   };
 
   // ---------------------------------------------------------------- chrome.cookies
