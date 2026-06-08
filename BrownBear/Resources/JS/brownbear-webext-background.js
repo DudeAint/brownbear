@@ -719,6 +719,203 @@
       globalThis.URL = URLImpl;
     }
 
+    // --- Blob / File / FileReader / object URLs --------------------------------------------------
+    // JavaScriptCore's headless global ships none of these. The bundled IndexedDB engine
+    // (brownbear-indexeddb.js) clones every stored value through typeson's structured-clone, whose
+    // Blob/File handlers (a) read the bytes on write via `new XMLHttpRequest()` over
+    // `URL.createObjectURL(blob)` and (b) reconstruct them on read via `new File([...])` / `new
+    // Blob([...])`. Without these globals, putting a Blob into IndexedDB throws DataCloneError and the
+    // engine SILENTLY DROPS the whole record — which is why a userscript manager (ScriptCat) reported
+    // "no data found" after importing a script. We provide a minimal, spec-shaped, in-memory
+    // implementation that holds bytes as a Uint8Array. This is NOT a network or filesystem surface:
+    // XMLHttpRequest here resolves ONLY `blob:` URLs minted by createObjectURL in THIS JSContext, so
+    // it opens no new trust boundary (CLAUDE.md §5) — an unknown scheme fails closed (status 0).
+
+    // Flatten a BlobPart sequence (string | ArrayBuffer | ArrayBufferView | Blob) into one Uint8Array.
+    var __bbFlattenBlobParts = function (parts) {
+      var src = (parts == null) ? [] : parts;
+      if (typeof src.length !== 'number') { src = [src]; }
+      var chunks = [], total = 0, i;
+      for (i = 0; i < src.length; i++) {
+        var p = src[i], b;
+        if (p == null) { b = new Uint8Array(0); }
+        else if (globalThis.Blob && p instanceof globalThis.Blob) { b = p._bbBytes ? p._bbBytes.slice() : new Uint8Array(0); }
+        else if (p instanceof ArrayBuffer) { b = new Uint8Array(p.slice(0)); }
+        else if (ArrayBuffer.isView(p)) { b = new Uint8Array(p.buffer.slice(p.byteOffset, p.byteOffset + p.byteLength)); }
+        else { b = (new globalThis.TextEncoder()).encode(String(p)); }   // strings → UTF-8, per the Blob spec
+        chunks.push(b); total += b.length;
+      }
+      var out = new Uint8Array(total), off = 0;
+      for (i = 0; i < chunks.length; i++) { out.set(chunks[i], off); off += chunks[i].length; }
+      return out;
+    };
+    // bytes → a binary string (one char per byte, charCodeAt === byte); chunked to dodge arg-count limits.
+    var __bbBytesToBinaryString = function (bytes) {
+      var s = '', CHUNK = 0x8000;
+      for (var i = 0; i < bytes.length; i += CHUNK) {
+        s += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + CHUNK, bytes.length)));
+      }
+      return s;
+    };
+
+    if (typeof globalThis.Blob !== 'function') {
+      var BBBlob = function (parts, options) {
+        var opts = options || {};
+        this._bbBytes = __bbFlattenBlobParts(parts);
+        this.size = this._bbBytes.length;
+        this.type = opts.type ? String(opts.type).toLowerCase() : '';
+      };
+      BBBlob.prototype.arrayBuffer = function () {
+        var b = this._bbBytes;
+        return Promise.resolve(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength));
+      };
+      BBBlob.prototype.text = function () {
+        return Promise.resolve((new globalThis.TextDecoder()).decode(this._bbBytes));
+      };
+      BBBlob.prototype.slice = function (start, end, contentType) {
+        var len = this._bbBytes.length;
+        var s = (start == null) ? 0 : (start < 0 ? Math.max(len + start, 0) : Math.min(start, len));
+        var e = (end == null) ? len : (end < 0 ? Math.max(len + end, 0) : Math.min(end, len));
+        var out = new BBBlob([], { type: contentType || '' });
+        out._bbBytes = this._bbBytes.slice(s, Math.max(e, s));
+        out.size = out._bbBytes.length;
+        return out;
+      };
+      Object.defineProperty(BBBlob.prototype, Symbol.toStringTag, { get: function () { return 'Blob'; } });
+      globalThis.Blob = BBBlob;
+    }
+
+    if (typeof globalThis.File !== 'function') {
+      var BBFile = function (parts, name, options) {
+        globalThis.Blob.call(this, parts, options);
+        this.name = String(name == null ? '' : name);
+        var opts = options || {};
+        this.lastModified = (typeof opts.lastModified === 'number') ? opts.lastModified : Date.now();
+      };
+      BBFile.prototype = Object.create(globalThis.Blob.prototype);
+      BBFile.prototype.constructor = BBFile;
+      Object.defineProperty(BBFile.prototype, Symbol.toStringTag, { get: function () { return 'File'; } });
+      globalThis.File = BBFile;
+    }
+
+    // Object-URL registry: createObjectURL mints an opaque blob: URL bound to the Blob's bytes; the
+    // minimal XMLHttpRequest below resolves those (and only those) synchronously.
+    if (!globalThis.__bbObjectURLs) { globalThis.__bbObjectURLs = {}; }
+    var __bbObjURLSeq = 0;
+    if (globalThis.URL && typeof globalThis.URL.createObjectURL !== 'function') {
+      globalThis.URL.createObjectURL = function (blob) {
+        var id = 'blob:' + (baseURL || 'null') + '__bbobj-' + (++__bbObjURLSeq);
+        globalThis.__bbObjectURLs[id] = blob;
+        return id;
+      };
+      globalThis.URL.revokeObjectURL = function (url) {
+        if (url && Object.prototype.hasOwnProperty.call(globalThis.__bbObjectURLs, url)) {
+          delete globalThis.__bbObjectURLs[url];
+        }
+      };
+    }
+
+    // Minimal XMLHttpRequest — blob:-only, so the IndexedDB structured-clone handler can read a Blob's
+    // bytes synchronously (`open('GET', objectURL, false)`). Any non-blob URL fails closed (status 0):
+    // a service worker has no synchronous network primitive, and we deliberately do not fake one.
+    if (typeof globalThis.XMLHttpRequest !== 'function') {
+      var BBXHR = function () {
+        this.readyState = 0; this.status = 0; this.statusText = '';
+        this.responseText = ''; this.response = ''; this.responseType = '';
+        this._method = 'GET'; this._url = ''; this._async = true;
+        this.onload = null; this.onerror = null; this.onreadystatechange = null;
+      };
+      BBXHR.prototype.overrideMimeType = function () {};
+      BBXHR.prototype.setRequestHeader = function () {};
+      BBXHR.prototype.getAllResponseHeaders = function () { return ''; };
+      BBXHR.prototype.getResponseHeader = function () { return null; };
+      BBXHR.prototype.abort = function () {};
+      BBXHR.prototype.addEventListener = function (type, fn) {
+        if (type === 'load') { this.onload = fn; } else if (type === 'error') { this.onerror = fn; }
+      };
+      BBXHR.prototype.removeEventListener = function () {};
+      BBXHR.prototype.open = function (method, url, async) {
+        this._method = String(method || 'GET').toUpperCase();
+        this._url = String(url || '');
+        this._async = (async === undefined) ? true : !!async;
+        this.readyState = 1;
+      };
+      BBXHR.prototype.send = function () {
+        var self = this;
+        var blob = Object.prototype.hasOwnProperty.call(globalThis.__bbObjectURLs, this._url)
+          ? globalThis.__bbObjectURLs[this._url] : null;
+        var run = function () {
+          if (blob && blob._bbBytes) {
+            self.status = 200; self.statusText = 'OK';
+            self.responseText = __bbBytesToBinaryString(blob._bbBytes);
+            self.response = self.responseText;
+          } else {
+            self.status = 0; self.statusText = '';
+          }
+          self.readyState = 4;
+          if (typeof self.onreadystatechange === 'function') { self.onreadystatechange(); }
+          var cb = (self.status === 200) ? self.onload : self.onerror;
+          if (typeof cb === 'function') { cb({ type: self.status === 200 ? 'load' : 'error' }); }
+        };
+        if (this._async && typeof queueMicrotask === 'function') { queueMicrotask(run); } else { run(); }
+      };
+      globalThis.XMLHttpRequest = BBXHR;
+    }
+
+    if (typeof globalThis.FileReader !== 'function') {
+      var BBFileReader = function () {
+        this.readyState = 0; this.result = null; this.error = null;
+        this.onload = null; this.onloadend = null; this.onerror = null;
+        this._lst = { load: [], loadend: [], error: [] };
+      };
+      BBFileReader.EMPTY = 0; BBFileReader.LOADING = 1; BBFileReader.DONE = 2;
+      BBFileReader.prototype.addEventListener = function (type, fn) {
+        if (this._lst[type]) { this._lst[type].push(fn); }
+      };
+      BBFileReader.prototype.removeEventListener = function (type, fn) {
+        var a = this._lst[type]; if (!a) { return; }
+        var i = a.indexOf(fn); if (i >= 0) { a.splice(i, 1); }
+      };
+      BBFileReader.prototype._fire = function (type, ev) {
+        if (typeof this['on' + type] === 'function') { this['on' + type](ev); }
+        var a = this._lst[type] || [];
+        for (var i = 0; i < a.length; i++) { try { a[i].call(this, ev); } catch (e) { /* listener error */ } }
+      };
+      BBFileReader.prototype._read = function (blob, produce) {
+        var self = this;
+        self.readyState = 1;
+        var go = function () {
+          try {
+            if (!blob || !blob._bbBytes) { throw new TypeError('FileReader: argument is not a Blob'); }
+            self.result = produce(blob._bbBytes, blob.type);
+            self.readyState = 2;
+            self._fire('load', { type: 'load' });
+          } catch (e) {
+            self.error = e; self.result = null; self.readyState = 2;
+            self._fire('error', { type: 'error' });
+          }
+          self._fire('loadend', { type: 'loadend' });
+        };
+        if (typeof queueMicrotask === 'function') { queueMicrotask(go); } else { go(); }
+      };
+      BBFileReader.prototype.readAsArrayBuffer = function (blob) {
+        this._read(blob, function (b) { return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); });
+      };
+      BBFileReader.prototype.readAsBinaryString = function (blob) {
+        this._read(blob, function (b) { return __bbBytesToBinaryString(b); });
+      };
+      BBFileReader.prototype.readAsText = function (blob) {
+        this._read(blob, function (b) { return (new globalThis.TextDecoder()).decode(b); });
+      };
+      BBFileReader.prototype.readAsDataURL = function (blob) {
+        this._read(blob, function (b, type) {
+          return 'data:' + (type || 'application/octet-stream') + ';base64,' + globalThis.btoa(__bbBytesToBinaryString(b));
+        });
+      };
+      BBFileReader.prototype.abort = function () {};
+      globalThis.FileReader = BBFileReader;
+    }
+
     // The service worker's own location (its script's URL). Extensions read location.origin/href.
     if (typeof globalThis.location === 'undefined') {
       try { globalThis.location = new globalThis.URL(baseURL || 'chrome-extension://invalid/'); } catch (e) { /* leave undefined */ }

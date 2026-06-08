@@ -34,6 +34,16 @@
         return { __bbT: 'TypedArray', c: (raw.constructor && raw.constructor.name) || 'Uint8Array',
                  v: Array.prototype.slice.call(raw) };
       }
+      // Blob/File: the engine stores real (revived) Blob objects whose bytes live off-enumerable, so a
+      // plain JSON pass would drop them. Tag them with their bytes (and File's name/lastModified) so a
+      // ScriptCat-style imported Blob survives an SW restart instead of vanishing as "no data found".
+      if (g.Blob && raw instanceof g.Blob) {
+        var blobBytes = raw._bbBytes || new Uint8Array(0);
+        var blobRec = { __bbT: (g.File && raw instanceof g.File) ? 'File' : 'Blob',
+                        type: raw.type || '', v: Array.prototype.slice.call(blobBytes) };
+        if (blobRec.__bbT === 'File') { blobRec.name = raw.name || ''; blobRec.lastModified = raw.lastModified || 0; }
+        return blobRec;
+      }
       return val;
     });
   }
@@ -48,6 +58,10 @@
       case 'ArrayBuffer': return new Uint8Array(val.v || []).buffer;
       case 'DataView': return new DataView(new Uint8Array(val.v || []).buffer);
       case 'TypedArray': { var Ctor = g[val.c] || Uint8Array; try { return new Ctor(val.v || []); } catch (e) { return new Uint8Array(val.v || []); } }
+      case 'Blob': return (typeof g.Blob === 'function')
+        ? new g.Blob([new Uint8Array(val.v || []).buffer], { type: val.type || '' }) : val;
+      case 'File': return (typeof g.File === 'function')
+        ? new g.File([new Uint8Array(val.v || []).buffer], val.name || '', { type: val.type || '', lastModified: val.lastModified || 0 }) : val;
       default: break;
     }
     if (Array.isArray(val)) { for (var x = 0; x < val.length; x++) { val[x] = revive(val[x]); } return val; }
