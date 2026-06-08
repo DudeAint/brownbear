@@ -78,8 +78,22 @@ final class WebExtensionBackgroundTests: XCTestCase {
         XCTAssertEqual(value?["late"] as? Bool, true)
     }
 
-    func testNoListenerYieldsNilResponse() async throws {
+    func testNoListenerReportsNoListenerMarker() async throws {
+        // A worker with NO onMessage listener reports `{__bbNoListener:true}` (not nil), so the runtime
+        // can raise Chrome's "Could not establish connection. Receiving end does not exist." on the
+        // sender rather than silently resolving undefined. A declining listener (next test) does not.
         let context = try makeContext(background: "// no listeners here", storage: makeStorage())
+        defer { context.shutdown() }
+        let response = await context.deliverRuntimeMessage(message: ["x": 1], sender: [:])
+        XCTAssertEqual(response?["__bbNoListener"] as? Bool, true)
+    }
+
+    func testDecliningListenerYieldsNilResponse() async throws {
+        // A listener that exists but declines (returns undefined synchronously) is a receiving end —
+        // the dispatch resolves to nil, NOT the no-listener marker (only total absence raises it).
+        let context = try makeContext(
+            background: "chrome.runtime.onMessage.addListener(function () { /* declines */ });",
+            storage: makeStorage())
         defer { context.shutdown() }
         let response = await context.deliverRuntimeMessage(message: ["x": 1], sender: [:])
         XCTAssertNil(response)
