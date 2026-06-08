@@ -102,12 +102,15 @@ enum WebExtensionManagementInfo {
         }
     }
 
-    /// Everything a manifest could ever surface to chrome.permissions: required API permissions,
-    /// optional API permissions, and all host patterns (host_permissions + content-script matches).
+    /// Everything chrome.permissions.request may ever grant: required + optional API permissions, and the
+    /// REQUESTABLE host patterns — host_permissions (already held) + optional_host_permissions. NOT
+    /// content_scripts.matches: a content-script match confers no host access in Chrome and must never be
+    /// escalatable to full host access via permissions.request (privilege-escalation guard, cf. #131).
     static func declaredPermissions(for manifest: WebExtensionManifest?) -> PermissionSet {
         guard let manifest else { return PermissionSet() }
         let perms = manifest.permissions + manifest.optionalPermissions
-        return PermissionSet(permissions: perms, origins: manifest.effectiveHostPatterns)
+        let origins = manifest.hostPermissions + manifest.optionalHostPermissions
+        return PermissionSet(permissions: perms, origins: origins)
     }
 
     /// The required (non-optional) manifest permissions, which a script always holds and may not
@@ -121,9 +124,9 @@ enum WebExtensionManagementInfo {
     /// grant (Chrome rejects requesting a permission not listed in `optional_permissions`).
     static func optionalPermissions(for manifest: WebExtensionManifest?) -> PermissionSet {
         guard let manifest else { return PermissionSet() }
-        // Optional host patterns: anything matchable that isn't a required host permission.
-        let requiredHosts = Set(manifest.hostPermissions)
-        let optionalHosts = Set(manifest.effectiveHostPatterns).subtracting(requiredHosts)
+        // Optional hosts are exactly the declared optional_host_permissions — NOT content-script matches
+        // (those grant no host access and aren't requestable). Drop any that duplicate a required host.
+        let optionalHosts = Set(manifest.optionalHostPermissions).subtracting(Set(manifest.hostPermissions))
         return PermissionSet(permissions: manifest.optionalPermissions, origins: Array(optionalHosts))
     }
 

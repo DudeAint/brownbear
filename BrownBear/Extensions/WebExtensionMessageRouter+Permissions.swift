@@ -31,8 +31,8 @@ extension WebExtensionMessageRouter {
             return true
         }
         // Gate on host_permissions ONLY — content_scripts.matches lets a script INJECT but confers no
-        // host access in Chrome (declare-permissions). Using effectiveHostPatterns here would let a
-        // content-script-only host silently read cookies / fetch cross-origin / executeScript there.
+        // host access in Chrome (declare-permissions). Unioning content-script matches into the gate would
+        // let a content-script-only host silently read cookies / fetch cross-origin / executeScript there.
         let matcher = URLMatcher(matches: manifest.hostPermissions,
                                  includes: [], excludes: [], excludeMatches: [])
         return matcher.matches(tabURL)
@@ -105,8 +105,8 @@ extension WebExtensionMessageRouter {
     func cookieHostAllowed(extensionID: String, details: [String: Any]) async throws -> Bool {
         guard let manifest = await store.ext(for: extensionID)?.manifest else { return false }
         // Gate on host_permissions ONLY — content_scripts.matches lets a script INJECT but confers no
-        // host access in Chrome (declare-permissions). Using effectiveHostPatterns here would let a
-        // content-script-only host silently read cookies / fetch cross-origin / executeScript there.
+        // host access in Chrome (declare-permissions). Unioning content-script matches into the gate would
+        // let a content-script-only host silently read cookies / fetch cross-origin / executeScript there.
         let matcher = URLMatcher(matches: manifest.hostPermissions,
                                  includes: [], excludes: [], excludeMatches: [])
         // Gate on the cookie's EFFECTIVE domain (an explicit `domain` wins over `url`) — see

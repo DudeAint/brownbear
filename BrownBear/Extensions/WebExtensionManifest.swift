@@ -74,21 +74,16 @@ struct WebExtensionManifest: Equatable {
     var permissions: [String]
     var hostPermissions: [String]
     var optionalPermissions: [String]
+    /// Host match patterns the extension may REQUEST at runtime via chrome.permissions.request — MV3's
+    /// `optional_host_permissions` (and host patterns split out of MV2 `optional_permissions`). Distinct
+    /// from content_scripts.matches, which grant NO host access and are not requestable (Chrome).
+    var optionalHostPermissions: [String]
     var webAccessibleResources: [WebAccessibleResource]
     var optionsPage: String?
     var optionsOpenInTab: Bool
     var contentSecurityPolicy: String?
     var declarativeNetRequest: [DNRRuleset]
     var commands: [Command]
-
-    // MARK: - Derived
-
-    /// Host match patterns the extension may act on (declared host perms + content-script matches).
-    var effectiveHostPatterns: [String] {
-        var patterns = Set(hostPermissions)
-        for script in contentScripts { patterns.formUnion(script.matches) }
-        return Array(patterns)
-    }
 
     // MARK: - Parsing
 
@@ -128,6 +123,19 @@ struct WebExtensionManifest: Equatable {
             }
         }
 
+        // optional_permissions mirrors permissions: MV3 keeps optional hosts in optional_host_permissions,
+        // MV2 mixes API perms + host patterns in optional_permissions, so split host patterns out there too.
+        let rawOptional = stringArray(json["optional_permissions"])
+        var optionalPermissions: [String] = []
+        var optionalHostPermissions = stringArray(json["optional_host_permissions"])
+        if manifestVersion >= 3 {
+            optionalPermissions = rawOptional
+        } else {
+            for permission in rawOptional {
+                if isHostPattern(permission) { optionalHostPermissions.append(permission) } else { optionalPermissions.append(permission) }
+            }
+        }
+
         let war = parseWebAccessibleResources(json["web_accessible_resources"])
 
         var optionsPage: String?
@@ -164,7 +172,8 @@ struct WebExtensionManifest: Equatable {
             action: action,
             permissions: permissions,
             hostPermissions: hostPermissions,
-            optionalPermissions: stringArray(json["optional_permissions"]),
+            optionalPermissions: optionalPermissions,
+            optionalHostPermissions: optionalHostPermissions,
             webAccessibleResources: war,
             optionsPage: optionsPage,
             optionsOpenInTab: optionsOpenInTab,

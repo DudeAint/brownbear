@@ -116,10 +116,31 @@ final class WebExtensionManagementInfoTests: XCTestCase {
                        .init(permissions: ["tabs"]))
     }
 
-    func testRequestOptionalOriginFromContentScriptMatch() throws {
+    func testRequestRejectsContentScriptMatchAsOrigin() throws {
+        // A content_scripts.matches pattern is NOT a requestable host permission — granting it would
+        // escalate inject-only access to full host access (cookies/fetch/executeScript). Must reject.
         let m = try manifest(["content_scripts": [["matches": ["https://opt.com/*"], "js": ["c.js"]]]])
+        XCTAssertNil(WebExtensionManagementInfo.resolveRequest(.init(origins: ["https://opt.com/*"]), manifest: m))
+    }
+
+    func testRequestAllowsOptionalHostPermissionOrigin() throws {
+        // An origin declared in optional_host_permissions IS requestable (Chrome MV3).
+        let m = try manifest(["manifest_version": 3,
+                              "optional_host_permissions": ["https://opt.com/*"]])
         XCTAssertEqual(WebExtensionManagementInfo.resolveRequest(.init(origins: ["https://opt.com/*"]), manifest: m),
                        .init(origins: ["https://opt.com/*"]))
+        // An undeclared origin is still rejected.
+        XCTAssertNil(WebExtensionManagementInfo.resolveRequest(.init(origins: ["https://evil.com/*"]), manifest: m))
+    }
+
+    func testMV2OptionalHostPatternIsRequestable() throws {
+        // MV2 mixes API perms + host patterns in optional_permissions; the host pattern is requestable.
+        let m = try manifest(["manifest_version": 2,
+                              "optional_permissions": ["bookmarks", "https://opt.com/*"]])
+        XCTAssertEqual(WebExtensionManagementInfo.resolveRequest(.init(origins: ["https://opt.com/*"]), manifest: m),
+                       .init(origins: ["https://opt.com/*"]))
+        XCTAssertEqual(WebExtensionManagementInfo.resolveRequest(.init(permissions: ["bookmarks"]), manifest: m),
+                       .init(permissions: ["bookmarks"]))
     }
 
     func testRemoveRejectsRequiredPermission() throws {
