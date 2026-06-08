@@ -323,6 +323,92 @@
       globalThis.window = globalThis;
     }
 
+    // MV2 background PAGES have a real `document`; our headless context does not, so an MV2 bundle that
+    // touches `document` at init (Violentmonkey references it during its IndexedDB "Upgrade database…"
+    // step) throws "Can't find variable: document" and the failure cascades into later promise chains.
+    // We provide a minimal, non-rendering DOM document — enough for the common background-page idioms
+    // (createElement, an <a> for URL parsing, fragments, event no-ops). MV3 service workers get NONE
+    // (Chrome SWs have no document; libraries feature-detect it), so this is gated to MV2.
+    if (typeof globalThis.document === 'undefined' && (manifest.manifest_version || 2) < 3) {
+      var __bbMakeNode = function (tag) {
+        tag = String(tag == null ? 'div' : tag).toLowerCase();
+        var node = {
+          tagName: tag.toUpperCase(), nodeName: tag.toUpperCase(), nodeType: 1, namespaceURI: 'http://www.w3.org/1999/xhtml',
+          childNodes: [], children: [], style: {}, dataset: {}, _attrs: {},
+          parentNode: null, firstChild: null, lastChild: null, nextSibling: null, previousSibling: null,
+          textContent: '', innerHTML: '', outerHTML: '', innerText: '', value: '', id: '', className: '',
+          classList: { add: function () {}, remove: function () {}, toggle: function () { return false; },
+                       contains: function () { return false; }, replace: function () {} },
+          setAttribute: function (k, v) { this._attrs[String(k)] = String(v); },
+          getAttribute: function (k) { return Object.prototype.hasOwnProperty.call(this._attrs, String(k)) ? this._attrs[String(k)] : null; },
+          removeAttribute: function (k) { delete this._attrs[String(k)]; },
+          hasAttribute: function (k) { return Object.prototype.hasOwnProperty.call(this._attrs, String(k)); },
+          setAttributeNS: function (ns, k, v) { this.setAttribute(k, v); },
+          appendChild: function (c) { this.childNodes.push(c); if (c && c.nodeType === 1) { this.children.push(c); } if (c) { c.parentNode = this; } this.firstChild = this.childNodes[0]; this.lastChild = c; return c; },
+          insertBefore: function (c) { this.childNodes.unshift(c); if (c && c.nodeType === 1) { this.children.unshift(c); } if (c) { c.parentNode = this; } this.firstChild = c; return c; },
+          removeChild: function (c) { var i = this.childNodes.indexOf(c); if (i >= 0) { this.childNodes.splice(i, 1); } var j = this.children.indexOf(c); if (j >= 0) { this.children.splice(j, 1); } if (c) { c.parentNode = null; } return c; },
+          replaceChild: function (n, o) { this.removeChild(o); this.appendChild(n); return o; },
+          append: function () {}, prepend: function () {}, before: function () {}, after: function () {}, remove: function () {},
+          cloneNode: function () { return __bbMakeNode(tag); },
+          contains: function () { return false; },
+          addEventListener: function () {}, removeEventListener: function () {}, dispatchEvent: function () { return true; },
+          getElementsByTagName: function () { return []; }, getElementsByClassName: function () { return []; },
+          querySelector: function () { return null; }, querySelectorAll: function () { return []; },
+          getBoundingClientRect: function () { return { top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0 }; },
+          focus: function () {}, blur: function () {}, click: function () {}, scrollIntoView: function () {},
+          insertAdjacentHTML: function () {}, insertAdjacentElement: function () {},
+          setSelectionRange: function () {}, select: function () {}, getContext: function () { return null; }
+        };
+        // <a>/<area>: assigning .href (or setAttribute('href')) parses the URL and exposes its parts —
+        // the canonical background-page URL-parsing idiom (`var a=document.createElement('a'); a.href=u`).
+        if (tag === 'a' || tag === 'area') {
+          var hrefVal = '';
+          var applyHref = function (v) {
+            try {
+              var u = new globalThis.URL(String(v), (globalThis.location && globalThis.location.href) || baseURL || undefined);
+              hrefVal = u.href; node.protocol = u.protocol; node.hostname = u.hostname; node.host = u.host;
+              node.port = u.port; node.pathname = u.pathname; node.search = u.search; node.hash = u.hash; node.origin = u.origin;
+            } catch (e) { hrefVal = String(v); node.protocol = ''; node.hostname = ''; node.host = ''; node.port = '';
+              node.pathname = ''; node.search = ''; node.hash = ''; node.origin = 'null'; }
+          };
+          Object.defineProperty(node, 'href', { configurable: true, enumerable: true,
+            get: function () { return hrefVal; }, set: applyHref });
+          var baseSet = node.setAttribute;
+          node.setAttribute = function (k, v) { baseSet.call(this, k, v); if (String(k).toLowerCase() === 'href') { applyHref(v); } };
+        }
+        return node;
+      };
+      var __bbDocEl = __bbMakeNode('html'), __bbHead = __bbMakeNode('head'), __bbBody = __bbMakeNode('body');
+      globalThis.document = {
+        nodeType: 9, nodeName: '#document', readyState: 'complete', visibilityState: 'visible', hidden: false,
+        documentElement: __bbDocEl, head: __bbHead, body: __bbBody, title: '', cookie: '',
+        characterSet: 'UTF-8', charset: 'UTF-8', compatMode: 'CSS1Compat', contentType: 'text/html',
+        location: globalThis.location, URL: (globalThis.location && globalThis.location.href) || baseURL || '',
+        documentURI: (globalThis.location && globalThis.location.href) || baseURL || '',
+        defaultView: globalThis,
+        createElement: function (t) { return __bbMakeNode(t); },
+        createElementNS: function (ns, t) { return __bbMakeNode(t); },
+        createTextNode: function (txt) { return { nodeType: 3, nodeName: '#text', textContent: String(txt), nodeValue: String(txt), parentNode: null }; },
+        createComment: function (txt) { return { nodeType: 8, nodeName: '#comment', textContent: String(txt), nodeValue: String(txt) }; },
+        createDocumentFragment: function () { return __bbMakeNode('#document-fragment'); },
+        createEvent: function () { return { initEvent: function () {}, initCustomEvent: function () {} }; },
+        getElementById: function () { return null; },
+        getElementsByTagName: function () { return []; },
+        getElementsByClassName: function () { return []; },
+        getElementsByName: function () { return []; },
+        querySelector: function () { return null; },
+        querySelectorAll: function () { return []; },
+        addEventListener: function () {}, removeEventListener: function () {}, dispatchEvent: function () { return true; },
+        hasFocus: function () { return false; },
+        write: function () {}, writeln: function () {}, open: function () { return globalThis.document; }, close: function () {},
+        execCommand: function () { return false; },
+        implementation: { createHTMLDocument: function () { return globalThis.document; },
+                          createDocument: function () { return globalThis.document; }, hasFeature: function () { return true; } }
+      };
+      __bbDocEl.ownerDocument = globalThis.document; __bbHead.ownerDocument = globalThis.document; __bbBody.ownerDocument = globalThis.document;
+      __bbDocEl.appendChild(__bbHead); __bbDocEl.appendChild(__bbBody);
+    }
+
     var B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
     function btoa(str) {
       str = String(str);
