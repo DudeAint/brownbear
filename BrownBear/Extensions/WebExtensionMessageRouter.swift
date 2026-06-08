@@ -307,38 +307,46 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
         case "scripting.executeScript":
             guard let host else { return [] }
             let target = payload["target"] as? [String: Any] ?? [:]
+            let tabId = target["tabId"] as? Int
+            guard await canInjectIntoTab(extensionID: extensionID, isMV3: true, extTabId: tabId) else { return [] }
             let code = await resolveInjectedCode(payload: payload, extensionID: extensionID, separator: "\n;\n")
             guard !code.isEmpty else { return [] }
-            return await host.webExtExecuteScript(extTabId: target["tabId"] as? Int,
+            return await host.webExtExecuteScript(extTabId: tabId,
                                                   world: (payload["world"] as? String) ?? "ISOLATED", code: code)
 
         case "scripting.insertCSS", "scripting.removeCSS":
             guard let host else { return NSNull() }
             let target = payload["target"] as? [String: Any] ?? [:]
+            let tabId = target["tabId"] as? Int
+            guard await canInjectIntoTab(extensionID: extensionID, isMV3: true, extTabId: tabId) else { return NSNull() }
             let css = await resolveInjectedCSS(payload: payload, extensionID: extensionID)
             if api == "scripting.insertCSS" {
-                host.webExtInsertCSS(extTabId: target["tabId"] as? Int, css: css)
+                host.webExtInsertCSS(extTabId: tabId, css: css)
             } else {
-                host.webExtRemoveCSS(extTabId: target["tabId"] as? Int, css: css)
+                host.webExtRemoveCSS(extTabId: tabId, css: css)
             }
             return NSNull()
 
         case "tabs.executeScript":
             guard let host else { return [] }
+            let tabId = payload["tabId"] as? Int
+            guard await canInjectIntoTab(extensionID: extensionID, isMV3: false, extTabId: tabId) else { return [] }
             var code = payload["code"] as? String ?? ""
             if code.isEmpty, let file = payload["file"] as? String,
                let text = await store.text(extensionID: extensionID, path: file) { code = text }
             guard !code.isEmpty else { return [] }
-            let results = await host.webExtExecuteScript(extTabId: payload["tabId"] as? Int,
+            let results = await host.webExtExecuteScript(extTabId: tabId,
                                                          world: (payload["world"] as? String) ?? "ISOLATED", code: code)
             return results.map { $0["result"] ?? NSNull() }   // MV2 returns the raw results array
 
         case "tabs.insertCSS":
             guard let host else { return NSNull() }
+            let tabId = payload["tabId"] as? Int
+            guard await canInjectIntoTab(extensionID: extensionID, isMV3: false, extTabId: tabId) else { return NSNull() }
             var css = payload["code"] as? String ?? ""
             if css.isEmpty, let file = payload["file"] as? String,
                let text = await store.text(extensionID: extensionID, path: file) { css = text }
-            host.webExtInsertCSS(extTabId: payload["tabId"] as? Int, css: css)
+            host.webExtInsertCSS(extTabId: tabId, css: css)
             return NSNull()
 
         default:
@@ -591,67 +599,8 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
 // same-file extension still reaches the class's `private` members (store/host/cookieHost/…).
 extension WebExtensionMessageRouter {
 
-    // MARK: - chrome.cookies
-
-    private func routeCookies(api: String, payload: [String: Any], extensionID: String) async throws -> Any? {
-        guard let host = cookieHost else { return NSNull() }
-        let details = (payload["details"] as? [String: Any]) ?? [:]
-        let storeId = details["storeId"] as? String
-        guard try await hasCookiesPermission(extensionID: extensionID) else {
-            throw BrownBearError.bridgeRejected("the \"cookies\" permission is not granted")
-        }
-        switch api {
-        case "cookies.get":
-            guard let url = details["url"] as? String, let name = details["name"] as? String else {
-                throw BrownBearError.bridgeRejected("cookies.get requires url and name")
-            }
-            guard try await cookieHostAllowed(extensionID: extensionID, details: details) else {
-                throw BrownBearError.bridgeRejected("no host permission for \(url)")
-            }
-            return await host.webExtGetCookie(url: url, name: name, storeId: storeId) ?? NSNull()
-        case "cookies.getAll":
-            guard try await cookieHostAllowed(extensionID: extensionID, details: details) else {
-                throw BrownBearError.bridgeRejected("no host permission for this cookies.getAll filter")
-            }
-            return await host.webExtGetAllCookies(filter: details, storeId: storeId)
-        case "cookies.set":
-            guard try await cookieHostAllowed(extensionID: extensionID, details: details) else {
-                throw BrownBearError.bridgeRejected("no host permission for cookies.set")
-            }
-            return await host.webExtSetCookie(details: details, storeId: storeId) ?? NSNull()
-        case "cookies.remove":
-            guard let url = details["url"] as? String, let name = details["name"] as? String else {
-                throw BrownBearError.bridgeRejected("cookies.remove requires url and name")
-            }
-            guard try await cookieHostAllowed(extensionID: extensionID, details: details) else {
-                throw BrownBearError.bridgeRejected("no host permission for \(url)")
-            }
-            return await host.webExtRemoveCookie(url: url, name: name, storeId: storeId) ?? NSNull()
-        case "cookies.getAllCookieStores":
-            return host.webExtGetAllCookieStores()
-        default:
-            throw BrownBearError.bridgeRejected("unsupported cookies api '\(api)'")
-        }
-    }
-
-    private func hasCookiesPermission(extensionID: String) async throws -> Bool {
-        guard let manifest = await store.ext(for: extensionID)?.manifest else { return false }
-        return manifest.permissions.contains("cookies")
-    }
-
-    private func cookieHostAllowed(extensionID: String, details: [String: Any]) async throws -> Bool {
-        guard let manifest = await store.ext(for: extensionID)?.manifest else { return false }
-        let targetURL: String?
-        if let url = details["url"] as? String { targetURL = url }
-        else if let domain = details["domain"] as? String, !domain.isEmpty {
-            let host = domain.hasPrefix(".") ? String(domain.dropFirst()) : domain
-            targetURL = "https://\(host)/"
-        } else { targetURL = nil }
-        guard let targetURL else { return true }
-        let matcher = URLMatcher(matches: manifest.effectiveHostPatterns,
-                                 includes: [], excludes: [], excludeMatches: [])
-        return matcher.matches(targetURL)
-    }
+    // chrome.cookies routing + the scripting/cookies permission gates live in
+    // WebExtensionMessageRouter+Permissions.swift (file-length limit).
 
     // MARK: - chrome.notifications
 

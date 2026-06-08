@@ -309,7 +309,7 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
             guard session.assetURLs.contains(urlString), let url = URL(string: urlString) else {
                 throw BrownBearError.bridgeRejected("url is not a declared @require/@resource")
             }
-            return try await fetchAsset(url)
+            return try await fetchAsset(url, connects: session.connects)
 
         default:
             throw BrownBearError.bridgeRejected("unsupported api '\(api)'")
@@ -318,10 +318,14 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
 
     /// Fetch a script asset (@require/@resource) natively. Returns text + base64 + mime so the
     /// runtime can serve both GM_getResourceText and GM_getResourceURL (as a data: URL).
-    private func fetchAsset(_ url: URL) async throws -> [String: Any] {
+    private func fetchAsset(_ url: URL, connects: [String]) async throws -> [String: Any] {
         var request = URLRequest(url: url)
         request.timeoutInterval = 30
-        let (data, response) = try await URLSession.shared.data(for: request)
+        // Re-validate @connect on every redirect hop so a 3xx can't bounce the @require/@resource fetch
+        // to an undeclared or internal host (SSRF). pageHost = the asset's own (declared) host, so the
+        // first hop is implicitly allowed; any cross-host redirect needs an @connect grant.
+        let redirectGuard = GMRedirectGuard(connects: connects, pageHost: url.host)
+        let (data, response) = try await URLSession.shared.data(for: request, delegate: redirectGuard)
         let mime = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type")
             ?? "application/octet-stream"
         return [
