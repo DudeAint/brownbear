@@ -22,7 +22,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
     let extensionID: String
     private let extensionName: String
     private let storage: WebExtensionStorage
-    private let logSink: @Sendable (LogEntry) -> Void
+    let logSink: @Sendable (LogEntry) -> Void   // internal: the +ModuleWorker extension logs through it
     /// chrome.tabs bridge to the browser, set by WebExtensionRuntime. Every use hops to the main actor
     /// (the native block runs on this context's serial queue; tab ops are MainActor/UIKit).
     weak var host: WebExtensionBridgeHost?
@@ -87,13 +87,18 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
             installNatives(into: context)
 
             // Capture the cookie gate (permissions + host matcher) once, on `queue`, before any native
-            // can fire. Pure value work — safe off the main actor.
+            // can fire. Pure value work — safe off the main actor. Also note whether the worker is an
+            // ES module (`"type": "module"`), which must be loaded via the module path below.
+            var isModuleWorker = false
+            var workerPath: String?
             if let json = (try? JSONSerialization.jsonObject(with: Data(manifestJSON.utf8))) as? [String: Any],
                let parsed = try? WebExtensionManifest.parse(json) {
                 cookiePermissions = Set(parsed.permissions)
                 let matcher = URLMatcher(matches: parsed.effectiveHostPatterns,
                                          includes: [], excludes: [], excludeMatches: [])
                 cookieHostMatcher = { matcher.matches($0) }
+                isModuleWorker = parsed.background?.isModule ?? false
+                workerPath = parsed.background?.serviceWorker
             }
 
             // Configuration globals the runtime reads on load.
@@ -108,11 +113,15 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
             // IndexedDB engine + rehydrate this extension's snapshot before its background source runs.
             BrownBearIDBStore.shared.install(into: context, namespace: .ext(extensionID))
             context.evaluateScript(runtimeJS, withSourceURL: URL(string: "brownbear://webext/\(extensionID)/runtime.js"))
-            // Wrap in a function so a worker/background script using a top-level `return` (some
-            // ScriptCat-derived bundles do) is valid — a bare top-level `return` is a SyntaxError.
-            // Body starts on line 1 of the wrapper so error line numbers still line up.
-            let wrappedSource = "(function(){" + backgroundSource + "\n})();"
-            context.evaluateScript(wrappedSource, withSourceURL: URL(string: "brownbear://webext/\(extensionID)/background.js"))
+            if isModuleWorker {
+                evaluateModuleWorker(backgroundSource, into: context, baseURL: baseURL, workerPath: workerPath)
+            } else {
+                // Wrap in a function so a worker/background script using a top-level `return` (some
+                // ScriptCat-derived bundles do) is valid — a bare top-level `return` is a SyntaxError.
+                // Body starts on line 1 of the wrapper so error line numbers still line up.
+                let wrappedSource = "(function(){" + backgroundSource + "\n})();"
+                context.evaluateScript(wrappedSource, withSourceURL: URL(string: "brownbear://webext/\(extensionID)/background.js"))
+            }
 
             // onInstalled fires ONLY on the first-ever boot of this extension (Chrome contract);
             // onStartup fires on every boot. Firing 'install' on each launch/reload would re-run
@@ -537,7 +546,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
         JSONSanitize.string(value)
     }
 
-    private func makeLog(_ level: LogEntry.Level, _ message: String) -> LogEntry {
+    func makeLog(_ level: LogEntry.Level, _ message: String) -> LogEntry {   // internal: used by +ModuleWorker
         LogEntry(scriptID: nil, scriptName: extensionName, level: level,
                  message: message, context: .background, source: .engine)
     }

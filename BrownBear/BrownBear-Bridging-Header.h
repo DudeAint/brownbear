@@ -6,3 +6,4 @@
 //
 
 #import "BBWebKitBridge.h"
+#import "BBJSModuleBridge.h"
