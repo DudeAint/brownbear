@@ -18,8 +18,16 @@
 //    (entry exposes the IDB* globals; prepend the setImmediate→microtask shim)
 //  v3.1.7 is chosen because it carries its own structured-clone (no global structuredClone needed).
 //
-/* setImmediate → microtask, so IndexedDB work drains between evaluateScript turns (see persistence). */
-(function(){var g=globalThis;if(typeof g.setImmediate!=='function'){g.setImmediate=function(fn){var a=Array.prototype.slice.call(arguments,1);Promise.resolve().then(function(){fn.apply(null,a);});return 0;};g.clearImmediate=function(){};}})();
+/* setImmediate — a REAL macrotask (native setTimeout) wherever one exists. fake-indexeddb v3.1.7's
+   transaction state machine reschedules its run loop via setImmediate and assumes macrotask semantics:
+   each queued request settles in its own turn so a transaction stays alive across concurrent + nested
+   requests. A microtask-only shim drained an entire transaction inside one microtask checkpoint, which
+   raced multi-store / nested getAll() flows — Violentmonkey's patch-db legacy migration and ScriptCat's
+   Dexie migration wedged (surfacing as `t.catch` of undefined, a null Dexie table on save, and
+   destructuring an undefined getAll result). The extension service worker has a native setTimeout, so it
+   gets true macrotasks. The one-shot userscript runner has NO setTimeout, so it keeps the microtask path
+   (its IndexedDB must drain before the single end-of-run flush). */
+(function(){var g=globalThis;if(typeof g.setImmediate!=='function'){g.setImmediate=function(fn){var a=Array.prototype.slice.call(arguments,1);if(typeof g.setTimeout==='function'){return g.setTimeout(function(){fn.apply(null,a);},0);}Promise.resolve().then(function(){fn.apply(null,a);});return 0;};g.clearImmediate=function(id){if(typeof g.clearTimeout==='function'){g.clearTimeout(id);}};}})();
 (() => {
   var __create = Object.create;
   var __defProp = Object.defineProperty;
