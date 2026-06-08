@@ -60,6 +60,9 @@ final class BrownBearBrowserViewController: UIViewController {
     var keyboardObserver: NSObjectProtocol?
     /// True while the keyboard is up — scroll-hide is suspended so typing doesn't fight the lift.
     var keyboardVisible = false
+    /// How far the bottom chrome is currently lifted above the keyboard (0 when not editing). Tracked so
+    /// a re-layout (rotation / safe-area change) preserves the lift instead of dropping the bar behind it.
+    var keyboardLiftOverlap: CGFloat = 0
     /// Whether the chrome is currently slid away (scrolled down). Drives idempotent show/hide.
     var chromeHidden = false
     /// The scroll offset at the last direction sample, so +ScrollChrome can detect up vs. down.

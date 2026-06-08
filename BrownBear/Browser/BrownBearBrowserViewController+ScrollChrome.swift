@@ -48,8 +48,8 @@ extension BrownBearBrowserViewController: UIScrollViewDelegate {
             return
         }
 
-        // Not worth collapsing for a page barely taller than the viewport.
-        guard scrollView.contentSize.height > scrollView.bounds.height + omniboxBarHeight else {
+        // Not worth collapsing for a page barely taller than the bar(s) that would hide.
+        guard scrollView.contentSize.height > scrollView.bounds.height + chromeHideDistance else {
             lastScrollOffsetY = offsetY
             return
         }
@@ -95,9 +95,18 @@ extension BrownBearBrowserViewController: UIScrollViewDelegate {
         case .bottom:
             guard let bottomConstraint = bottomChromeBottomConstraint else { return }
             // Slide the omnibox + toolbar fully below the screen (bar + toolbar + home-indicator inset).
-            let distance = omniboxBarHeight + BrownBearTheme.Metrics.toolbarHeight + view.safeAreaInsets.bottom
-            bottomConstraint.constant = hidden ? distance : 0
+            bottomConstraint.constant = hidden ? chromeHideDistance : 0
             animateChrome(animated) { self.view.layoutIfNeeded() }
+        }
+    }
+
+    /// How far the chrome travels when hidden in the current position: the top bar's collapsible height,
+    /// or the full bottom chrome (omnibox + toolbar + home-indicator inset). Also the minimum extra page
+    /// height worth collapsing for.
+    var chromeHideDistance: CGFloat {
+        switch AppSettings.addressBarPosition {
+        case .top: return omniboxBarHeight
+        case .bottom: return omniboxBarHeight + BrownBearTheme.Metrics.toolbarHeight + view.safeAreaInsets.bottom
         }
     }
 
@@ -133,6 +142,10 @@ extension BrownBearBrowserViewController: UIScrollViewDelegate {
         let keyboardCover = view.bounds.height - view.convert(endFrame, from: nil).origin.y
         let overlap = max(0, keyboardCover - view.safeAreaInsets.bottom)   // keyboard height above the safe area
         keyboardVisible = overlap > 0
+        keyboardLiftOverlap = overlap   // remembered so a re-layout preserves the lift
+        // Editing only happens with the bar shown (it's tappable only when shown), so on retract the bar
+        // returns fully shown — keep chromeHidden in sync so scroll-hide resumes from the right state.
+        if overlap == 0 { chromeHidden = false }
         // Negative constant lifts the toolbar.bottom (and the omnibox above it) up over the keyboard.
         bottomConstraint.constant = overlap > 0 ? -overlap : 0
         let duration = (note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25

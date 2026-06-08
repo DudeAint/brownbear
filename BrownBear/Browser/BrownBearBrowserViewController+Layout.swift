@@ -135,10 +135,12 @@ extension BrownBearBrowserViewController {
             topChromeHeightConstraint?.constant = omniboxH + 16
         }
 
-        // Always come back fully shown in the new layout.
+        // Come back fully shown in the new layout — but preserve an in-progress keyboard lift (a
+        // safe-area change / rotation while editing the bottom bar re-applies the position; without this
+        // the bar would drop back behind the keyboard).
         chromeHidden = false
-        bottomChromeBottomConstraint?.constant = 0
         omnibox.alpha = 1
+        bottomChromeBottomConstraint?.constant = keyboardVisible ? -keyboardLiftOverlap : 0
 
         guard animated else { return }
         UIView.animate(withDuration: 0.25, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
