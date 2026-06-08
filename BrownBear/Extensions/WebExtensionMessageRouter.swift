@@ -249,6 +249,12 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
              "userScripts.unregister", "userScripts.configureWorld":
             return try await routeDNRUserScripts(api: api, payload: payload, extensionID: extensionID)
 
+        // Privileged extension-page fetch: a page may reach a host in its host_permissions without CORS
+        // (Chrome's extension-page network path). Host-gated; a non-declared host reports notPermitted so
+        // the page falls back to a normal (CORS) fetch.
+        case "hostFetch":
+            return await routeHostFetch(payload: payload, extensionID: extensionID)
+
         default:
             guard let result = await routeTabsAndScripting(api: api, payload: payload, extensionID: extensionID) else {
                 throw BrownBearError.bridgeRejected("unsupported extension api '\(api)'")

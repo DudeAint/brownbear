@@ -28,6 +28,54 @@
     catch (e) { return _Promise.reject(e); }
   }
 
+  // Cross-origin fetch from an extension page. Chrome lets an extension page fetch hosts in its
+  // host_permissions WITHOUT CORS (the privileged extension-page network path); a WKWebView page enforces
+  // CORS, so a manager's install page (e.g. ScriptCat fetching a .user.js from greasyfork) failed with
+  // "Load failed". Route host-permitted cross-origin http(s) through the native, host_permission-gated
+  // fetch (CORS-free, like Chrome). The native side replies `notPermitted` for hosts the extension didn't
+  // declare, and we fall back to the page's normal fetch — so CORS-enabled public APIs still work and
+  // there is no regression. Only a string/absent body is forwarded; anything else uses the page's fetch.
+  (function () {
+    var origFetch = (typeof W.fetch === "function") ? W.fetch.bind(W) : null;
+    if (!origFetch || !handler) { return; }
+    var extOrigin = W.location.protocol + "//" + W.location.host;   // chrome-extension://<id>
+    function headerObject(init, input) {
+      var out = {};
+      var h = (init && init.headers) || (input && typeof input === "object" && input.headers) || null;
+      if (!h) { return out; }
+      if (typeof h.forEach === "function") { h.forEach(function (v, k) { out[String(k)] = String(v); }); }
+      else { _Object.keys(h).forEach(function (k) { out[k] = String(h[k]); }); }
+      return out;
+    }
+    W.fetch = function (input, init) {
+      init = init || {};
+      var url, abs;
+      try {
+        url = (input && typeof input === "object" && input.url != null) ? input.url : String(input);
+        abs = new URL(url, W.location.href);
+      } catch (e) { return origFetch(input, init); }
+      if (abs.origin === extOrigin || (abs.protocol !== "http:" && abs.protocol !== "https:")) {
+        return origFetch(input, init);   // own packaged resource (scheme handler) or non-http scheme
+      }
+      var body = (init.body != null) ? init.body : null;
+      if (body != null && typeof body !== "string") { return origFetch(input, init); }
+      var method = String(init.method || (input && input.method) || "GET").toUpperCase();
+      return bridge("hostFetch", { url: abs.href, method: method, headers: headerObject(init, input), body: body })
+        .then(function (r) {
+          if (r && r.notPermitted) { return origFetch(input, init); }   // not declared → normal CORS fetch
+          if (!r || r.error) { throw new TypeError("Failed to fetch" + (r && r.error ? ": " + r.error : "")); }
+          var status = r.status || 200;
+          var bin = W.atob(r.bodyBase64 || "");
+          var bytes = new Uint8Array(bin.length);
+          for (var i = 0; i < bin.length; i++) { bytes[i] = bin.charCodeAt(i) & 0xff; }
+          // 204/205/304 are null-body statuses — the Response constructor rejects a body for them.
+          var nullBody = (status === 204 || status === 205 || status === 304);
+          return new Response(nullBody ? null : bytes,
+                              { status: status, statusText: r.statusText || "", headers: r.headers || {} });
+        }, function () { return origFetch(input, init); });
+    };
+  })();
+
   // Forward the page's own console + uncaught errors to the native extension log. Popup/options
   // failures are otherwise invisible (a blank page with no surfaced reason); this makes them show up
   // in the dashboard's per-extension log. Installed at document-start so it captures the page's own

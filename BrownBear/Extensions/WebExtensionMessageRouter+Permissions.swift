@@ -113,4 +113,56 @@ extension WebExtensionMessageRouter {
         // WebExtensionCookieMapper.scopeAllowed. Closes the cross-domain cookies.set bypass.
         return WebExtensionCookieMapper.scopeAllowed(details: details) { matcher.matches($0) }
     }
+
+    // MARK: - chrome-extension page fetch (CORS-free, host_permission-gated)
+
+    /// Hard cap so a huge cross-origin download can't balloon the (base64) bridge payload back to the page.
+    private static let maxHostFetchBytes = 16 * 1024 * 1024
+
+    /// Proxy a host-permitted cross-origin http(s) request for an extension PAGE through URLSession — the
+    /// privileged, CORS-free path Chrome gives extension pages. Fails closed: an http(s) host the
+    /// extension didn't declare in host_permissions returns `{notPermitted: true}` (the page then falls
+    /// back to a normal CORS fetch), so this is never an open proxy (CLAUDE.md §5). Same host-permission
+    /// matcher as chrome.cookies; only http(s) is proxied (own packaged resources use the scheme handler).
+    func routeHostFetch(payload: [String: Any], extensionID: String) async -> [String: Any] {
+        let urlString = (payload["url"] as? String) ?? ""
+        guard let url = URL(string: urlString), let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else {
+            return ["error": "invalid URL"]
+        }
+        guard let manifest = await store.ext(for: extensionID)?.manifest else { return ["notPermitted": true] }
+        let matcher = URLMatcher(matches: manifest.hostPermissions,
+                                 includes: [], excludes: [], excludeMatches: [])
+        guard matcher.matches(urlString) else { return ["notPermitted": true] }
+
+        var request = URLRequest(url: url)
+        let method = (payload["method"] as? String)?.uppercased() ?? "GET"
+        request.httpMethod = method
+        request.timeoutInterval = 60
+        if let headers = payload["headers"] as? [String: Any] {
+            for (key, value) in headers { request.setValue(String(describing: value), forHTTPHeaderField: key) }
+        }
+        if let body = payload["body"] as? String, method != "GET", method != "HEAD" {
+            request.httpBody = body.data(using: .utf8)
+        }
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else { return ["error": "no HTTP response"] }
+            let clamped = data.count > Self.maxHostFetchBytes ? Data(data.prefix(Self.maxHostFetchBytes)) : data
+            var headerMap: [String: String] = [:]
+            for (key, value) in http.allHeaderFields {
+                headerMap[String(describing: key).lowercased()] = String(describing: value)
+            }
+            return [
+                "ok": (200...299).contains(http.statusCode),
+                "status": http.statusCode,
+                "statusText": HTTPURLResponse.localizedString(forStatusCode: http.statusCode),
+                "url": http.url?.absoluteString ?? urlString,
+                "headers": headerMap,
+                "bodyBase64": clamped.base64EncodedString()
+            ]
+        } catch {
+            return ["error": error.localizedDescription]
+        }
+    }
 }
