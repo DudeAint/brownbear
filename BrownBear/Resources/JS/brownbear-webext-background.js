@@ -441,6 +441,13 @@
     Response.prototype.arrayBuffer = function () { this.bodyUsed = true; return Promise.resolve(bytesFromBase64(this._b64).buffer); };
     Response.prototype.text = function () { this.bodyUsed = true; return Promise.resolve(new TextDecoder('utf-8').decode(bytesFromBase64(this._b64))); };
     Response.prototype.json = function () { return this.text().then(function (t) { return JSON.parse(t); }); };
+    Response.prototype.blob = function () {
+      this.bodyUsed = true;
+      var bytes = bytesFromBase64(this._b64);
+      var ct = this.headers.get('content-type') || '';
+      return Promise.resolve((typeof globalThis.Blob === 'function')
+        ? new globalThis.Blob([bytes.buffer], { type: ct }) : bytes.buffer);
+    };
     Response.prototype.clone = function () {
       return new Response({ ok: this.ok, status: this.status, statusText: this.statusText,
                             url: this.url, headers: this.headers._m, bodyBase64: this._b64 });
@@ -958,49 +965,148 @@
       };
     }
 
-    // Minimal XMLHttpRequest — blob:-only, so the IndexedDB structured-clone handler can read a Blob's
-    // bytes synchronously (`open('GET', objectURL, false)`). Any non-blob URL fails closed (status 0):
-    // a service worker has no synchronous network primitive, and we deliberately do not fake one.
+    // XMLHttpRequest — enough for extensions' real network use (Violentmonkey's GM_xmlhttpRequest) AND
+    // the IndexedDB structured-clone path. http(s) requests go through the native-backed, host-permission
+    // gated `fetch` (ASYNC only — a service worker has no synchronous network primitive). `blob:` URLs
+    // minted by URL.createObjectURL resolve synchronously from their bytes (fake-indexeddb's clone
+    // handler relies on this with a synchronous open()). overrideMimeType('…charset=x-user-defined')
+    // yields a byte-preserving responseText (that handler's contract); otherwise responseText is decoded
+    // text. responseType '', 'text', 'json', 'arraybuffer', and 'blob' are honored.
     if (typeof globalThis.XMLHttpRequest !== 'function') {
       var BBXHR = function () {
         this.readyState = 0; this.status = 0; this.statusText = '';
-        this.responseText = ''; this.response = ''; this.responseType = '';
-        this._method = 'GET'; this._url = ''; this._async = true;
-        this.onload = null; this.onerror = null; this.onreadystatechange = null;
+        this.responseText = ''; this.response = null; this.responseType = '';
+        this.responseURL = ''; this.timeout = 0; this.withCredentials = false;
+        this.onreadystatechange = null; this.onload = null; this.onerror = null;
+        this.onloadstart = null; this.onloadend = null; this.onprogress = null;
+        this.onabort = null; this.ontimeout = null;
+        this.upload = { onprogress: null, onload: null, onloadstart: null, onloadend: null, onerror: null,
+                        onabort: null, addEventListener: function () {}, removeEventListener: function () {} };
+        this._method = 'GET'; this._url = ''; this._async = true; this._mime = '';
+        this._reqHeaders = {}; this._respHeaders = {}; this._lst = {};
+        this._aborted = false; this._abortFetch = null;
       };
-      BBXHR.prototype.overrideMimeType = function () {};
-      BBXHR.prototype.setRequestHeader = function () {};
-      BBXHR.prototype.getAllResponseHeaders = function () { return ''; };
-      BBXHR.prototype.getResponseHeader = function () { return null; };
-      BBXHR.prototype.abort = function () {};
-      BBXHR.prototype.addEventListener = function (type, fn) {
-        if (type === 'load') { this.onload = fn; } else if (type === 'error') { this.onerror = fn; }
+      BBXHR.UNSENT = 0; BBXHR.OPENED = 1; BBXHR.HEADERS_RECEIVED = 2; BBXHR.LOADING = 3; BBXHR.DONE = 4;
+      ['UNSENT', 'OPENED', 'HEADERS_RECEIVED', 'LOADING', 'DONE'].forEach(function (k) { BBXHR.prototype[k] = BBXHR[k]; });
+      BBXHR.prototype.overrideMimeType = function (m) { this._mime = String(m || '').toLowerCase(); };
+      BBXHR.prototype.setRequestHeader = function (k, v) { if (k != null) { this._reqHeaders[String(k)] = String(v); } };
+      BBXHR.prototype.getAllResponseHeaders = function () {
+        var out = '';
+        for (var k in this._respHeaders) {
+          if (Object.prototype.hasOwnProperty.call(this._respHeaders, k)) { out += k.toLowerCase() + ': ' + this._respHeaders[k] + '\r\n'; }
+        }
+        return out;
       };
-      BBXHR.prototype.removeEventListener = function () {};
+      BBXHR.prototype.getResponseHeader = function (n) {
+        n = String(n).toLowerCase();
+        for (var k in this._respHeaders) {
+          if (Object.prototype.hasOwnProperty.call(this._respHeaders, k) && k.toLowerCase() === n) { return this._respHeaders[k]; }
+        }
+        return null;
+      };
+      BBXHR.prototype.addEventListener = function (type, fn) { if (typeof fn === 'function') { (this._lst[type] = this._lst[type] || []).push(fn); } };
+      BBXHR.prototype.removeEventListener = function (type, fn) { var a = this._lst[type]; if (!a) { return; } var i = a.indexOf(fn); if (i >= 0) { a.splice(i, 1); } };
+      BBXHR.prototype._emit = function (type, extra) {
+        var ev = { type: type, target: this, currentTarget: this, lengthComputable: false, loaded: 0, total: 0 };
+        if (extra) { for (var ek in extra) { ev[ek] = extra[ek]; } }
+        var on = (type === 'readystatechange') ? this.onreadystatechange : this['on' + type];
+        if (typeof on === 'function') { try { on.call(this, ev); } catch (e) { /* handler error */ } }
+        var a = this._lst[type];
+        if (a) { for (var i = 0; i < a.length; i++) { try { a[i].call(this, ev); } catch (e2) { /* listener error */ } } }
+      };
       BBXHR.prototype.open = function (method, url, async) {
         this._method = String(method || 'GET').toUpperCase();
         this._url = String(url || '');
         this._async = (async === undefined) ? true : !!async;
-        this.readyState = 1;
+        this._reqHeaders = {}; this._respHeaders = {}; this._aborted = false; this._abortFetch = null;
+        this.status = 0; this.statusText = ''; this.responseText = ''; this.response = null; this.responseURL = '';
+        this.readyState = 1; this._emit('readystatechange');
       };
-      BBXHR.prototype.send = function () {
+      BBXHR.prototype.abort = function () {
+        this._aborted = true;
+        if (typeof this._abortFetch === 'function') { try { this._abortFetch(); } catch (e) { /* ignore */ } }
+        if (this.readyState > 0 && this.readyState < 4) {
+          this.status = 0; this.readyState = 4; this._emit('readystatechange'); this._emit('abort'); this._emit('loadend');
+        }
+        this.readyState = 0;
+      };
+      BBXHR.prototype._deliver = function (status, statusText, headersObj, bytes, finalURL) {
+        if (this._aborted) { return; }
+        this.status = status; this.statusText = statusText || '';
+        this._respHeaders = headersObj || {};
+        this.responseURL = finalURL || this._url;
+        var rt = this.responseType || '';
+        if (rt === '' || rt === 'text') {
+          // x-user-defined → byte-preserving string (the fake-indexeddb clone contract); else decoded text.
+          this.responseText = (this._mime.indexOf('x-user-defined') >= 0)
+            ? __bbBytesToBinaryString(bytes) : (new globalThis.TextDecoder()).decode(bytes);
+          this.response = this.responseText;
+        } else if (rt === 'json') {
+          try { this.response = JSON.parse((new globalThis.TextDecoder()).decode(bytes)); } catch (e) { this.response = null; }
+        } else if (rt === 'arraybuffer') {
+          this.response = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+        } else if (rt === 'blob') {
+          this.response = (typeof globalThis.Blob === 'function')
+            ? new globalThis.Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)],
+                                  { type: this.getResponseHeader('content-type') || '' })
+            : null;
+        } else {
+          this.responseText = (new globalThis.TextDecoder()).decode(bytes); this.response = this.responseText;
+        }
+        this.readyState = 2; this._emit('readystatechange');
+        this.readyState = 3; this._emit('readystatechange');
+        this._emit('progress', { lengthComputable: false, loaded: bytes.length, total: 0 });
+        this.readyState = 4; this._emit('readystatechange');
+        this._emit('load'); this._emit('loadend');
+      };
+      BBXHR.prototype._fail = function () {
+        if (this._aborted) { return; }
+        this.status = 0; this.statusText = ''; this.readyState = 4;
+        this._emit('readystatechange'); this._emit('error'); this._emit('loadend');
+      };
+      BBXHR.prototype.send = function (body) {
         var self = this;
-        var blob = Object.prototype.hasOwnProperty.call(globalThis.__bbObjectURLs, this._url)
-          ? globalThis.__bbObjectURLs[this._url] : null;
-        var run = function () {
-          if (blob && blob._bbBytes) {
-            self.status = 200; self.statusText = 'OK';
-            self.responseText = __bbBytesToBinaryString(blob._bbBytes);
-            self.response = self.responseText;
-          } else {
-            self.status = 0; self.statusText = '';
-          }
-          self.readyState = 4;
-          if (typeof self.onreadystatechange === 'function') { self.onreadystatechange(); }
-          var cb = (self.status === 200) ? self.onload : self.onerror;
-          if (typeof cb === 'function') { cb({ type: self.status === 200 ? 'load' : 'error' }); }
-        };
-        if (this._async && typeof queueMicrotask === 'function') { queueMicrotask(run); } else { run(); }
+        self._emit('loadstart');
+        // blob: object URL — resolve synchronously from its bytes (the fake-indexeddb clone path opens it
+        // synchronously; a userscript may XHR an object URL too).
+        if (Object.prototype.hasOwnProperty.call(globalThis.__bbObjectURLs, self._url)) {
+          var b = globalThis.__bbObjectURLs[self._url];
+          var runBlob = function () {
+            if (self._aborted) { return; }
+            if (b && b._bbBytes) { self._deliver(200, 'OK', b.type ? { 'content-type': b.type } : {}, b._bbBytes, self._url); }
+            else { self._fail(); }
+          };
+          if (self._async && typeof queueMicrotask === 'function') { queueMicrotask(runBlob); } else { runBlob(); }
+          return;
+        }
+        // http(s) — ASYNC only, via the native-backed (host-permission gated) fetch.
+        if (!self._async || typeof globalThis.fetch !== 'function') { self._fail(); return; }
+        var controller = (typeof globalThis.AbortController === 'function') ? new globalThis.AbortController() : null;
+        if (controller) { self._abortFetch = function () { controller.abort(); }; }
+        var timer = null;
+        if (self.timeout > 0 && typeof setTimeout === 'function') {
+          timer = setTimeout(function () {
+            if (self._aborted || self.readyState >= 4) { return; }
+            self._aborted = true; if (controller) { controller.abort(); }
+            self.status = 0; self.readyState = 4; self._emit('readystatechange'); self._emit('timeout'); self._emit('loadend');
+          }, self.timeout);
+        }
+        var init = { method: self._method, headers: self._reqHeaders };
+        if (body != null && self._method !== 'GET' && self._method !== 'HEAD') { init.body = body; }
+        if (controller) { init.signal = controller.signal; }
+        globalThis.fetch(self._url, init).then(function (resp) {
+          if (timer) { clearTimeout(timer); }
+          if (self._aborted) { return undefined; }
+          var headersObj = {};
+          if (resp.headers && typeof resp.headers.forEach === 'function') { resp.headers.forEach(function (v, k) { headersObj[k] = v; }); }
+          return resp.arrayBuffer().then(function (ab) {
+            if (self._aborted) { return; }
+            self._deliver(resp.status, resp.statusText, headersObj, new Uint8Array(ab), resp.url);
+          });
+        }).catch(function () {
+          if (timer) { clearTimeout(timer); }
+          self._fail();
+        });
       };
       globalThis.XMLHttpRequest = BBXHR;
     }
