@@ -74,6 +74,38 @@
         if (algo && typeof algo.name === 'string') { return algo.name; }
         return '';
       };
+      // --- crypto.subtle helpers (symmetric: HMAC / AES-GCM / PBKDF2 / HKDF, via __bb_subtle) -------
+      var __subBytes = function (src) {
+        if (src == null) { return new Uint8Array(0); }
+        if (src instanceof ArrayBuffer) { return new Uint8Array(src); }
+        if (src.buffer instanceof ArrayBuffer) { return new Uint8Array(src.buffer, src.byteOffset || 0, src.byteLength); }
+        if (Array.isArray(src)) { return new Uint8Array(src); }
+        throw new TypeError('expected a BufferSource');
+      };
+      var __subB64 = function (src) {
+        var u8 = __subBytes(src), bin = '';
+        for (var i = 0; i < u8.length; i++) { bin += String.fromCharCode(u8[i]); }
+        return btoa(bin);
+      };
+      var __subFromB64 = function (b64) {
+        var bin = atob(b64 || ''), u8 = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) { u8[i] = bin.charCodeAt(i) & 0xff; }
+        return u8;
+      };
+      var __subAlgo = function (a) { return (typeof a === 'string') ? { name: a } : (a || {}); };
+      var __subHash = function (a, key) {
+        var h = a && a.hash; if (h && h.name) { h = h.name; }
+        if (!h && key && key.algorithm && key.algorithm.hash) { h = key.algorithm.hash.name || key.algorithm.hash; }
+        return h || 'SHA-256';
+      };
+      var __subCall = function (op, params) {
+        var r; try { r = JSON.parse(__bb_subtle(op, JSON.stringify(params))); } catch (e) { throw new Error('subtle bridge failure'); }
+        if (r && r.error) { var er = new Error(r.error); er.name = 'OperationError'; throw er; }
+        return r;
+      };
+      var __subKey = function (raw, algorithm, extractable, usages) {
+        return { type: 'secret', extractable: extractable !== false, algorithm: algorithm, usages: usages || [], __raw: raw };
+      };
       globalThis.crypto = {
         getRandomValues: function (typedArray) {
           if (!typedArray || typeof typedArray.length !== 'number') {
@@ -100,12 +132,7 @@
             return new Promise(function (resolve, reject) {
               try {
                 var name = digestName(algo);
-                var src;
-                if (data instanceof ArrayBuffer) { src = new Uint8Array(data); }
-                else if (data && data.buffer instanceof ArrayBuffer) {
-                  src = new Uint8Array(data.buffer, data.byteOffset || 0, data.byteLength);
-                } else if (Array.isArray(data)) { src = data; }
-                else { reject(new TypeError('digest expects a BufferSource')); return; }
+                var src = __subBytes(data);
                 var input = [];
                 for (var i = 0; i < src.length; i++) { input.push(src[i] & 0xff); }
                 var out = __bb_crypto_digest(name, input);
@@ -114,6 +141,99 @@
                 for (var j = 0; j < out.length; j++) { result[j] = out[j] & 0xff; }
                 resolve(result.buffer);
               } catch (e) { reject(e); }
+            });
+          },
+          importKey: function (format, keyData, algorithm, extractable, usages) {
+            return new Promise(function (resolve, reject) {
+              try {
+                if (format !== 'raw') { reject(new Error("importKey: only 'raw' format is supported")); return; }
+                resolve(__subKey(__subB64(keyData), __subAlgo(algorithm), extractable, usages));
+              } catch (e) { reject(e); }
+            });
+          },
+          exportKey: function (format, key) {
+            return new Promise(function (resolve, reject) {
+              if (format !== 'raw') { reject(new Error("exportKey: only 'raw' format is supported")); return; }
+              if (!key || !key.extractable) { reject(new Error('exportKey: key is not extractable')); return; }
+              try { resolve(__subFromB64(key.__raw).buffer); } catch (e) { reject(e); }
+            });
+          },
+          generateKey: function (algorithm, extractable, usages) {
+            return new Promise(function (resolve, reject) {
+              try {
+                var a = __subAlgo(algorithm), name = (a.name || '').toUpperCase();
+                if (name === 'AES-GCM' || name === 'AES-CBC' || name === 'AES-KW') {
+                  var r = __subCall('generateAesKey', { length: a.length || 256 });
+                  resolve(__subKey(r.data, a, extractable, usages));
+                } else if (name === 'HMAC') {
+                  var bits = a.length || 256;
+                  var rnd = __bb_crypto_random(Math.ceil(bits / 8)) || [];
+                  var u8 = new Uint8Array(rnd.length);
+                  for (var i = 0; i < rnd.length; i++) { u8[i] = rnd[i] & 0xff; }
+                  resolve(__subKey(__subB64(u8), a, extractable, usages));
+                } else { reject(new Error('generateKey: unsupported algorithm ' + name + ' (asymmetric keys are not yet supported)')); }
+              } catch (e) { reject(e); }
+            });
+          },
+          sign: function (algorithm, key, data) {
+            return new Promise(function (resolve, reject) {
+              try {
+                var name = (__subAlgo(algorithm).name || key.algorithm.name || '').toUpperCase();
+                if (name !== 'HMAC') { reject(new Error('sign: only HMAC is supported (ECDSA/RSA pending)')); return; }
+                var r = __subCall('hmacSign', { key: key.__raw, data: __subB64(data), hash: __subHash(algorithm, key) });
+                resolve(__subFromB64(r.data).buffer);
+              } catch (e) { reject(e); }
+            });
+          },
+          verify: function (algorithm, key, signature, data) {
+            return new Promise(function (resolve, reject) {
+              try {
+                var name = (__subAlgo(algorithm).name || key.algorithm.name || '').toUpperCase();
+                if (name !== 'HMAC') { reject(new Error('verify: only HMAC is supported (ECDSA/RSA pending)')); return; }
+                var r = __subCall('hmacVerify', { key: key.__raw, data: __subB64(data), signature: __subB64(signature), hash: __subHash(algorithm, key) });
+                resolve(!!r.valid);
+              } catch (e) { reject(e); }
+            });
+          },
+          encrypt: function (algorithm, key, data) {
+            return new Promise(function (resolve, reject) {
+              try {
+                var a = __subAlgo(algorithm);
+                if ((a.name || '').toUpperCase() !== 'AES-GCM') { reject(new Error('encrypt: only AES-GCM is supported')); return; }
+                var r = __subCall('aesGcmEncrypt', { key: key.__raw, data: __subB64(data), iv: __subB64(a.iv), additionalData: a.additionalData ? __subB64(a.additionalData) : '' });
+                resolve(__subFromB64(r.data).buffer);
+              } catch (e) { reject(e); }
+            });
+          },
+          decrypt: function (algorithm, key, data) {
+            return new Promise(function (resolve, reject) {
+              try {
+                var a = __subAlgo(algorithm);
+                if ((a.name || '').toUpperCase() !== 'AES-GCM') { reject(new Error('decrypt: only AES-GCM is supported')); return; }
+                var r = __subCall('aesGcmDecrypt', { key: key.__raw, data: __subB64(data), iv: __subB64(a.iv), additionalData: a.additionalData ? __subB64(a.additionalData) : '' });
+                resolve(__subFromB64(r.data).buffer);
+              } catch (e) { reject(e); }
+            });
+          },
+          deriveBits: function (algorithm, baseKey, length) {
+            return new Promise(function (resolve, reject) {
+              try {
+                var a = __subAlgo(algorithm), name = (a.name || '').toUpperCase(), r;
+                if (name === 'PBKDF2') {
+                  r = __subCall('pbkdf2', { password: baseKey.__raw, salt: __subB64(a.salt), iterations: a.iterations || 100000, hash: __subHash(a, null), length: length });
+                } else if (name === 'HKDF') {
+                  r = __subCall('hkdf', { ikm: baseKey.__raw, salt: __subB64(a.salt), info: a.info ? __subB64(a.info) : '', hash: __subHash(a, null), length: length });
+                } else { reject(new Error('deriveBits: unsupported algorithm ' + name)); return; }
+                resolve(__subFromB64(r.data).buffer);
+              } catch (e) { reject(e); }
+            });
+          },
+          deriveKey: function (algorithm, baseKey, derivedKeyAlgo, extractable, usages) {
+            var self = this;
+            var da = __subAlgo(derivedKeyAlgo);
+            var bits = da.length || 256;
+            return self.deriveBits(algorithm, baseKey, bits).then(function (raw) {
+              return self.importKey('raw', raw, da, extractable, usages);
             });
           }
         }
