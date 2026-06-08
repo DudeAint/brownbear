@@ -530,6 +530,7 @@
       local: storageArea("local"),
       sync: storageArea("sync"),
       session: storageArea("session"),
+      managed: storageArea("managed"),   // read-only policy store; resolves {} with no MDM policy
       onChanged: makeEvent(storageListeners)
     },
     cookies: cookiesApi(),
