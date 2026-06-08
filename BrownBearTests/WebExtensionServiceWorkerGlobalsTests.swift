@@ -368,4 +368,37 @@ final class WebExtensionServiceWorkerGlobalsTests: XCTestCase {
         let response = await context.deliverRuntimeMessage(message: ["any": true], sender: [:])
         XCTAssertNil(response)
     }
+
+    // MARK: - chrome.identity namespace + getRedirectURL
+
+    /// chrome.identity must exist (so an OAuth extension doesn't crash on an undefined namespace) and
+    /// getRedirectURL must produce Chrome's exact value: https://<id>.chromiumapp.org/<path>, with a
+    /// leading slash on the path collapsed and an omitted path yielding the bare origin + "/".
+    func testIdentityNamespaceAndRedirectURL() async throws {
+        let id = "abcdefghijklmnopabcdefghijklmnop"
+        let context = try makeContext(background: """
+        chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+          if (!msg || msg.check !== 'identity') { return; }
+          sendResponse({
+            hasIdentity: typeof chrome.identity === 'object',
+            hasLaunch: typeof chrome.identity.launchWebAuthFlow === 'function',
+            hasAuthToken: typeof chrome.identity.getAuthToken === 'function',
+            hasOnSignInChanged: typeof chrome.identity.onSignInChanged.addListener === 'function',
+            redirect: chrome.identity.getRedirectURL('cb'),
+            redirectSlash: chrome.identity.getRedirectURL('/cb'),
+            redirectEmpty: chrome.identity.getRedirectURL()
+          });
+        });
+        """)
+        defer { context.shutdown() }
+        let response = await context.deliverRuntimeMessage(message: ["check": "identity"], sender: [:])
+        let r = try XCTUnwrap(response?["value"] as? [String: Any])
+        XCTAssertEqual(r["hasIdentity"] as? Bool, true)
+        XCTAssertEqual(r["hasLaunch"] as? Bool, true)
+        XCTAssertEqual(r["hasAuthToken"] as? Bool, true)
+        XCTAssertEqual(r["hasOnSignInChanged"] as? Bool, true)
+        XCTAssertEqual(r["redirect"] as? String, "https://\(id).chromiumapp.org/cb")
+        XCTAssertEqual(r["redirectSlash"] as? String, "https://\(id).chromiumapp.org/cb")
+        XCTAssertEqual(r["redirectEmpty"] as? String, "https://\(id).chromiumapp.org/")
+    }
 }

@@ -1440,8 +1440,36 @@
     ACTION_MENU_TOP_LEVEL_LIMIT: 6
   };
 
+  // chrome.identity. getRedirectURL is the real Chrome value (https://<id>.chromiumapp.org/<path>) an
+  // extension registers as its OAuth redirect URI. launchWebAuthFlow's interactive auth UI lands in a
+  // follow-up (it needs a presented web view); until then it rejects clearly rather than hanging or
+  // throwing on an undefined namespace. getProfileUserInfo/getAccounts report empty (no iOS account).
+  var identity = {
+    getRedirectURL: function (path) {
+      var p = (path == null) ? '' : String(path);
+      if (p.charAt(0) === '/') { p = p.slice(1); }
+      return 'https://' + extId + '.chromiumapp.org/' + p;
+    },
+    launchWebAuthFlow: function (details, cb) {
+      return settleBg(Promise.reject(new Error('identity.launchWebAuthFlow is not yet available')), cb);
+    },
+    getAuthToken: function (details, cb) {
+      if (typeof details === 'function') { cb = details; }
+      return settleBg(Promise.reject(new Error('identity.getAuthToken is not supported; use launchWebAuthFlow')), cb);
+    },
+    removeCachedAuthToken: function (details, cb) { return settleBg(Promise.resolve(), cb); },
+    clearAllCachedAuthTokens: function (cb) { return settleBg(Promise.resolve(), cb); },
+    getProfileUserInfo: function (details, cb) {
+      if (typeof details === 'function') { cb = details; }
+      return settleBg(Promise.resolve({ email: '', id: '' }), cb);
+    },
+    getAccounts: function (cb) { return settleBg(Promise.resolve([]), cb); },
+    onSignInChanged: makeEvent([])
+  };
+
   var chrome = {
     runtime: runtime,
+    identity: identity,
     storage: storage,
     cookies: cookies,
     notifications: notifications,
