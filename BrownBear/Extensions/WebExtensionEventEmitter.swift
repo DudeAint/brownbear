@@ -188,4 +188,15 @@ protocol WebExtensionEventReceiver: AnyObject {
     var receiverPermissions: Set<String> { get }
     /// Deliver one already-serialized event into the page's chrome.* surface.
     func dispatchExtEvent(name: String, argsJSON: String)
+    /// Deliver a runtime.sendMessage into this page's chrome.runtime.onMessage and await the first
+    /// sendResponse. `senderToken` is the sending page's token (when the sender is itself a page) so a
+    /// page never receives its own broadcast. Returns `["value": ...]` for an answer, nil otherwise.
+    func deliverRuntimeMessage(message: Any, sender: [String: Any], senderToken: String?) async -> [String: Any]?
+}
+
+extension WebExtensionEventReceiver {
+    /// Default: an event-only receiver does not handle runtime messages.
+    func deliverRuntimeMessage(message: Any, sender: [String: Any], senderToken: String?) async -> [String: Any]? {
+        nil
+    }
 }

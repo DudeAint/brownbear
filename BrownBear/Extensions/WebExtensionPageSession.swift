@@ -258,4 +258,11 @@ extension WebExtensionPageSession: WebExtensionEventReceiver {
             + "\(Self.jsonString(name)), \(Self.jsonString(argsJSON)));"
         BBEvaluateJavaScript(webView, js, contentWorld)   // ObjC shim — no Swift WebKit overlay (iOS 16.4).
     }
+
+    /// Deliver a runtime.sendMessage into this page's chrome.runtime.onMessage. Skipped if this page is
+    /// itself the sender (Chrome never delivers a context its own broadcast) or has no live web view.
+    func deliverRuntimeMessage(message: Any, sender: [String: Any], senderToken: String?) async -> [String: Any]? {
+        guard let pageToken, senderToken != pageToken, webView != nil else { return nil }
+        return await router.deliverRuntimeMessageToPage(token: pageToken, message: message, sender: sender)
+    }
 }

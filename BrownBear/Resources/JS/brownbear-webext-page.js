@@ -593,6 +593,33 @@
         try { list[i].apply(null, args); } catch (e) {}
       }
     },
+    // A runtime.sendMessage delivered INTO this page (from a content script, the background worker,
+    // or another extension page). Mirrors the content runtime's onMessage: run chrome.runtime
+    // .onMessage listeners and post the first sendResponse back over the bridge, correlated by
+    // responseId. message/sender arrive already parsed as JS literals (native embeds them).
+    dispatchMessage: function (message, sender, responseId) {
+      var responded = false;
+      var willRespondAsync = false;
+      function sendResponse(value) {
+        if (responded) { return; }
+        responded = true;
+        bridge("runtime.messageResponse",
+          { responseId: responseId, value: (value === undefined ? null : value) }).catch(function () {});
+      }
+      for (var i = 0; i < messageListeners.length; i++) {
+        var returned;
+        try { returned = messageListeners[i](message, sender || {}, sendResponse); }
+        catch (e) { continue; }
+        if (returned === true) {
+          willRespondAsync = true;
+        } else if (returned && typeof returned.then === "function") {
+          willRespondAsync = true;
+          (function (p) { p.then(function (v) { sendResponse(v); }, function () { sendResponse(undefined); }); })(returned);
+        }
+        if (responded) { break; }
+      }
+      if (!responded && !willRespondAsync) { sendResponse(undefined); }
+    },
     // Port pushes from native (the worker's replies on a port this page opened). name/sender for
     // onPortConnect (responder path, present for symmetry) arrive already parsed as JS literals.
     onPortConnect: function (portId, name, sender) {
