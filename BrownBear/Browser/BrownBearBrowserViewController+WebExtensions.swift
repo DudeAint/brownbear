@@ -62,10 +62,13 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
     func userScriptInstallRedirect(for url: URL) async -> (ext: WebExtension, target: URL)? {
         let store = BrownBearServices.shared.webExtensionStore
         let dnr = BrownBearServices.shared.webExtensionDNRStore
+        // Gather each enabled extension's DNR rules (session + dynamic first — Chrome's runtime-over-static
+        // precedence — then enabled static rulesets), serialized to JSON so the matching (which runs an
+        // UNTRUSTED regexFilter) can cross to a background task as a Sendable string.
+        var candidates: [(id: String, rulesJSON: String)] = []
+        var byID: [String: WebExtension] = [:]
         for ext in await store.enabledExtensions() {
             guard let manifest = ext.manifest else { continue }
-            // Session + dynamic rules first (Chrome gives runtime rules precedence over static), then the
-            // enabled static rulesets — the same sources the content blocker merges.
             var rules = await dnr.getSessionRules(extensionID: ext.id)
             rules += await dnr.getDynamicRules(extensionID: ext.id)
             let manifestDefaults = manifest.declarativeNetRequest.filter(\.enabled).map(\.id)
@@ -76,11 +79,30 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
                     rules += arr
                 }
             }
-            if let redirect = UserScriptInstallRouter.redirect(for: url, extensionID: ext.id, rules: rules) {
-                return (ext, redirect.target)
-            }
+            guard !rules.isEmpty,
+                  let data = try? JSONSerialization.data(withJSONObject: rules),
+                  let json = String(data: data, encoding: .utf8) else { continue }
+            candidates.append((ext.id, json))
+            byID[ext.id] = ext
         }
-        return nil
+        guard !candidates.isEmpty else { return nil }
+
+        // Run the match OFF the main actor: an extension's regexFilter is untrusted, so a pathological
+        // (ReDoS) pattern must not freeze the UI. The await suspends the main actor (it keeps servicing the
+        // UI); worst case the hand-off just doesn't resolve and the caller falls back to the native card.
+        let urlString = url.absoluteString
+        let matched: (id: String, target: String)? = await Task.detached(priority: .userInitiated) {
+            for candidate in candidates {
+                guard let candidateURL = URL(string: urlString),
+                      let rules = (try? JSONSerialization.jsonObject(with: Data(candidate.rulesJSON.utf8))) as? [[String: Any]],
+                      let redirect = UserScriptInstallRouter.redirect(for: candidateURL, extensionID: candidate.id, rules: rules)
+                else { continue }
+                return (candidate.id, redirect.target.absoluteString)
+            }
+            return nil
+        }.value
+        guard let matched, let target = URL(string: matched.target), let ext = byID[matched.id] else { return nil }
+        return (ext, target)
     }
 
     /// Hand a `.user.js` URL to an installed userscript manager that claims it (Chrome behavior), or fall
