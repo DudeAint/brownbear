@@ -11,7 +11,7 @@ import SwiftUI
 
 /// The Logs tab filter — All, errors/warnings only, userscript output, or page/iframe console.
 enum LogFilter: String, CaseIterable, Identifiable {
-    case all, errors, userscripts, page
+    case all, errors, userscripts, page, background
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -19,6 +19,7 @@ enum LogFilter: String, CaseIterable, Identifiable {
         case .errors: return "Errors"
         case .userscripts: return "Userscripts"
         case .page: return "Page"
+        case .background: return "Background"
         }
     }
 }
@@ -57,6 +58,9 @@ final class DashboardViewModel: ObservableObject {
         case .errors: entries = recentLogs.filter { $0.level == .error || $0.level == .warn }
         case .userscripts: entries = recentLogs.filter { $0.source == .userscript }
         case .page: entries = recentLogs.filter { $0.source == .page || $0.source == .iframe }
+        // Background = headless contexts: extension service workers / event pages + headless userscript
+        // runs (where a worker that threw on boot — e.g. Violentmonkey's — surfaces its real error).
+        case .background: entries = recentLogs.filter { $0.context == .background }
         }
         let query = logSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !query.isEmpty else { return entries }
