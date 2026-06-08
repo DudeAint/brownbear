@@ -169,6 +169,41 @@ final class WebExtensionServiceWorkerGlobalsTests: XCTestCase {
         XCTAssertEqual(r["status"] as? Int, 404, "missing packaged file → 404 response")
     }
 
+    func testCryptoSubtleHmacAesGcmPbkdf2RoundTrip() async throws {
+        let context = try makeContext(background: """
+        chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+          if (!msg || msg.check !== 'subtle') { return; }
+          (async function () {
+            var enc = new TextEncoder();
+            var hk = await crypto.subtle.importKey('raw', enc.encode('secret-key'),
+                       { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
+            var sig = await crypto.subtle.sign('HMAC', hk, enc.encode('hello'));
+            var ok = await crypto.subtle.verify('HMAC', hk, sig, enc.encode('hello'));
+            var bad = await crypto.subtle.verify('HMAC', hk, sig, enc.encode('tampered'));
+            var ak = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+            var iv = crypto.getRandomValues(new Uint8Array(12));
+            var ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv }, ak, enc.encode('secret-msg'));
+            var pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, ak, ct);
+            var pk = await crypto.subtle.importKey('raw', enc.encode('password'), { name: 'PBKDF2' }, false, ['deriveBits']);
+            var bits = await crypto.subtle.deriveBits(
+                       { name: 'PBKDF2', salt: enc.encode('salt'), iterations: 1000, hash: 'SHA-256' }, pk, 256);
+            sendResponse({ sigLen: sig.byteLength, verifyOk: ok, verifyBad: bad,
+                           roundtrip: new TextDecoder().decode(pt), bitsLen: bits.byteLength });
+          })().catch(function (e) { sendResponse({ error: String((e && e.message) || e) }); });
+          return true;
+        });
+        """)
+        defer { context.shutdown() }
+        let response = await context.deliverRuntimeMessage(message: ["check": "subtle"], sender: [:])
+        let r = try XCTUnwrap(response?["value"] as? [String: Any], "subtle should respond")
+        XCTAssertNil(r["error"], "no crypto error: \(r)")
+        XCTAssertEqual(r["sigLen"] as? Int, 32, "HMAC-SHA256 is 32 bytes")
+        XCTAssertEqual(r["verifyOk"] as? Bool, true)
+        XCTAssertEqual(r["verifyBad"] as? Bool, false)
+        XCTAssertEqual(r["roundtrip"] as? String, "secret-msg")
+        XCTAssertEqual(r["bitsLen"] as? Int, 32, "256-bit derived = 32 bytes")
+    }
+
     func testRegisterContentScriptsExistsAndGatesOnPermission() async throws {
         // The default manifest has no "scripting" permission, so register must reject (fail closed) —
         // proving both that the method exists (ScriptCat's "is not a function" is gone) and the gate works.
