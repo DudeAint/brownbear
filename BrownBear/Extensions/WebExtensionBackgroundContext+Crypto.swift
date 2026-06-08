@@ -127,11 +127,12 @@ extension WebExtensionBackgroundContext {
                                    bits: (p["length"] as? Int) ?? 256, hash: hash()).map(okData) ?? fail("PBKDF2 failed")
             case "hkdf":
                 let ikm = SymmetricKey(data: bytes("ikm")); let salt = bytes("salt"); let info = bytes("info")
-                let count = ((p["length"] as? Int) ?? 256) / 8
+                let n = ((p["length"] as? Int) ?? 256) / 8
+                func raw(_ k: SymmetricKey) -> String { okData(k.withUnsafeBytes { Data($0) }) }
                 switch hash() {
-                case "SHA256": return okData(HKDF<SHA256>.deriveKey(inputKeyMaterial: ikm, salt: salt, info: info, outputByteCount: count).withUnsafeBytes { Data($0) })
-                case "SHA384": return okData(HKDF<SHA384>.deriveKey(inputKeyMaterial: ikm, salt: salt, info: info, outputByteCount: count).withUnsafeBytes { Data($0) })
-                case "SHA512": return okData(HKDF<SHA512>.deriveKey(inputKeyMaterial: ikm, salt: salt, info: info, outputByteCount: count).withUnsafeBytes { Data($0) })
+                case "SHA256": return raw(HKDF<SHA256>.deriveKey(inputKeyMaterial: ikm, salt: salt, info: info, outputByteCount: n))
+                case "SHA384": return raw(HKDF<SHA384>.deriveKey(inputKeyMaterial: ikm, salt: salt, info: info, outputByteCount: n))
+                case "SHA512": return raw(HKDF<SHA512>.deriveKey(inputKeyMaterial: ikm, salt: salt, info: info, outputByteCount: n))
                 default: return fail("unsupported HKDF hash")
                 }
             case "generateAesKey":
