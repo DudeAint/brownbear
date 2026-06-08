@@ -211,6 +211,23 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
         }
     }
 
+    /// Dispatch a synthetic `webRequest.onBeforeRequest` for a main-frame `.user.js` URL into this worker,
+    /// so a webRequest-based userscript manager (Violentmonkey) runs its OWN install/confirm flow (fetch +
+    /// cache + open its confirm page). Returns whether a matching onBeforeRequest listener was invoked —
+    /// the webRequest analog of the declarativeNetRequest hand-off used for MV3 managers.
+    func dispatchUserScriptWebRequest(url: String) async -> Bool {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            queue.async { [self] in
+                guard isAlive, let context else { continuation.resume(returning: false); return }
+                context.setObject(url, forKeyedSubscript: "__bbPendingUserScriptURL" as NSString)
+                let result = context.evaluateScript(
+                    "(typeof __bbDispatchWebRequestUserScript === 'function')"
+                    + " ? !!__bbDispatchWebRequestUserScript(__bbPendingUserScriptURL, -1) : false")
+                continuation.resume(returning: result?.toBool() ?? false)
+            }
+        }
+    }
+
     /// Fire chrome.storage.onChanged for a change set originating anywhere.
     func dispatchStorageChanged(area: String, changes: [String: [String: String]]) {
         let changesJSON = jsonString(changes)

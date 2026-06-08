@@ -113,7 +113,10 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
         Task { @MainActor in
             if let redirect = await self.userScriptInstallRedirect(for: url),
                let path = Self.extensionPageRelativePath(from: redirect.target) {
+                // An MV3 declarativeNetRequest manager (ScriptCat) → open its computed install page.
                 self.openExtensionPageTab(ext: redirect.ext, kind: .options, path: path, activate: true)
+            } else if await BrownBearServices.shared.webExtensionRuntime.handleUserScriptNavigation(url: url) {
+                // An MV2 webRequest manager (Violentmonkey) took it and opens its own confirm page.
             } else {
                 self.presentScriptInstall(for: url)
             }

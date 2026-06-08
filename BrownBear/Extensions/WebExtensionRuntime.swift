@@ -146,6 +146,19 @@ class WebExtensionRuntime {
         contexts[extensionID]?.fireActionClicked(tab: tab)
     }
 
+    /// Offer a main-frame `.user.js` navigation to a webRequest-based userscript manager (Violentmonkey):
+    /// dispatch a synthetic `webRequest.onBeforeRequest` into each running worker; the first whose
+    /// onBeforeRequest filter matches runs its own confirm flow and opens its confirm page. Returns
+    /// whether any worker took it (so the browser can skip its native install card). The navigation
+    /// delegate calls this only AFTER the declarativeNetRequest hand-off declines.
+    func handleUserScriptNavigation(url: URL) async -> Bool {
+        let urlString = url.absoluteString
+        for context in contexts.values {
+            if await context.dispatchUserScriptWebRequest(url: urlString) { return true }
+        }
+        return false
+    }
+
     /// Deliver chrome.contextMenus.onClicked to an extension's background worker. No-op if the
     /// extension has no running background context. `info` is the OnClickData object; `tab` is a
     /// chrome.tabs Tab record (or nil). Chrome fires this event only in the background/event page.
