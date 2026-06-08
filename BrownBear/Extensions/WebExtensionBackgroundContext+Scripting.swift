@@ -62,4 +62,92 @@ extension WebExtensionBackgroundContext {
             return NSNull()
         }
     }
+
+    // MARK: - chrome.scripting.registerContentScripts (MV3 dynamic content scripts)
+
+    /// The chrome.scripting methods that register/inspect dynamic content scripts (vs the tab-targeted
+    /// executeScript/insertCSS), so the native dispatch can route them to the store rather than a tab.
+    static let registeredContentScriptMethods: Set<String> = [
+        "registerContentScripts", "updateContentScripts", "getRegisteredContentScripts", "unregisterContentScripts"
+    ]
+
+    /// Register/update/list/unregister dynamic content scripts. Backed by the shared user-script store,
+    /// which the content router already injects into matching pages, so registered scripts run exactly
+    /// like manifest content scripts. Gated on the "scripting" permission; fails closed otherwise.
+    @MainActor
+    static func dispatchRegisteredContentScripts(extensionID: String, method: String,
+                                                 args: [String: Any]) async -> Any {
+        let services = BrownBearServices.shared
+        guard let manifest = await services.webExtensionStore.ext(for: extensionID)?.manifest,
+              manifest.permissions.contains("scripting") else {
+            return ["error": "the \"scripting\" permission is not granted"]
+        }
+        let usStore = services.webExtensionUserScriptStore
+        let ids = (args["filter"] as? [String: Any])?["ids"] as? [String]
+        do {
+            switch method {
+            case "registerContentScripts":
+                try await usStore.register(extensionID: extensionID,
+                                           scripts: try await resolveRegisteredContentScripts(extensionID: extensionID, args: args))
+                return NSNull()
+            case "updateContentScripts":
+                try await usStore.update(extensionID: extensionID,
+                                         scripts: try await resolveRegisteredContentScripts(extensionID: extensionID, args: args))
+                return NSNull()
+            case "getRegisteredContentScripts":
+                return (await usStore.getScripts(extensionID: extensionID, ids: ids)).map(registeredContentScriptDict)
+            case "unregisterContentScripts":
+                await usStore.unregister(extensionID: extensionID, ids: ids)
+                return NSNull()
+            default:
+                return NSNull()
+            }
+        } catch let error as BrownBearError {
+            return ["error": error.errorDescription ?? "scripting.registerContentScripts error"]
+        } catch {
+            return ["error": error.localizedDescription]
+        }
+    }
+
+    /// The chrome RegisteredContentScript shape for `getRegisteredContentScripts` (we don't echo the
+    /// resolved js source back — Chrome returns the file list, which we don't retain; ids + match
+    /// metadata is what callers reconcile against).
+    private static func registeredContentScriptDict(_ s: WebExtensionUserScriptStore.RegisteredScript) -> [String: Any] {
+        ["id": s.id, "matches": s.matches, "excludeMatches": s.excludeMatches,
+         "runAt": s.runAt, "allFrames": s.allFrames, "world": s.world, "persistAcrossSessions": true]
+    }
+
+    /// Resolve chrome.scripting.registerContentScripts entries (whose `js`/`css` are arrays of packaged
+    /// FILE PATHS) into the store's RegisteredScript model, concatenating the js sources. Default world
+    /// is ISOLATED (the extension content-script world), unlike userScripts' USER_SCRIPT default.
+    @MainActor
+    private static func resolveRegisteredContentScripts(
+        extensionID: String, args: [String: Any]) async throws -> [WebExtensionUserScriptStore.RegisteredScript] {
+        let store = BrownBearServices.shared.webExtensionStore
+        var out: [WebExtensionUserScriptStore.RegisteredScript] = []
+        for entry in (args["scripts"] as? [[String: Any]]) ?? [] {
+            guard let id = entry["id"] as? String, !id.isEmpty else {
+                throw BrownBearError.bridgeRejected("scripting.registerContentScripts: every script needs an id")
+            }
+            let matches = (entry["matches"] as? [String]) ?? []
+            guard !matches.isEmpty else {
+                throw BrownBearError.bridgeRejected("scripting.registerContentScripts: script '\(id)' has no matches")
+            }
+            var source = ""
+            for path in (entry["js"] as? [String]) ?? [] {
+                if let text = await store.text(extensionID: extensionID, path: path) { source += text + "\n;\n" }
+            }
+            guard !source.isEmpty else {
+                throw BrownBearError.bridgeRejected("scripting.registerContentScripts: script '\(id)' has no usable js")
+            }
+            out.append(.init(id: id, matches: matches,
+                             excludeMatches: (entry["excludeMatches"] as? [String]) ?? [],
+                             includeGlobs: (entry["includeGlobs"] as? [String]) ?? [],
+                             excludeGlobs: (entry["excludeGlobs"] as? [String]) ?? [],
+                             js: source, runAt: (entry["runAt"] as? String) ?? "document_idle",
+                             allFrames: (entry["allFrames"] as? Bool) ?? false,
+                             world: (entry["world"] as? String) ?? "ISOLATED"))
+        }
+        return out
+    }
 }

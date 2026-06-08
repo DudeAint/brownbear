@@ -252,7 +252,12 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 let result: Any
-                if let host = self.host {
+                if WebExtensionBackgroundContext.registeredContentScriptMethods.contains(method) {
+                    // MV3 dynamic content-script registration — a store op (no tab target), routed to
+                    // the shared user-script store so the scripts inject like manifest content scripts.
+                    result = await WebExtensionBackgroundContext.dispatchRegisteredContentScripts(
+                        extensionID: extID, method: method, args: args)
+                } else if let host = self.host {
                     result = await WebExtensionBackgroundContext.dispatchScripting(
                         host: host, method: method, args: args, extensionID: extID)
                 } else {

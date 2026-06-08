@@ -169,6 +169,26 @@ final class WebExtensionServiceWorkerGlobalsTests: XCTestCase {
         XCTAssertEqual(r["status"] as? Int, 404, "missing packaged file → 404 response")
     }
 
+    func testRegisterContentScriptsExistsAndGatesOnPermission() async throws {
+        // The default manifest has no "scripting" permission, so register must reject (fail closed) —
+        // proving both that the method exists (ScriptCat's "is not a function" is gone) and the gate works.
+        let context = try makeContext(background: """
+        chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+          if (!msg || msg.check !== 'regcs') { return; }
+          var isFn = typeof chrome.scripting.registerContentScripts === 'function';
+          chrome.scripting.registerContentScripts([{ id: 's1', matches: ['*://*/*'], js: ['cs.js'] }]).then(
+            function () { sendResponse({ isFn: isFn, rejected: false }); },
+            function (e) { sendResponse({ isFn: isFn, rejected: true }); });
+          return true;
+        });
+        """)
+        defer { context.shutdown() }
+        let response = await context.deliverRuntimeMessage(message: ["check": "regcs"], sender: [:])
+        let r = try XCTUnwrap(response?["value"] as? [String: Any])
+        XCTAssertEqual(r["isFn"] as? Bool, true)
+        XCTAssertEqual(r["rejected"] as? Bool, true, "register without the scripting permission must reject")
+    }
+
     func testUserScriptsResetWorldConfigurationExists() async throws {
         let context = try makeContext(background: """
         chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
