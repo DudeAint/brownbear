@@ -77,7 +77,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
     /// `nonisolated fileSync`), safe to call on this context's serial queue.
     func boot(runtimeJS: String, backgroundSource: String,
               manifestJSON: String, baseURL: String, messages: [String: String],
-              firstInstall: Bool = true,
+              installReason: String? = nil, previousVersion: String? = nil,
               moduleEntry: String? = nil, esmRuntimeJS: String? = nil,
               moduleSource: (@Sendable (String) -> Data?)? = nil) {
         queue.async { [self] in
@@ -143,10 +143,14 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
                 }
             }
 
-            // onInstalled fires ONLY on the first-ever boot of this extension (Chrome contract);
-            // onStartup fires on every boot. Firing 'install' on each launch/reload would re-run
-            // first-run setup (opening tabs, seeding storage) every time.
-            if firstInstall { fire(method: "fireInstalled", arguments: ["install"]) }
+            // onInstalled fires with reason 'install' on the first-ever boot and 'update' (carrying the
+            // previousVersion) when this id boots at a new version — the Chrome contract; `installReason`
+            // is nil on a same-version reboot so first-run setup doesn't re-run. onStartup fires always.
+            if let installReason {
+                var args: [Any] = [installReason]
+                if let previousVersion { args.append(previousVersion) }
+                fire(method: "fireInstalled", arguments: args)
+            }
             fire(method: "fireStartup", arguments: [])
         }
     }

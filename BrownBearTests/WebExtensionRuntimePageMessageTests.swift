@@ -92,4 +92,52 @@ final class WebExtensionRuntimePageMessageTests: XCTestCase {
         // Exactly one of the two answers; the non-nil one must win (a nil-answering page is skipped over).
         XCTAssertEqual(response?["value"] as? String, "first")
     }
+
+    // MARK: - onInstalled reason state machine (consumeInstallReason)
+
+    /// The version-comparison state machine that drives chrome.runtime.onInstalled: first boot = install,
+    /// a later boot at a new version = update (with previousVersion), same version again = no event.
+    func testConsumeInstallReasonTransitions() {
+        let id = "install-reason-\(UUID().uuidString)"   // unique id → clean UserDefaults slot
+
+        let first = WebExtensionRuntime.consumeInstallReason(id, currentVersion: "1.0")
+        XCTAssertEqual(first.reason, "install")
+        XCTAssertNil(first.previousVersion)
+
+        // Same version again on a later boot — no onInstalled (so first-run setup doesn't re-run).
+        let reboot = WebExtensionRuntime.consumeInstallReason(id, currentVersion: "1.0")
+        XCTAssertNil(reboot.reason)
+        XCTAssertNil(reboot.previousVersion)
+
+        // Bumped version — update, carrying the version it replaced.
+        let updated = WebExtensionRuntime.consumeInstallReason(id, currentVersion: "2.0")
+        XCTAssertEqual(updated.reason, "update")
+        XCTAssertEqual(updated.previousVersion, "1.0")
+
+        // Stable again at the new version — no further event.
+        let settled = WebExtensionRuntime.consumeInstallReason(id, currentVersion: "2.0")
+        XCTAssertNil(settled.reason)
+
+        // Clean up the test's UserDefaults keys so it leaves no residue.
+        UserDefaults.standard.removeObject(forKey: "brownbear.webext.installedVersion.\(id)")
+        UserDefaults.standard.removeObject(forKey: "brownbear.webext.installedFired.\(id)")
+    }
+
+    /// An extension already installed under the pre-version scheme (legacy `installedFired` flag set,
+    /// no stored version) must NOT spuriously re-fire `install` on its first post-upgrade boot.
+    func testConsumeInstallReasonHonorsLegacyInstalledFlag() {
+        let id = "legacy-\(UUID().uuidString)"
+        UserDefaults.standard.set(true, forKey: "brownbear.webext.installedFired.\(id)")
+
+        let result = WebExtensionRuntime.consumeInstallReason(id, currentVersion: "3.0")
+        XCTAssertNil(result.reason, "a pre-versioning install must not re-fire onInstalled")
+
+        // And now that the version is recorded, a real bump still produces an update.
+        let bumped = WebExtensionRuntime.consumeInstallReason(id, currentVersion: "3.1")
+        XCTAssertEqual(bumped.reason, "update")
+        XCTAssertEqual(bumped.previousVersion, "3.0")
+
+        UserDefaults.standard.removeObject(forKey: "brownbear.webext.installedVersion.\(id)")
+        UserDefaults.standard.removeObject(forKey: "brownbear.webext.installedFired.\(id)")
+    }
 }
