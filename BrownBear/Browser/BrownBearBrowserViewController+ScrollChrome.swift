@@ -94,8 +94,10 @@ extension BrownBearBrowserViewController: UIScrollViewDelegate {
             }
         case .bottom:
             guard let bottomConstraint = bottomChromeBottomConstraint else { return }
-            // Slide the omnibox + toolbar fully below the screen (bar + toolbar + home-indicator inset).
-            bottomConstraint.constant = hidden ? chromeHideDistance : 0
+            // While editing, the bar is lifted above the keyboard — never fight that (a stray
+            // showChrome / new-page load mid-edit must not drop the omnibox behind the keyboard).
+            // Otherwise slide the omnibox + toolbar fully below the screen (bar + toolbar + inset).
+            bottomConstraint.constant = keyboardVisible ? -keyboardLiftOverlap : (hidden ? chromeHideDistance : 0)
             animateChrome(animated) { self.view.layoutIfNeeded() }
         }
     }
