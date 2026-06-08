@@ -537,6 +537,60 @@
     }
     if (typeof globalThis.skipWaiting !== 'function') { globalThis.skipWaiting = function () { return Promise.resolve(); }; }
 
+    // Event / EventTarget / CustomEvent / ExtendableEvent — JavaScriptCore's headless global has NO DOM
+    // event constructors, but extensions construct them in their handlers (e.g. `new Event('x')`,
+    // `new CustomEvent('y', { detail })`). Best AdBlocker's tabs.onUpdated listener threw
+    // "Can't find variable: Event". Provide spec-shaped minimal versions so those don't crash.
+    if (typeof globalThis.Event !== 'function') {
+      var BBEvent = function (type, init) {
+        init = init || {};
+        this.type = String(type == null ? '' : type);
+        this.bubbles = !!init.bubbles; this.cancelable = !!init.cancelable; this.composed = !!init.composed;
+        this.defaultPrevented = false; this.target = null; this.currentTarget = null; this.eventPhase = 0;
+        this.timeStamp = (globalThis.performance && performance.now) ? performance.now() : Date.now();
+        this.isTrusted = false; this._stop = false;
+      };
+      BBEvent.prototype.preventDefault = function () { if (this.cancelable) { this.defaultPrevented = true; } };
+      BBEvent.prototype.stopPropagation = function () { this._stop = true; };
+      BBEvent.prototype.stopImmediatePropagation = function () { this._stop = true; };
+      BBEvent.NONE = 0; BBEvent.CAPTURING_PHASE = 1; BBEvent.AT_TARGET = 2; BBEvent.BUBBLING_PHASE = 3;
+      globalThis.Event = BBEvent;
+    }
+    if (typeof globalThis.CustomEvent !== 'function') {
+      var BBCustomEvent = function (type, init) {
+        init = init || {}; globalThis.Event.call(this, type, init);
+        this.detail = init.detail !== undefined ? init.detail : null;
+      };
+      BBCustomEvent.prototype = Object.create(globalThis.Event.prototype);
+      BBCustomEvent.prototype.constructor = BBCustomEvent;
+      globalThis.CustomEvent = BBCustomEvent;
+    }
+    if (typeof globalThis.ExtendableEvent !== 'function') {
+      var BBExtendableEvent = function (type, init) { globalThis.Event.call(this, type, init); this._promises = []; };
+      BBExtendableEvent.prototype = Object.create(globalThis.Event.prototype);
+      BBExtendableEvent.prototype.constructor = BBExtendableEvent;
+      BBExtendableEvent.prototype.waitUntil = function (p) { this._promises.push(Promise.resolve(p)); };
+      globalThis.ExtendableEvent = BBExtendableEvent;
+    }
+    if (typeof globalThis.EventTarget !== 'function') {
+      var BBEventTarget = function () { this.__lst = {}; };
+      BBEventTarget.prototype.addEventListener = function (type, listener) {
+        if (typeof listener !== 'function') { return; }
+        (this.__lst[type] = this.__lst[type] || []).push(listener);
+      };
+      BBEventTarget.prototype.removeEventListener = function (type, listener) {
+        var arr = this.__lst[type]; if (!arr) { return; }
+        var i = arr.indexOf(listener); if (i >= 0) { arr.splice(i, 1); }
+      };
+      BBEventTarget.prototype.dispatchEvent = function (event) {
+        var arr = this.__lst[event && event.type]; if (!arr) { return true; }
+        if (event) { event.target = this; event.currentTarget = this; }
+        arr.slice().forEach(function (l) { if (event && event._stop) { return; } try { l(event); } catch (e) {} });
+        return !(event && event.defaultPrevented);
+      };
+      globalThis.EventTarget = BBEventTarget;
+    }
+
     // Minimal Clients / ServiceWorkerRegistration so the universal `self.clients.claim()` /
     // `self.registration` in SW activate handlers don't throw. There is one headless context per
     // extension and no controllable window clients on iOS, so matchAll resolves empty.

@@ -64,6 +64,19 @@ final class WebExtensionServiceWorkerGlobalsTests: XCTestCase {
             hasAddEventListener: typeof self.addEventListener === 'function',
             hasClientsClaim: typeof clients === 'object' && typeof clients.claim === 'function',
             hasRegistration: typeof registration === 'object',
+            hasEvent: typeof Event === 'function',
+            hasCustomEvent: typeof CustomEvent === 'function',
+            hasEventTarget: typeof EventTarget === 'function',
+            eventType: new Event('foo').type,
+            customDetail: new CustomEvent('bar', { detail: 42 }).detail,
+            customIsEvent: (new CustomEvent('x')) instanceof Event,
+            perfNowIsNumber: typeof performance.now() === 'number',
+            eventTargetRoundTrip: (function () {
+              var t = new EventTarget(); var got = '';
+              t.addEventListener('e', function (ev) { got = ev.type; });
+              t.dispatchEvent(new Event('e'));
+              return got;
+            })(),
             structuredCloneOk: (function () {
               if (typeof structuredClone !== 'function') { return false; }
               var src = { n: 1, d: new Date(5), a: [1, { x: 2 }], m: new Map([['k', 3]]) };
@@ -92,6 +105,14 @@ final class WebExtensionServiceWorkerGlobalsTests: XCTestCase {
         XCTAssertEqual(r["hasAddEventListener"] as? Bool, true)
         XCTAssertEqual(r["hasClientsClaim"] as? Bool, true)
         XCTAssertEqual(r["hasRegistration"] as? Bool, true)
+        XCTAssertEqual(r["hasEvent"] as? Bool, true, "extensions construct `new Event(...)` (Best AdBlocker's tabs.onUpdated)")
+        XCTAssertEqual(r["hasCustomEvent"] as? Bool, true)
+        XCTAssertEqual(r["hasEventTarget"] as? Bool, true)
+        XCTAssertEqual(r["eventType"] as? String, "foo")
+        XCTAssertEqual(r["customDetail"] as? Int, 42)
+        XCTAssertEqual(r["customIsEvent"] as? Bool, true, "CustomEvent must inherit from Event")
+        XCTAssertEqual(r["perfNowIsNumber"] as? Bool, true)
+        XCTAssertEqual(r["eventTargetRoundTrip"] as? String, "e", "EventTarget add/dispatch must round-trip")
         XCTAssertEqual(r["structuredCloneOk"] as? Bool, true)
     }
 
