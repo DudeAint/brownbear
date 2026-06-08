@@ -159,6 +159,15 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
         let extensionID = try await resolve(token)
         let area = WebExtensionStorage.Area(rawValue: (payload["area"] as? String) ?? "local") ?? .local
 
+        // A popup/options page forwarding its own console / uncaught errors. No grant needed — it only
+        // writes a log line scoped to this extension, so its blank-page failures are diagnosable.
+        if api == "runtime.pageLog" {
+            await runtime.logFromPage(extensionID: extensionID,
+                                      level: (payload["level"] as? String) ?? "info",
+                                      message: (payload["message"] as? String) ?? "")
+            return NSNull()
+        }
+
         switch api {
         case "storage.get":
             let keys = payload["keys"] as? [String]   // nil = all

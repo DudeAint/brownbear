@@ -28,6 +28,44 @@
     catch (e) { return _Promise.reject(e); }
   }
 
+  // Forward the page's own console + uncaught errors to the native extension log. Popup/options
+  // failures are otherwise invisible (a blank page with no surfaced reason); this makes them show up
+  // in the dashboard's per-extension log. Installed at document-start so it captures the page's own
+  // module scripts throwing during init.
+  (function () {
+    function fmt(args) {
+      var parts = [];
+      for (var i = 0; i < args.length; i++) {
+        var a = args[i];
+        if (a instanceof Error) { parts.push(a.message + (a.stack ? "\n" + a.stack : "")); }
+        else if (a === null || a === undefined || typeof a !== "object") { parts.push(String(a)); }
+        else { try { parts.push(_JSON.stringify(a)); } catch (e) { parts.push(String(a)); } }
+      }
+      var s = parts.join(" ");
+      return s.length > 4000 ? s.slice(0, 4000) + "…" : s;
+    }
+    function emit(level, args) { try { bridge("runtime.pageLog", { level: level, message: fmt(args) }).catch(function () {}); } catch (e) {} }
+    var c = W.console || (W.console = {});
+    var map = { log: "info", info: "info", debug: "debug", warn: "warn", error: "error" };
+    _Object.keys(map).forEach(function (name) {
+      var orig = c[name];
+      c[name] = function () {
+        emit(map[name], arguments);
+        if (typeof orig === "function") { try { orig.apply(c, arguments); } catch (e) {} }
+      };
+    });
+    W.addEventListener("error", function (e) {
+      var msg = (e && e.message) ? e.message : "script error";
+      if (e && e.filename) { msg += " (" + e.filename + ":" + (e.lineno || 0) + ")"; }
+      if (e && e.error && e.error.stack) { msg += "\n" + e.error.stack; }
+      emit("error", [msg]);
+    });
+    W.addEventListener("unhandledrejection", function (e) {
+      var r = e && e.reason;
+      emit("error", ["Unhandled promise rejection: " + ((r && r.message) ? r.message : String(r))]);
+    });
+  })();
+
   var manifest = {};
   try { manifest = _JSON.parse(data.manifestJSON || "{}"); } catch (e) { manifest = {}; }
   var messages = data.messages || {};
