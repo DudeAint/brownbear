@@ -34,6 +34,21 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
     }
 
     func webExtCreateTab(url: String?, active: Bool) -> [String: Any] {
+        // A chrome-extension://<id>/<path> URL needs the per-extension scheme handler + chrome.* page
+        // bridge a normal tab lacks (else it loads blank). Route it to the real extension-page tab. The
+        // target extension is the URL's host; resolving it is async (the store is an actor), so we kick
+        // it off and return a provisional record (chrome.tabs.create's result; callers rarely need the id).
+        if let url, let parsed = URL(string: url),
+           parsed.scheme == WebExtensionSchemeHandler.scheme,
+           let extID = parsed.host, ChromeWebStore.isExtensionID(extID) {
+            var path = parsed.path
+            while path.hasPrefix("/") { path.removeFirst() }
+            Task { @MainActor in
+                guard let ext = await BrownBearServices.shared.webExtensionStore.ext(for: extID) else { return }
+                openExtensionPageTab(ext: ext, kind: .options, path: path.isEmpty ? nil : path, activate: active)
+            }
+            return ["id": -1, "url": url, "active": active, "windowId": Self.webExtWindowID, "index": tabManager.count]
+        }
         let target = url.flatMap(Self.navigableURL)
         let tab = tabManager.createTab(loading: target, activate: active)
         tab.delegate = self
