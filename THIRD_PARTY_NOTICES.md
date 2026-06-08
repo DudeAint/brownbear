@@ -35,6 +35,42 @@ limitations under the License.
 
 ---
 
+## acorn
+
+- **Version:** 8.11.3
+- **Author:** Marijn Haverbeke `<marijnh@gmail.com>` and contributors
+- **Source:** https://github.com/acornjs/acorn
+- **License:** MIT
+- **Used in:** `BrownBear/Resources/JS/brownbear-acorn.js` — the JavaScript parser used by
+  `brownbear-esm-linker.js` to AST-rewrite MV3 `"type":"module"` service workers into code the
+  headless JavaScriptCore context can run (JSC ships no ES-module loader on iOS).
+
+```
+MIT License
+
+Copyright (C) 2012-2022 by various contributors (see AUTHORS)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+```
+
+---
+
 ## Runestone
 
 - **License:** MIT — referenced/depended-on per `CLAUDE.md` for the code editor engine.
