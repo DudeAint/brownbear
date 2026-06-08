@@ -34,7 +34,9 @@ jobs:
       - name: Install SwiftLint (official Linux binary)
         run: |
           set -euo pipefail
-          curl -fsSL -o swiftlint.zip \
+          # --retry rides out the intermittent 50x the GitHub release CDN returns for this asset, which
+          # was failing the lint job on otherwise-green PRs.
+          curl -fsSL --retry 6 --retry-delay 5 --retry-all-errors -o swiftlint.zip \
             "https://github.com/realm/SwiftLint/releases/download/${SWIFTLINT_VERSION}/swiftlint_linux_amd64.zip"
           unzip -q -o swiftlint.zip -d "${RUNNER_TEMP}/swiftlint"
           chmod +x "${RUNNER_TEMP}/swiftlint/swiftlint"
