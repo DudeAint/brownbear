@@ -1728,8 +1728,72 @@
   // WebKit can't intercept network requests, so these listeners never fire — but the event objects must
   // EXIST so extensions that register handlers (ScriptCat, ad blockers) don't throw "undefined is not an
   // object" on access. Blocking/redirect is handled via declarativeNetRequest where expressible.
+  //
+  // EXCEPTION — userscript install: a Manifest V2 manager (Violentmonkey) claims `.user.js` navigations
+  // with a blocking onBeforeRequest listener filtered to `*://*/*.user.js`. We record that listener WITH
+  // its url/type filter so the native navigation delegate can dispatch a synthetic onBeforeRequest for a
+  // `.user.js` URL into the worker (`__bbDispatchWebRequestUserScript`), letting the manager's own confirm
+  // flow run — the webRequest analog of the declarativeNetRequest hand-off used for MV3 managers.
+  var __bbWebRequestOnBeforeRequest = [];   // [{ fn, urls:[pattern], types:[type]|null }]
+  function makeWebRequestEvent(store) {
+    return {
+      addListener: function (fn, filter, _extraInfoSpec) {
+        if (typeof fn !== 'function') { return; }
+        store.push({ fn: fn, urls: (filter && filter.urls) || [], types: (filter && filter.types) || null });
+      },
+      removeListener: function (fn) { for (var i = store.length - 1; i >= 0; i--) { if (store[i].fn === fn) { store.splice(i, 1); } } },
+      hasListener: function (fn) { for (var i = 0; i < store.length; i++) { if (store[i].fn === fn) { return true; } } return false; },
+      hasListeners: function () { return store.length > 0; }
+    };
+  }
+  // Match-pattern (<scheme>://<host><path>) → RegExp, for the webRequest url filter. Cached per pattern.
+  var __bbMatchPatternCache = {};
+  function __bbCompileMatchPattern(pattern) {
+    function esc(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+    if (pattern === '<all_urls>') { return /^(?:https?|file|ftp|ws|wss):\/\//i; }
+    var m = /^(\*|[a-zA-Z][a-zA-Z0-9+.-]*):\/\/([^/]*)(\/.*)$/.exec(pattern);
+    if (!m) { return null; }
+    var scheme = m[1].toLowerCase(), host = m[2], path = m[3];
+    var schemeRe = scheme === '*' ? '(?:https?)' : esc(scheme);
+    var hostRe;
+    if (host === '*') { hostRe = '[^/]+'; }
+    else if (host.indexOf('*.') === 0) { hostRe = '(?:[^/]+\\.)?' + esc(host.slice(2)); }
+    else if (host === '') { hostRe = ''; }
+    else { hostRe = esc(host); }
+    var pathRe = path.split('*').map(esc).join('.*');
+    try { return new RegExp('^' + schemeRe + '://' + hostRe + pathRe + '$', 'i'); } catch (e) { return null; }
+  }
+  function __bbMatchPattern(pattern, url) {
+    if (!(pattern in __bbMatchPatternCache)) { __bbMatchPatternCache[pattern] = __bbCompileMatchPattern(pattern); }
+    var re = __bbMatchPatternCache[pattern];
+    return re ? re.test(url) : false;
+  }
+  var __bbWebRequestSeq = 0;
+  // Called from native when a main-frame `.user.js` navigation should be offered to a webRequest-based
+  // manager. Invokes every onBeforeRequest listener whose filter matches; returns true if any ran (so the
+  // browser knows a manager took it and need not show the native install card).
+  globalThis.__bbDispatchWebRequestUserScript = function (url, tabId) {
+    if (typeof url !== 'string' || !url || !__bbWebRequestOnBeforeRequest.length) { return false; }
+    var details = {
+      requestId: String(++__bbWebRequestSeq), url: url, method: 'GET',
+      frameId: 0, parentFrameId: -1, tabId: (typeof tabId === 'number' ? tabId : -1),
+      type: 'main_frame', timeStamp: Date.now()
+    };
+    var handled = false;
+    for (var i = 0; i < __bbWebRequestOnBeforeRequest.length; i++) {
+      var entry = __bbWebRequestOnBeforeRequest[i];
+      if (entry.types && entry.types.indexOf('main_frame') < 0) { continue; }
+      var matches = !entry.urls || entry.urls.length === 0;
+      for (var j = 0; !matches && j < entry.urls.length; j++) { if (__bbMatchPattern(entry.urls[j], url)) { matches = true; } }
+      if (!matches) { continue; }
+      try { entry.fn(details); handled = true; }
+      catch (e) { __bb_log('error', 'webRequest.onBeforeRequest dispatch threw: ' + (e && e.message ? e.message : e)); }
+    }
+    return handled;
+  };
+
   var webRequest = {
-    onBeforeRequest: makeEvent([]), onBeforeSendHeaders: makeEvent([]), onSendHeaders: makeEvent([]),
+    onBeforeRequest: makeWebRequestEvent(__bbWebRequestOnBeforeRequest), onBeforeSendHeaders: makeEvent([]), onSendHeaders: makeEvent([]),
     onHeadersReceived: makeEvent([]), onBeforeRedirect: makeEvent([]), onAuthRequired: makeEvent([]),
     onResponseStarted: makeEvent([]), onCompleted: makeEvent([]), onErrorOccurred: makeEvent([]),
     onActionIgnored: makeEvent([]),
