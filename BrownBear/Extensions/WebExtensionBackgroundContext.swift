@@ -123,11 +123,24 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
                 runModuleWorker(in: context, esmRuntimeJS: esmRuntimeJS,
                                 entryPath: moduleEntry, moduleSource: moduleSource)
             } else {
-                // Wrap in a function so a worker/background script using a top-level `return` (some
-                // ScriptCat-derived bundles do) is valid — a bare top-level `return` is a SyntaxError.
-                // Body starts on line 1 of the wrapper so error line numbers still line up.
-                let wrappedSource = "(function(){" + backgroundSource + "\n})();"
-                context.evaluateScript(wrappedSource, withSourceURL: URL(string: "brownbear://webext/\(extensionID)/background.js"))
+                // Evaluate the classic SW at GLOBAL scope, exactly like Chrome: top-level `var` /
+                // `function` declarations must become GLOBALS so they're visible across importScripts()
+                // chunks and to later code that references them as globals. Wrapping the source in an
+                // IIFE made those declarations closure-local, which broke real bundles whose chunks
+                // share top-level symbols (Violentmonkey's `M`, Best AdBlocker's `fn`). Only if the
+                // source is a non-Chrome bundle with a bare top-level `return` (a SyntaxError at global
+                // scope) do we retry inside a function wrapper.
+                let bgURL = URL(string: "brownbear://webext/\(extensionID)/background.js")
+                context.evaluateScript(backgroundSource, withSourceURL: bgURL)
+                if let exception = context.exception {
+                    context.exception = nil   // clear so it can't bleed into the onInstalled/onStartup fires
+                    // A bare top-level `return` is a SyntaxError at global scope (some non-Chrome bundles
+                    // do this). Only then retry inside a function wrapper; a genuine runtime error was
+                    // already logged by the exceptionHandler and must NOT be re-run.
+                    if (exception.toString() ?? "").localizedCaseInsensitiveContains("return statement") {
+                        context.evaluateScript("(function(){" + backgroundSource + "\n})();", withSourceURL: bgURL)
+                    }
+                }
             }
 
             // onInstalled fires ONLY on the first-ever boot of this extension (Chrome contract);
@@ -271,82 +284,10 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
         context.setObject(scripting, forKeyedSubscript: "__bb_scripting" as NSString)
     }
 
-    /// The runtime/tabs MESSAGING natives: the worker sending a runtime message, answering a content
-    /// script's pushed message (resolving a parked continuation), and chrome.tabs.sendMessage out to a
-    /// tab's content scripts. Grouped so installNatives stays readable as the surface grows.
-    private func installMessagingNatives(into context: JSContext) {
-        // background runtime.sendMessage → other extension contexts. Content scripts receive via
-        // tabs.sendMessage, not this. Delivery from a CONTENT SCRIPT or PAGE to an open popup/options
-        // page is wired through WebExtensionRuntime.sendRuntimeMessage; the worker-as-SENDER path
-        // (background → page) is not yet routed here, so resolve with no value for now.
-        let sendMessage: @convention(block) (String, JSValue) -> Void = { [weak self] _, callback in
-            self?.callBack(callback, with: "null")
-        }
-        context.setObject(sendMessage, forKeyedSubscript: "__bb_send_message" as NSString)
-
-        // A content/popup message the worker is answering: resolve the parked continuation by id.
-        let messageResponse: @convention(block) (String, JSValue?) -> Void = { [weak self] responseId, payload in
-            guard let self else { return }
-            // Already on `queue` (JS called us). Normalize payload to a Swift dict or nil.
-            var dict: [String: Any]?
-            if let payload, !payload.isUndefined, !payload.isNull,
-               let string = payload.toString(),
-               let data = string.data(using: .utf8),
-               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                dict = object
-            }
-            self.resolveResponse(responseId, payload: dict)
-        }
-        context.setObject(messageResponse, forKeyedSubscript: "__bb_message_response" as NSString)
-
-        // chrome.tabs.sendMessage from the background worker → a tab's content scripts. Hops to the
-        // main actor, delivers through the bridge host (which routes to the content router that owns the
-        // tab's sessions), and calls back with the first content listener's response wrapped as {value}.
-        let tabsSendMessage: @convention(block) (String, JSValue) -> Void = { [weak self] argsJSON, callback in
-            guard let self else { return }
-            let args = ((try? JSONSerialization.jsonObject(with: Data(argsJSON.utf8))) as? [String: Any]) ?? [:]
-            let extID = self.extensionID
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                let response: Any? = await self.host?.webExtSendMessageToTab(
-                    extensionID: extID,
-                    extTabId: args["tabId"] as? Int,
-                    message: args["message"] ?? NSNull(),
-                    frameId: args["frameId"] as? Int)
-                self.callBack(callback, with: self.jsonString(["value": response ?? NSNull()]))
-            }
-        }
-        context.setObject(tabsSendMessage, forKeyedSubscript: "__bb_tabs_send_message" as NSString)
-    }
-
-    // dispatchScripting (chrome.scripting / MV2 tabs.executeScript, permission+host gated) lives in
-    // WebExtensionBackgroundContext+Scripting.swift (file-length limit).
-
-    /// Map a chrome.tabs method + args to the bridge host, returning a JSON-serializable value.
-    @MainActor
-    private static func dispatchTab(host: WebExtensionBridgeHost, method: String, args: [String: Any]) -> Any {
-        switch method {
-        case "query":
-            return host.webExtQueryTabs(args["query"] as? [String: Any] ?? [:])
-        case "get":
-            return host.webExtTab(extTabId: args["tabId"] as? Int) ?? NSNull()
-        case "create":
-            return host.webExtCreateTab(url: args["url"] as? String, active: (args["active"] as? Bool) ?? true)
-        case "update":
-            return host.webExtUpdateTab(extTabId: args["tabId"] as? Int,
-                                        url: args["url"] as? String,
-                                        active: args["active"] as? Bool) ?? NSNull()
-        case "remove":
-            let ids = (args["tabIds"] as? [Int]) ?? (args["tabId"] as? Int).map { [$0] } ?? []
-            host.webExtRemoveTabs(extTabIds: ids)
-            return NSNull()
-        case "reload":
-            host.webExtReloadTab(extTabId: args["tabId"] as? Int, bypassCache: (args["bypassCache"] as? Bool) ?? false)
-            return NSNull()
-        default:
-            return NSNull()   // getCurrent et al. — undefined in a background worker
-        }
-    }
+    // The runtime/tabs MESSAGING natives (installMessagingNatives — __bb_send_message /
+    // __bb_message_response / __bb_tabs_send_message) and the chrome.tabs dispatcher (dispatchTab)
+    // live in WebExtensionBackgroundContext+Messaging.swift (file-length limit). dispatchScripting
+    // (chrome.scripting / MV2 tabs.executeScript) lives in WebExtensionBackgroundContext+Scripting.swift.
 
     private func installStorageNatives(into context: JSContext) {
         let get: @convention(block) (String, String, JSValue) -> Void = { [weak self] area, keysJSON, callback in
@@ -535,7 +476,9 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
         dispatcher.invokeMethod(method, withArguments: arguments)
     }
 
-    private func resolveResponse(_ responseId: String, payload: [String: Any]?) {
+    // Internal (not private) so the messaging natives in WebExtensionBackgroundContext+Messaging.swift
+    // can resolve a parked continuation when the worker answers a content/popup message.
+    func resolveResponse(_ responseId: String, payload: [String: Any]?) {
         guard let continuation = pendingResponses.removeValue(forKey: responseId) else { return }
         continuation.resume(returning: payload)
     }

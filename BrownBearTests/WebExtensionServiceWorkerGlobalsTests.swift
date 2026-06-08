@@ -91,6 +91,31 @@ final class WebExtensionServiceWorkerGlobalsTests: XCTestCase {
         XCTAssertEqual(r["structuredCloneOk"] as? Bool, true)
     }
 
+    func testClassicSWTopLevelDeclarationsAreVisibleToImportScriptsChunks() async throws {
+        // Chrome evaluates a classic service worker at GLOBAL scope, so the worker's top-level
+        // `var`/`function` are global bindings visible to importScripts() chunks — which our shim
+        // evaluates via `(0, eval)(src)` at global scope. Wrapping the source in an IIFE made them
+        // closure-local and INVISIBLE to those chunks, breaking real bundles (Violentmonkey's `M`,
+        // Best AdBlocker's `fn`). This probe uses the SAME `(0, eval)` mechanism importScripts uses,
+        // so it discriminates global-scope (visible) from the old IIFE wrapping (MISSING).
+        let context = try makeContext(background: """
+        var topLevelVar = 42;
+        function topLevelFn() { return 'fn-ok'; }
+        var crossChunk = (0, eval)('(typeof topLevelVar !== "undefined" ? String(topLevelVar) : "MISSING")'
+          + ' + ":" + (typeof topLevelFn === "function" ? topLevelFn() : "NOFN")');
+        chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+          if (!msg || msg.check !== 'scope') { return; }
+          sendResponse({ crossChunk: crossChunk });
+        });
+        """)
+        defer { context.shutdown() }
+
+        let response = await context.deliverRuntimeMessage(message: ["check": "scope"], sender: [:])
+        let r = try XCTUnwrap(response?["value"] as? [String: Any], "the worker must register its listener")
+        XCTAssertEqual(r["crossChunk"] as? String, "42:fn-ok",
+                       "top-level SW symbols must be visible to importScripts-style (0,eval) chunks (Chrome global scope)")
+    }
+
     func testFetchHostGateFailsClosedWithoutHostPermission() async throws {
         // Manifest declares NO host_permissions, so a cross-origin fetch must be rejected (fail closed).
         let context = try makeContext(background: """
