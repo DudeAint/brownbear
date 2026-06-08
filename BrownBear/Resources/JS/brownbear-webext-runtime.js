@@ -88,7 +88,14 @@
         else if (keys && typeof keys === "object") { defaults = keys; keyList = _Object.keys(keys); }
         var promise = bridge("storage.get", { area: area, keys: keyList }, token).then(function (raw) {
           var out = {};
-          if (defaults) { _Object.keys(defaults).forEach(function (k) { out[k] = defaults[k]; }); }
+          // Deep-clone each default so a caller mutating the get() result can't corrupt its own
+          // defaults object (Chrome returns independent copies); a stored value overrides it below.
+          if (defaults) {
+            _Object.keys(defaults).forEach(function (k) {
+              try { out[k] = (typeof structuredClone === "function") ? structuredClone(defaults[k]) : _JSON.parse(_JSON.stringify(defaults[k])); }
+              catch (e) { out[k] = defaults[k]; }
+            });
+          }
           var map = raw || {};
           _Object.keys(map).forEach(function (k) { try { out[k] = _JSON.parse(map[k]); } catch (e) { out[k] = map[k]; } });
           return out;
@@ -107,12 +114,20 @@
       function clear(callback) {
         return settle(bridge("storage.clear", { area: area }, token).then(function () { return undefined; }), callback);
       }
+      // chrome.storage.<area>.getBytesInUse — usage isn't tracked; report 0 (Chrome permits an
+      // approximate/zero value), mirroring the background + page surfaces so the method exists.
+      function getBytesInUse(keys, callback) {
+        if (typeof keys === "function") { callback = keys; }
+        if (typeof callback === "function") { callback(0); return undefined; }
+        return _Promise.resolve(0);
+      }
       // chrome.storage.session.setAccessLevel — no-op (no separate untrusted tier); resolves.
       function setAccessLevel(_opts, callback) {
         if (typeof callback === "function") { callback(); return undefined; }
         return _Promise.resolve();
       }
-      return { get: get, set: set, remove: remove, clear: clear, setAccessLevel: setAccessLevel };
+      return { get: get, set: set, remove: remove, clear: clear,
+               getBytesInUse: getBytesInUse, setAccessLevel: setAccessLevel };
     }
 
     function getURL(path) {
