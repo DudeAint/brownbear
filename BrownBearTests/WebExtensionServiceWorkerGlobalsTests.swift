@@ -401,4 +401,33 @@ final class WebExtensionServiceWorkerGlobalsTests: XCTestCase {
         XCTAssertEqual(r["redirectSlash"] as? String, "https://\(id).chromiumapp.org/cb")
         XCTAssertEqual(r["redirectEmpty"] as? String, "https://\(id).chromiumapp.org/")
     }
+
+    // MARK: - importScripts shares the global lexical env (let/const/class across chunks)
+
+    /// A real service worker shares ONE global lexical environment across importScripts'd scripts, so a
+    /// chunk's top-level `let`/`const`/`class` (not just `var`/`function`) is visible to the rest of the
+    /// worker. Our importScripts evaluates each chunk via native evaluateScript (which shares that env);
+    /// the old indirect `(0,eval)` scoped lexical declarations to the eval, so chunks that split shared
+    /// top-level symbols broke — Violentmonkey's `M`, Best AdBlocker's `fn` (declared with let/const)
+    /// became "Can't find variable". This probes the exact mechanism via __bb_eval_global.
+    func testImportScriptsChunkLexicalsAreVisibleToTheWorker() async throws {
+        let context = try makeContext(background: """
+        var chunkErr = __bb_eval_global(
+          'let lexLet = 77; const lexConst = 88; function lexFn(){ return "fn"; } class LexCls { tag(){ return "cls"; } }',
+          'chunk-a.js');
+        var probe = (typeof lexLet !== 'undefined' ? lexLet : 'MISSING') + ':'
+          + (typeof lexConst !== 'undefined' ? lexConst : 'MISSING') + ':'
+          + (typeof lexFn === 'function' ? lexFn() : 'NOFN') + ':'
+          + (typeof LexCls === 'function' ? (new LexCls()).tag() : 'NOCLS');
+        chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+          if (msg && msg.check === 'lexical') { sendResponse({ probe: probe, hadError: !!chunkErr }); }
+        });
+        """)
+        defer { context.shutdown() }
+        let response = await context.deliverRuntimeMessage(message: ["check": "lexical"], sender: [:])
+        let r = try XCTUnwrap(response?["value"] as? [String: Any], "the worker must register its listener")
+        XCTAssertEqual(r["hadError"] as? Bool, false, "the chunk must evaluate without error")
+        XCTAssertEqual(r["probe"] as? String, "77:88:fn:cls",
+                       "a chunk's top-level let/const/function/class must be visible to the worker (shared global scope)")
+    }
 }
