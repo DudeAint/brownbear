@@ -149,6 +149,23 @@ final class DeclarativeNetRequestTests: XCTestCase {
         XCTAssertEqual(result.skippedCount, 2)
     }
 
+    func testMV2DomainsFieldIsSkippedNotMisroutedToIfDomain() throws {
+        // The MV2-style `domains`/`excludedDomains` filter the REQUEST URL's domain, NOT the page. They
+        // were being mapped onto WebKit if-domain (page/initiator domain), which would block the WRONG
+        // origin. They must be SKIPPED instead — and a real initiatorDomains rule must still compile.
+        let rules: [[String: Any]] = [
+            ["id": 30, "action": ["type": "block"], "condition": ["urlFilter": "*", "domains": ["a.com"]]],
+            ["id": 31, "action": ["type": "block"], "condition": ["urlFilter": "*", "excludedDomains": ["b.com"]]],
+            ["id": 32, "action": ["type": "block"], "condition": ["urlFilter": "*", "initiatorDomains": ["c.com"]]]
+        ]
+        let (objects, result) = try compileToObjects(rules)
+        XCTAssertEqual(result.skippedCount, 2, "'domains' and 'excludedDomains' must be skipped, not mapped")
+        XCTAssertEqual(result.compiledCount, 1, "the initiatorDomains rule still compiles")
+        // The one compiled rule maps initiatorDomains → if-domain; no skipped rule leaked an if-domain.
+        let triggers = objects.compactMap { $0["trigger"] as? [String: Any] }
+        XCTAssertEqual(triggers.compactMap { $0["if-domain"] as? [String] }.flatMap { $0 }.sorted(), ["*c.com"])
+    }
+
     // MARK: - Ordering
 
     func testAllowSortsAfterBlockAtSamePriority() throws {
