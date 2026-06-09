@@ -204,8 +204,9 @@ final class WebExtensionOffscreenManager {
     /// Resolve the caller-supplied offscreen `url` to a packaged path of THIS extension, rejecting
     /// path traversal and any absolute URL that isn't this extension's own `chrome-extension://` origin.
     /// Returns the cleaned relative path (the session turns it into the chrome-extension:// URL).
-    /// `internal` (not private) so the security behavior is unit-tested directly.
-    static func sanitizedPath(extID: String, rawPath: String) -> String? {
+    /// `nonisolated` (the work is pure) + `internal` so the security behavior is unit-tested directly
+    /// from a synchronous, non-actor-isolated context.
+    nonisolated static func sanitizedPath(extID: String, rawPath: String) -> String? {
         var path = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !path.isEmpty else { return nil }
         let ownPrefix = "\(WebExtensionSchemeHandler.scheme)://\(extID)/"
