@@ -367,6 +367,26 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
                                                              frameId: payload["frameId"] as? Int)
             return response ?? NSNull()
 
+        case "tabs.captureVisibleTab":
+            // A popup/options page capturing the visible tab (a screenshot extension's GoFullPage does
+            // this from its popup). Page pixels are sensitive (§5): honor "activeTab" for the active tab
+            // — the popup is opened by the user invoking the action, which IS the activeTab gesture —
+            // otherwise require a host_permissions match for the captured tab (same fail-closed gate as
+            // the background __bb_capture_visible_tab path). The gate runs INSIDE the host against the
+            // captured tab's URL, so a tab switch can't bypass it.
+            guard let host else { return NSNull() }
+            let manifest = await store.ext(for: extensionID)?.manifest
+            let hasActiveTab = manifest?.permissions.contains("activeTab") ?? false
+            let allUrls = manifest?.hostPermissions.contains("<all_urls>") ?? false
+            let matcher = URLMatcher(matches: manifest?.hostPermissions ?? [],
+                                     includes: [], excludes: [], excludeMatches: [])
+            let dataURL = await host.webExtCaptureVisibleTab(format: (payload["format"] as? String) ?? "png",
+                                                             quality: (payload["quality"] as? Int) ?? 92) { url in
+                hasActiveTab || allUrls || (url.map { matcher.matches($0) } ?? false)
+            }
+            if let dataURL { return dataURL }
+            return NSNull()
+
         default:
             return nil
         }

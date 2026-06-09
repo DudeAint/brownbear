@@ -335,9 +335,27 @@
       var message = args[1];
       return settle(bridge("tabs.sendMessage", { tabId: tabId, message: (message === undefined ? null : message) }), cb);
     }
+    function captureVisibleTab() {
+      // (windowId?, options?, callback?) — windowId ignored (single window). Returns a data URL of the
+      // active tab. Chrome exposes this in the popup too (a screenshot extension's GoFullPage captures
+      // from its popup); without it here the call is undefined and the popup blanks with a TypeError.
+      var args = _Array.prototype.slice.call(arguments);
+      var cb = (args.length && typeof args[args.length - 1] === "function") ? args.pop() : null;
+      var options = null;
+      for (var i = 0; i < args.length; i++) { if (args[i] && typeof args[i] === "object") { options = args[i]; } }
+      options = options || {};
+      return settle(bridge("tabs.captureVisibleTab", {
+        format: options.format || "png",
+        quality: typeof options.quality === "number" ? options.quality : 92
+      }), cb);
+    }
     return {
       query: query, get: get, getCurrent: getCurrent, create: create, update: update, remove: remove, reload: reload,
       executeScript: executeScript, insertCSS: insertCSS, sendMessage: sendMessage,
+      captureVisibleTab: captureVisibleTab,
+      // iOS has no tab groups — non-throwing no-ops so unguarded callers don't crash (see background).
+      group: function (options, cb) { return settle(Promise.resolve(-1), cb); },
+      ungroup: function (tabIds, cb) { return settle(Promise.resolve(undefined), cb); },
       onCreated: makeEvent(tabEventLists["tabs.onCreated"]),
       onUpdated: makeEvent(tabEventLists["tabs.onUpdated"]),
       onActivated: makeEvent(tabEventLists["tabs.onActivated"]),
@@ -722,6 +740,14 @@
       getPlatformInfo: function (cb) { var info = { os: "ios", arch: "arm64", nacl_arch: "arm64" }; if (typeof cb === "function") { cb(info); return undefined; } return _Promise.resolve(info); }
     },
     tabs: tabsApi(),
+    tabGroups: {
+      TAB_GROUP_ID_NONE: -1,
+      query: function (q, cb) { return settle(Promise.resolve([]), cb); },
+      get: function (id, cb) { return settle(Promise.resolve(null), cb); },
+      update: function (id, props, cb) { return settle(Promise.resolve(null), cb); },
+      move: function (id, props, cb) { return settle(Promise.resolve(null), cb); },
+      onCreated: makeEvent([]), onUpdated: makeEvent([]), onMoved: makeEvent([]), onRemoved: makeEvent([])
+    },
     scripting: scriptingApi(),
     i18n: {
       getMessage: i18nGetMessage,

@@ -2115,11 +2115,27 @@
       details = details || {};
       return settleBg(scriptingCall('insertCSS', { tabId: id, css: details.code, files: details.file ? [details.file] : undefined }).then(function () { return undefined; }), cb);
     },
+    // Tab groups don't exist on iOS (single, ungrouped tab list). These resolve as graceful no-ops
+    // (group → TAB_GROUP_ID_NONE = "not grouped") rather than being absent — Surfingkeys/Vimium C call
+    // tabs.group/ungroup + chrome.tabGroups.* UNGUARDED, so an absent member would throw a TypeError.
+    group: function (options, cb) { return settleBg(Promise.resolve(-1), cb); },
+    ungroup: function (tabIds, cb) { return settleBg(Promise.resolve(undefined), cb); },
     onCreated: makeEvent(tabEventLists['tabs.onCreated']),
     onUpdated: makeEvent(tabEventLists['tabs.onUpdated']),
     onActivated: makeEvent(tabEventLists['tabs.onActivated']),
     onRemoved: makeEvent(tabEventLists['tabs.onRemoved']),
     onReplaced: makeEvent([])
+  };
+
+  // chrome.tabGroups — iOS has no tab groups, so this is a non-throwing shim (query → [], get → null,
+  // update/move resolve). Present so extensions that read chrome.tabGroups.* unguarded don't crash.
+  var tabGroups = {
+    TAB_GROUP_ID_NONE: -1,
+    query: function (queryInfo, cb) { return settleBg(Promise.resolve([]), cb); },
+    get: function (groupId, cb) { return settleBg(Promise.resolve(null), cb); },
+    update: function (groupId, props, cb) { return settleBg(Promise.resolve(null), cb); },
+    move: function (groupId, props, cb) { return settleBg(Promise.resolve(null), cb); },
+    onCreated: makeEvent([]), onUpdated: makeEvent([]), onMoved: makeEvent([]), onRemoved: makeEvent([])
   };
 
   // ---------------------------------------------------------------- chrome.webNavigation
@@ -2666,6 +2682,7 @@
     browserAction: action,
     pageAction: pageAction,
     tabs: tabs,
+    tabGroups: tabGroups,
     scripting: scripting,
     i18n: i18n,
     // chrome.extension is mostly legacy aliases of chrome.runtime, but real extensions still read it at
