@@ -1588,6 +1588,12 @@
   var messageListeners = [];
   var installedListeners = [];
   var startupListeners = [];
+  // chrome.runtime.onUserScriptMessage / onUserScriptConnect — the MV3 User Scripts messaging channel
+  // (Chrome 120+). A USER_SCRIPT-world script (configureWorld({messaging:true})) talks to the worker over
+  // THIS channel, kept separate from onMessage/onConnect so the worker can distinguish privileged content
+  // scripts from user scripts. ScriptCat/Tampermonkey require these to run injected scripts.
+  var userScriptMessageListeners = [];
+  var userScriptConnectListeners = [];
 
   // chrome.runtime.connect / onConnect long-lived ports — RESPONDER side. A content script or page
   // connects; the hub fires dispatchPortConnect here; the worker replies via the __bb_port_* natives.
@@ -1649,6 +1655,8 @@
     getManifest: function () { return deepClone(manifest); },
     getURL: getURL,
     onMessage: makeEvent(messageListeners),
+    onUserScriptMessage: makeEvent(userScriptMessageListeners),
+    onUserScriptConnect: makeEvent(userScriptConnectListeners),
     onInstalled: makeEvent(installedListeners),
     onStartup: makeEvent(startupListeners),
     onConnect: makeEvent(connectListeners),
@@ -2522,6 +2530,34 @@
       // returned nothing → the sender resolves undefined with no lastError).
       __bb_message_response(responseId,
         messageListeners.length === 0 ? JSON.stringify({ __bbNoListener: true }) : null);
+    },
+
+    // The MV3 User Scripts channel twin of dispatchMessage: a USER_SCRIPT-world script's
+    // chrome.runtime.sendMessage lands on chrome.runtime.onUserScriptMessage (NOT onMessage). Same
+    // request/response + async-sendResponse contract; uses the same __bb_message_response slot.
+    dispatchUserScriptMessage: function (messageJSON, senderJSON, responseId) {
+      var message = parseJSON(messageJSON);
+      var sender = parseJSON(senderJSON) || {};
+      var responded = false, willRespondAsync = false;
+      function sendResponse(value) {
+        if (responded) { return; }
+        responded = true;
+        __bb_message_response(responseId, JSON.stringify({ value: (value === undefined ? null : value) }));
+      }
+      for (var i = 0; i < userScriptMessageListeners.length; i++) {
+        var returned;
+        try { returned = userScriptMessageListeners[i](message, sender, sendResponse); }
+        catch (e) { __bb_log('error', 'runtime.onUserScriptMessage listener threw: ' + (e && e.message ? e.message : e)); continue; }
+        if (returned === true) { willRespondAsync = true; }
+        else if (returned && typeof returned.then === 'function') {
+          willRespondAsync = true;
+          (function (promise) { promise.then(function (v) { sendResponse(v); }, function () { sendResponse(undefined); }); })(returned);
+        }
+        if (responded) { break; }
+      }
+      if (responded || willRespondAsync) { return; }
+      __bb_message_response(responseId,
+        userScriptMessageListeners.length === 0 ? JSON.stringify({ __bbNoListener: true }) : null);
     },
 
     dispatchAlarm: function (alarmJSON) {

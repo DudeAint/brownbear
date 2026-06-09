@@ -94,6 +94,9 @@ extension WebExtensionBackgroundContext {
                     worldId: properties["worldId"] as? String, csp: properties["csp"] as? String,
                     messaging: (properties["messaging"] as? Bool) ?? false))
                 return NSNull()
+            case "resetWorldConfiguration":
+                await usStore.resetWorldConfiguration(extensionID: extensionID, worldId: args["worldId"] as? String)
+                return NSNull()
             default:
                 return NSNull()
             }

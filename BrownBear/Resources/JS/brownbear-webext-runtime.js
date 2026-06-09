@@ -582,10 +582,14 @@
         sendMessage: function () {
           // Overloaded like Chrome: (extensionId?, message, options?, callback?). We deliver to
           // this extension's own background worker and resolve with the listener's response value.
+          // A USER_SCRIPT-world script (configureWorld({messaging:true})) routes to the worker's
+          // onUserScriptMessage instead of onMessage (the MV3 User Scripts channel).
           var args = _Array.prototype.slice.call(arguments);
           var cb = (args.length && typeof args[args.length - 1] === "function") ? args.pop() : null;
           var message = (typeof args[0] === "string" && args.length > 1) ? args[1] : args[0];
-          var promise = bridge("runtime.sendMessage", { message: (message === undefined ? null : message), url: location.href }, token)
+          var msgApi = (data.world === "USER_SCRIPT" && data.userScriptMessaging)
+            ? "runtime.userScriptMessage" : "runtime.sendMessage";
+          var promise = bridge(msgApi, { message: (message === undefined ? null : message), url: location.href }, token)
             .then(function (resp) {
               if (resp && resp.__bbNoReceiver) {
                 // No context received the message — Chrome rejects (promise) / sets lastError (callback).
@@ -679,8 +683,26 @@
     return chrome;
   }
 
+  // Inject code into the page's REAL main world (MV3 `world:"MAIN"` userScripts). We're in an isolated
+  // world, which can't eval into the page world directly — but a <script> element appended to the page
+  // DOM runs in the page world (the same mechanism real managers use). No extension/chrome API is exposed
+  // to MAIN-world code, per the userScripts contract. At document_start `documentElement` already exists.
+  function injectIntoPage(code, extensionId) {
+    try {
+      var script = document.createElement("script");
+      script.textContent = code + "\n//# sourceURL=chrome-extension://" + extensionId + "/userscript-main.js";
+      var parent = document.head || document.documentElement || document.body;
+      if (!parent) { return false; }
+      parent.appendChild(script);
+      if (script.parentNode) { script.parentNode.removeChild(script); }   // tidy the DOM; the code already ran
+      return true;
+    } catch (e) {
+      if (_console.error) { _console.error("[BrownBear ext] MAIN-world inject error:", e); }
+      return false;
+    }
+  }
+
   function runContentScript(data) {
-    var chrome = buildChrome(data);
     if (data.css) {
       try {
         var style = document.createElement("style");
@@ -688,14 +710,18 @@
         (document.head || document.documentElement).appendChild(style);
       } catch (e) { /* ignore */ }
     }
-    if (data.js) {
-      var sourceURL = "//# sourceURL=chrome-extension://" + data.extensionId + "/content.js";
-      try {
-        var fn = _Function("chrome", "browser", "window", "self", "globalThis", data.js + "\n" + sourceURL);
-        fn.call(W, chrome, chrome, W, W, W);
-      } catch (e) {
-        if (_console.error) { _console.error("[BrownBear ext] content script error:", e); }
-      }
+    if (!data.js) { return; }
+    if (data.world === "MAIN") {
+      injectIntoPage(data.js, data.extensionId);   // real page world, no chrome.* (userScripts contract)
+      return;
+    }
+    var chrome = buildChrome(data);
+    var sourceURL = "//# sourceURL=chrome-extension://" + data.extensionId + "/content.js";
+    try {
+      var fn = _Function("chrome", "browser", "window", "self", "globalThis", data.js + "\n" + sourceURL);
+      fn.call(W, chrome, chrome, W, W, W);
+    } catch (e) {
+      if (_console.error) { _console.error("[BrownBear ext] content script error:", e); }
     }
   }
 
