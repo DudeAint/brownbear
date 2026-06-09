@@ -64,6 +64,40 @@ extension WebExtensionBackgroundContext {
         }
     }
 
+    /// chrome.userScripts.execute(injection) — run JS NOW in a user-script world of the target tab,
+    /// returning one InjectionResult ({result, frameId}) per frame. Like dispatchScripting's executeScript
+    /// but gated on the `userScripts` permission (not `scripting`) and defaulting to the USER_SCRIPT world
+    /// (our isolated content world; only an explicit world:"MAIN" runs in the page world). Fails closed
+    /// (empty result) without the permission or host access to the tab's origin.
+    @MainActor
+    static func dispatchUserScriptExecute(host: WebExtensionBridgeHost, args: [String: Any],
+                                          extensionID: String) async -> Any {
+        let store = BrownBearServices.shared.webExtensionStore
+        let injection = args["injection"] as? [String: Any] ?? [:]
+        let target = injection["target"] as? [String: Any] ?? [:]
+        let tabId = target["tabId"] as? Int
+        guard let manifest = await store.ext(for: extensionID)?.manifest,
+              manifest.permissions.contains("userScripts"),
+              let record = host.webExtTab(extTabId: tabId),
+              let tabURL = record["url"] as? String, !tabURL.isEmpty else { return [] }
+        let activeTabGrant = manifest.permissions.contains("activeTab")
+            && record["id"] as? Int == host.webExtActionActiveTabId()
+        if !activeTabGrant {
+            let matcher = URLMatcher(matches: manifest.hostPermissions, includes: [], excludes: [], excludeMatches: [])
+            guard matcher.matches(tabURL) else { return [] }
+        }
+        var code = ""
+        for js in (injection["js"] as? [[String: Any]]) ?? [] {
+            if let inline = js["code"] as? String { code += inline + "\n;\n" }
+            else if let file = js["file"] as? String,
+                    let text = await store.text(extensionID: extensionID, path: file) { code += text + "\n;\n" }
+        }
+        guard !code.isEmpty else { return [] }
+        // USER_SCRIPT (or any non-MAIN world) runs in our single isolated content world; only MAIN is the page.
+        let world = ((injection["world"] as? String)?.uppercased() == "MAIN") ? "MAIN" : "USER_SCRIPT"
+        return await host.webExtExecuteScript(extTabId: tabId, world: world, code: code)
+    }
+
     // MARK: - chrome.scripting.registerContentScripts (MV3 dynamic content scripts)
 
     /// The chrome.scripting methods that register/inspect dynamic content scripts (vs the tab-targeted

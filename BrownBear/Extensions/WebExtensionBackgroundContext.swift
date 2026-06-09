@@ -863,7 +863,16 @@ extension WebExtensionBackgroundContext {
             let args = ((try? JSONSerialization.jsonObject(with: Data(argsJSON.utf8))) as? [String: Any]) ?? [:]
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                let result = await WebExtensionBackgroundContext.dispatchUserScripts(extensionID: extensionID, method: method, args: args)
+                let result: Any
+                if method == "execute", let host = self.host {
+                    // execute targets a TAB (needs host + host access), unlike the store-only register/world
+                    // methods — route it through the host the same way chrome.scripting.executeScript is.
+                    result = await WebExtensionBackgroundContext.dispatchUserScriptExecute(
+                        host: host, args: args, extensionID: extensionID)
+                } else {
+                    result = await WebExtensionBackgroundContext.dispatchUserScripts(
+                        extensionID: extensionID, method: method, args: args)
+                }
                 self.callBack(callback, with: self.jsonString(result))
             }
         }
