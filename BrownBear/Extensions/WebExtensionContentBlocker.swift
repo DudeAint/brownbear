@@ -194,8 +194,46 @@ final class WebExtensionContentBlocker {
             }
         }
         guard let json else { return nil }
-        let scoped = applyExclusions(to: json, hosts: hosts)
+        let unbroken = appendUnbreakRules(to: json)
+        let scoped = applyExclusions(to: unbroken, hosts: hosts)
         return scoped == "[]" ? nil : scoped
+    }
+
+    /// A telemetry SCRIPT that BREAKS the page when blocked, paired with the data ENDPOINT that carries
+    /// its actual tracking payload. New Relic is the canonical case: its inline page snippet wraps
+    /// `window.addEventListener` with a thunk that delegates to a reference only the external agent
+    /// (`js-agent.newrelic.com`) initializes — so blocking the agent leaves that thunk throwing
+    /// "addEventListener is not a function", poisoning the page's own global and taking down every
+    /// MAIN-world script on the page (the page's code AND any userscript). Blocking the data endpoint
+    /// (`nr-data.net`) instead stops the telemetry from ever leaving, with no page breakage.
+    private struct UnbreakException {
+        let allowFilter: String   // the breakage-prone SCRIPT to let load (un-blocked)
+        let blockFilter: String   // its data-collection ENDPOINT to keep blocked
+    }
+    private static let unbreakExceptions: [UnbreakException] = [
+        UnbreakException(allowFilter: "^https?://([^/]+\\.)?js-agent\\.newrelic\\.com[:/]",
+                         blockFilter: "^https?://([^/]+\\.)?nr-data\\.net[:/]")
+    ]
+
+    /// Rewrite the merged built-in list so a breakage-prone telemetry script LOADS (page stays intact)
+    /// while its data endpoint stays BLOCKED. Implemented in-list: an `ignore-previous-rules` action
+    /// un-does any earlier block of the script (WebKit applies it only within the SAME rule list, which
+    /// is exactly where the upstream block lives — the merged built-in list), and an explicit third-party
+    /// `block` of the data endpoint guarantees the telemetry is dropped even if the upstream list didn't
+    /// already cover it. Appended LAST so the ignore overrides the upstream block. Fails safe: a JSON it
+    /// can't parse is returned unchanged. Pure — unit-tested directly.
+    static func appendUnbreakRules(to json: String) -> String {
+        guard let data = json.data(using: .utf8),
+              var rules = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return json }
+        for exception in unbreakExceptions {
+            rules.append(["action": ["type": "block"],
+                          "trigger": ["url-filter": exception.blockFilter, "load-type": ["third-party"]]])
+            rules.append(["action": ["type": "ignore-previous-rules"],
+                          "trigger": ["url-filter": exception.allowFilter]])
+        }
+        guard let out = try? JSONSerialization.data(withJSONObject: rules, options: [.sortedKeys]),
+              let string = String(data: out, encoding: .utf8) else { return json }
+        return string
     }
 
     /// Add `unless-domain: [*host …]` to every rule trigger in a WebKit rule-list JSON array, EXCEPT
