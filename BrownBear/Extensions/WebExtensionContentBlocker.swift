@@ -122,7 +122,11 @@ final class WebExtensionContentBlocker {
                 // Exclude shields-off hosts from every extension rule that can carry an exclusion
                 // (a rule already pinned with `if-domain` can't also take `unless-domain`, so it is
                 // left unchanged — BrownBear's built-in list still honors the shields-off host).
-                let scopedJSON = Self.applyExclusions(to: result.json, hosts: exclusions)
+                // Strip any page-breaking-agent block this extension's rules would compile in (an
+                // extension list is isolated, so a built-in-list-only unbreak can't reach it). No endpoint
+                // block here — the built-in list already carries those.
+                let unbrokenExt = Self.applyUnbreak(to: result.json, includeEndpointBlocks: false)
+                let scopedJSON = Self.applyExclusions(to: unbrokenExt, hosts: exclusions)
                 do {
                     let list = try await compile(store: ruleListStore, identifier: identifier, json: scopedJSON)
                     compiledLists.append(list)
@@ -194,42 +198,65 @@ final class WebExtensionContentBlocker {
             }
         }
         guard let json else { return nil }
-        let unbroken = appendUnbreakRules(to: json)
+        let unbroken = applyUnbreak(to: json, includeEndpointBlocks: true)
         let scoped = applyExclusions(to: unbroken, hosts: hosts)
         return scoped == "[]" ? nil : scoped
     }
 
-    /// A telemetry SCRIPT that BREAKS the page when blocked, paired with the data ENDPOINT that carries
-    /// its actual tracking payload. New Relic is the canonical case: its inline page snippet wraps
+    /// A telemetry SCRIPT host that BREAKS the page when blocked, paired with the data ENDPOINT that
+    /// carries its actual tracking payload. New Relic is the canonical case: its inline page snippet wraps
     /// `window.addEventListener` with a thunk that delegates to a reference only the external agent
     /// (`js-agent.newrelic.com`) initializes — so blocking the agent leaves that thunk throwing
     /// "addEventListener is not a function", poisoning the page's own global and taking down every
     /// MAIN-world script on the page (the page's code AND any userscript). Blocking the data endpoint
     /// (`nr-data.net`) instead stops the telemetry from ever leaving, with no page breakage.
     private struct UnbreakException {
-        let allowFilter: String   // the breakage-prone SCRIPT to let load (un-blocked)
-        let blockFilter: String   // its data-collection ENDPOINT to keep blocked
+        let agentHost: String      // the breakage-prone SCRIPT host to NEVER block (any path)
+        let endpointFilter: String // its data-collection ENDPOINT url-filter to KEEP blocked (third-party)
     }
     private static let unbreakExceptions: [UnbreakException] = [
-        UnbreakException(allowFilter: "^https?://([^/]+\\.)?js-agent\\.newrelic\\.com[:/]",
-                         blockFilter: "^https?://([^/]+\\.)?nr-data\\.net[:/]")
+        UnbreakException(agentHost: "js-agent.newrelic.com",
+                         endpointFilter: "^https?://([^/]+\\.)?nr-data\\.net[:/]")
     ]
 
-    /// Rewrite the merged built-in list so a breakage-prone telemetry script LOADS (page stays intact)
-    /// while its data endpoint stays BLOCKED. Implemented in-list: an `ignore-previous-rules` action
-    /// un-does any earlier block of the script (WebKit applies it only within the SAME rule list, which
-    /// is exactly where the upstream block lives — the merged built-in list), and an explicit third-party
-    /// `block` of the data endpoint guarantees the telemetry is dropped even if the upstream list didn't
-    /// already cover it. Appended LAST so the ignore overrides the upstream block. Fails safe: a JSON it
-    /// can't parse is returned unchanged. Pure — unit-tested directly.
-    static func appendUnbreakRules(to json: String) -> String {
+    /// Un-break a compiled rule-list JSON: REMOVE every `block` rule that would block a breakage-prone
+    /// agent host, and (when `includeEndpointBlocks`) append an explicit third-party block of that agent's
+    /// data endpoint so telemetry still can't leave. We STRIP the block rather than append an
+    /// `ignore-previous-rules`: WebKit applies an ignore only within the SAME compiled list AND only when
+    /// its trigger overlaps the block's resource-type/load-type — fragile and order-sensitive. Deleting the
+    /// block is order- and overlap-proof, and (crucially) it must run on EVERY compiled list (the built-in
+    /// list AND each extension's), because WKContentRuleLists are isolated and a block in ANY list blocks,
+    /// with no cross-list allow. A block "targets" an agent iff its url-filter regex matches the agent's
+    /// URL; a cheap second-level-label pre-filter keeps us from compiling all ~50k patterns. The telemetry
+    /// endpoint (`nr-data.net`) never matches an agent host, so its block survives. Fails safe (unparseable
+    /// JSON returned unchanged). Pure — unit-tested.
+    static func applyUnbreak(to json: String, includeEndpointBlocks: Bool) -> String {
         guard let data = json.data(using: .utf8),
               var rules = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return json }
-        for exception in unbreakExceptions {
-            rules.append(["action": ["type": "block"],
-                          "trigger": ["url-filter": exception.blockFilter, "load-type": ["third-party"]]])
-            rules.append(["action": ["type": "ignore-previous-rules"],
-                          "trigger": ["url-filter": exception.allowFilter]])
+        // A representative URL per agent host (host-targeting tracker rules match any path).
+        let probes = unbreakExceptions.map { "https://\($0.agentHost)/nr-spa.min.js" }
+        // Cheap pre-filter: only a rule whose url-filter mentions an agent's second-level label
+        // (e.g. "newrelic") could target it; skip regex-compiling every other rule.
+        let labels: [String] = unbreakExceptions.compactMap {
+            let parts = $0.agentHost.split(separator: ".")
+            return parts.count >= 2 ? String(parts[parts.count - 2]).lowercased() : parts.first.map { String($0).lowercased() }
+        }
+        rules = rules.filter { rule in
+            guard (rule["action"] as? [String: Any])?["type"] as? String == "block",
+                  let filter = (rule["trigger"] as? [String: Any])?["url-filter"] as? String else { return true }
+            let lower = filter.lowercased()
+            guard labels.contains(where: { lower.contains($0) }),
+                  let regex = try? NSRegularExpression(pattern: filter, options: [.caseInsensitive]) else { return true }
+            let blocksAgent = probes.contains { probe in
+                regex.firstMatch(in: probe, range: NSRange(probe.startIndex..., in: probe)) != nil
+            }
+            return !blocksAgent
+        }
+        if includeEndpointBlocks {
+            for exception in unbreakExceptions {
+                rules.append(["action": ["type": "block"],
+                              "trigger": ["url-filter": exception.endpointFilter, "load-type": ["third-party"]]])
+            }
         }
         guard let out = try? JSONSerialization.data(withJSONObject: rules, options: [.sortedKeys]),
               let string = String(data: out, encoding: .utf8) else { return json }
