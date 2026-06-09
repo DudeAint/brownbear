@@ -188,6 +188,18 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
     /// Deliver a content-script message to this extension's runtime.onMessage listeners and await
     /// the (possibly async) sendResponse. Resolves to `["value": ...]`, or nil if nothing answered.
     func deliverRuntimeMessage(message: Any, sender: [String: Any]) async -> [String: Any]? {
+        await deliverMessage(dispatch: "dispatchMessage", message: message, sender: sender)
+    }
+
+    /// Deliver a USER_SCRIPT-world script's message to chrome.runtime.onUserScriptMessage (the MV3 User
+    /// Scripts channel), awaiting its (possibly async) sendResponse. Same shape as deliverRuntimeMessage.
+    func fireUserScriptMessage(message: Any, sender: [String: Any]) async -> [String: Any]? {
+        await deliverMessage(dispatch: "dispatchUserScriptMessage", message: message, sender: sender)
+    }
+
+    /// Shared plumbing: invoke a `__bbBg` dispatcher with (message, sender, responseId), park a
+    /// continuation keyed by responseId, and resolve it on sendResponse (or a 30s timeout).
+    private func deliverMessage(dispatch method: String, message: Any, sender: [String: Any]) async -> [String: Any]? {
         await withCheckedContinuation { (continuation: CheckedContinuation<[String: Any]?, Never>) in
             queue.async { [self] in
                 guard isAlive, let context else { continuation.resume(returning: nil); return }
@@ -199,7 +211,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
                 let senderJSON = jsonString(sender)
                 if let dispatcher = context.objectForKeyedSubscript("__bbBg"),
                    !dispatcher.isUndefined {
-                    dispatcher.invokeMethod("dispatchMessage", withArguments: [messageJSON, senderJSON, responseId])
+                    dispatcher.invokeMethod(method, withArguments: [messageJSON, senderJSON, responseId])
                 } else {
                     resolveResponse(responseId, payload: nil)
                     return

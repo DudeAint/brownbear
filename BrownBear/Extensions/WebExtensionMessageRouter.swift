@@ -211,6 +211,15 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
             }
             return response
 
+        case "runtime.userScriptMessage":
+            // A USER_SCRIPT-world script (configureWorld({messaging:true})) → the worker's
+            // chrome.runtime.onUserScriptMessage (NOT onMessage). Only the background worker receives it.
+            let message = payload["message"] ?? NSNull()
+            let sender = buildMessageSender(token: token, extensionID: extensionID,
+                                            url: payload["url"] as? String, webView: webView, frameInfo: frameInfo)
+            return await runtime.deliverUserScriptMessage(extensionID: extensionID, message: message, sender: sender)
+                ?? NSNull()
+
         case "runtime.openOptionsPage":
             guard let host, await store.ext(for: extensionID)?.manifest?.optionsPage != nil else {
                 throw BrownBearError.bridgeRejected("no options page to open")
@@ -659,9 +668,13 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
 
             // chrome.userScripts (MV3): runtime-registered scripts inject like content scripts. They
             // reuse the same per-navigation path + session model, so they get a token and addressable
-            // session exactly as manifest content scripts do (world is stored but iOS runs one world).
-            for userScript in await BrownBearServices.shared.webExtensionUserScriptStore
-                .getScripts(extensionID: ext.id, ids: nil) {
+            // session. `world` selects MAIN (page world) vs our isolated world; `userScriptMessaging`
+            // (configureWorld({messaging:true}) on the default world) lets a USER_SCRIPT-world script
+            // reach the worker's onUserScriptMessage.
+            let usStore = BrownBearServices.shared.webExtensionUserScriptStore
+            let userScriptMessaging = await usStore.worldConfigs(extensionID: ext.id)
+                .contains { $0.worldId == nil && $0.messaging }
+            for userScript in await usStore.getScripts(extensionID: ext.id, ids: nil) {
                 if isSubframe && !userScript.allFrames { continue }
                 let matcher = URLMatcher(matches: userScript.matches, includes: userScript.includeGlobs,
                                          excludes: userScript.excludeGlobs, excludeMatches: userScript.excludeMatches)
@@ -678,6 +691,11 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
                     "allFrames": userScript.allFrames,
                     "js": userScript.js,
                     "css": "",
+                    // `world` drives where the loader runs it: MAIN → the page's real main world (injected
+                    // as a <script> element); USER_SCRIPT/ISOLATED → our isolated bridge world. MV3
+                    // userScript managers (ScriptCat, Tampermonkey) register page-world scripts as MAIN.
+                    "world": userScript.world,
+                    "userScriptMessaging": userScriptMessaging,
                     "manifestJSON": ext.manifestJSON,
                     "baseURL": ext.baseURLString,
                     "messages": messages

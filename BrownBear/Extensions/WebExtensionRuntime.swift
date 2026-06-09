@@ -172,6 +172,13 @@ class WebExtensionRuntime {
         return sawReceiver ? nil : ["__bbNoReceiver": true]
     }
 
+    /// Deliver a USER_SCRIPT-world script's message to its worker's chrome.runtime.onUserScriptMessage
+    /// (MV3 User Scripts channel). Only the background worker receives it (not pages). Returns the
+    /// worker's `["value": …]` answer, or nil.
+    func deliverUserScriptMessage(extensionID: String, message: Any, sender: [String: Any]) async -> [String: Any]? {
+        await contexts[extensionID]?.fireUserScriptMessage(message: message, sender: sender)
+    }
+
     /// Append a popup/options PAGE's forwarded console line / uncaught error to this extension's log,
     /// so an otherwise-invisible blank-page failure is diagnosable in the dashboard. `source: .page`.
     func logFromPage(extensionID: String, level: String, message: String) async {
