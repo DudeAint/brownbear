@@ -624,7 +624,11 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
         BrownBearServices.shared.webExtensionRuntime.portHub.disconnectClientPorts(tokens: staleSet)
     }
 
-    // MARK: - getContentScripts
+}
+
+// MARK: - getContentScripts (split into an extension to keep the class body under type_body_length)
+
+extension WebExtensionMessageRouter {
 
     private func handleGetContentScripts(payload: [String: Any],
                                          webView: WKWebView?,
