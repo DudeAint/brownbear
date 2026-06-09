@@ -356,6 +356,25 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
                                  bypassCache: (payload["bypassCache"] as? Bool) ?? false)
             return NSNull()
 
+        case "tabs.move":
+            guard let host else { return [] }
+            let ids = (payload["tabIds"] as? [Int]) ?? (payload["tabId"] as? Int).map { [$0] } ?? []
+            return host.webExtMoveTabs(extTabIds: ids, index: (payload["index"] as? Int) ?? -1)
+
+        case "tabs.duplicate":
+            guard let host, let tabId = payload["tabId"] as? Int else { return NSNull() }
+            return host.webExtDuplicateTab(extTabId: tabId) ?? NSNull()
+
+        case "tabs.getZoom":
+            guard let host else { return 1.0 }
+            return host.webExtGetZoom(extTabId: payload["tabId"] as? Int)
+
+        case "tabs.setZoom":
+            guard let host else { return NSNull() }
+            host.webExtSetZoom(extTabId: payload["tabId"] as? Int,
+                               factor: (payload["zoomFactor"] as? Double) ?? 0)
+            return NSNull()
+
         case "tabs.sendMessage":
             // Deliver to the target tab's content scripts. Always via the bridge host, because the
             // content sessions may live on a DIFFERENT router instance (this call may originate from a

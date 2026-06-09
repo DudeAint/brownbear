@@ -33,6 +33,33 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
         resolveTab(extTabId).map(webExtTabRecord)
     }
 
+    func webExtMoveTabs(extTabIds: [Int], index: Int) -> [[String: Any]] {
+        let moving = extTabIds.compactMap { resolveTab($0) }
+        guard !moving.isEmpty else { return [] }
+        let movingIDs = Set(moving.map { $0.id })
+        var order = tabManager.tabs.map { $0.id }.filter { !movingIDs.contains($0) }
+        let insertAt = (index < 0 || index > order.count) ? order.count : index
+        order.insert(contentsOf: moving.map { $0.id }, at: insertAt)
+        tabManager.reorderTabs(toMatch: order)
+        return moving.map(webExtTabRecord)
+    }
+
+    func webExtDuplicateTab(extTabId: Int) -> [String: Any]? {
+        guard let tab = resolveTab(extTabId), let url = tab.state.url else { return nil }
+        let copy = tabManager.createTab(loading: url, activate: true, isPrivate: tab.isPrivate)
+        return webExtTabRecord(copy)
+    }
+
+    func webExtGetZoom(extTabId: Int?) -> Double {
+        Double(resolveTab(extTabId)?.webView.pageZoom ?? 1.0)
+    }
+
+    func webExtSetZoom(extTabId: Int?, factor: Double) {
+        guard let tab = resolveTab(extTabId) else { return }
+        let resolved = factor == 0 ? 1.0 : factor          // Chrome: zoomFactor 0 resets to the default.
+        tab.webView.pageZoom = CGFloat(min(5.0, max(0.25, resolved)))
+    }
+
     /// chrome.search.query — resolve `text` against the user's default search engine and open the
     /// results per `disposition`. Uses the SAME encoding/template the omnibox uses, so a query from an
     /// extension behaves identically to one typed in the bar. A blank query is ignored (Chrome no-ops it).

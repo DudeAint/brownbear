@@ -105,6 +105,17 @@ extension WebExtensionBackgroundContext {
         case "reload":
             host.webExtReloadTab(extTabId: args["tabId"] as? Int, bypassCache: (args["bypassCache"] as? Bool) ?? false)
             return NSNull()
+        case "move":
+            let ids = (args["tabIds"] as? [Int]) ?? (args["tabId"] as? Int).map { [$0] } ?? []
+            return host.webExtMoveTabs(extTabIds: ids, index: (args["index"] as? Int) ?? -1)
+        case "duplicate":
+            guard let tabId = args["tabId"] as? Int else { return NSNull() }
+            return host.webExtDuplicateTab(extTabId: tabId) ?? NSNull()
+        case "getZoom":
+            return host.webExtGetZoom(extTabId: args["tabId"] as? Int)
+        case "setZoom":
+            host.webExtSetZoom(extTabId: args["tabId"] as? Int, factor: (args["zoomFactor"] as? Double) ?? 0)
+            return NSNull()
         default:
             return NSNull()   // getCurrent et al. — undefined in a background worker
         }

@@ -349,10 +349,31 @@
         quality: typeof options.quality === "number" ? options.quality : 92
       }), cb);
     }
+    function move(tabIds, moveProps, cb) {
+      if (typeof moveProps === "function") { cb = moveProps; moveProps = {}; }
+      moveProps = moveProps || {};
+      var single = !_Array.isArray(tabIds);
+      var ids = single ? [tabIds] : tabIds;
+      return settle(bridge("tabs.move", { tabIds: ids, index: typeof moveProps.index === "number" ? moveProps.index : -1 })
+        .then(function (moved) { return (single && _Array.isArray(moved)) ? moved[0] : moved; }), cb);
+    }
+    function duplicate(tabId, cb) { return settle(bridge("tabs.duplicate", { tabId: tabId }), cb); }
+    function getZoom(a, b) {
+      var tabId = (typeof a === "number") ? a : null;
+      var cb = (typeof a === "function") ? a : (typeof b === "function" ? b : null);
+      return settle(bridge("tabs.getZoom", { tabId: tabId }), cb);
+    }
+    function setZoom(a, b, c) {
+      var tabId = null, zoomFactor, cb = null;
+      if (typeof b === "number") { tabId = a; zoomFactor = b; cb = (typeof c === "function") ? c : null; }
+      else { zoomFactor = a; cb = (typeof b === "function") ? b : null; }
+      return settle(bridge("tabs.setZoom", { tabId: typeof tabId === "number" ? tabId : null, zoomFactor: zoomFactor })
+        .then(function () { return undefined; }), cb);
+    }
     return {
       query: query, get: get, getCurrent: getCurrent, create: create, update: update, remove: remove, reload: reload,
       executeScript: executeScript, insertCSS: insertCSS, sendMessage: sendMessage,
-      captureVisibleTab: captureVisibleTab,
+      captureVisibleTab: captureVisibleTab, move: move, duplicate: duplicate, getZoom: getZoom, setZoom: setZoom,
       // iOS has no tab groups — non-throwing no-ops so unguarded callers don't crash (see background).
       group: function (options, cb) { return settle(Promise.resolve(-1), cb); },
       ungroup: function (tabIds, cb) { return settle(Promise.resolve(undefined), cb); },
