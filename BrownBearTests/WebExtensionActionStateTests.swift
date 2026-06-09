@@ -136,6 +136,25 @@ final class WebExtensionActionStateTests: XCTestCase {
         XCTAssertEqual(state.badgeColorBytes(extensionID: "ext", tabId: nil), [16, 32, 48, 255])
     }
 
+    func testBadgeTextColorDefaultsToWhiteAndLayersIndependentlyOfBackground() {
+        let (state, _) = makeState()
+        // chrome.action.setBadgeTextColor: Chrome's default badge TEXT color is white — an unset value
+        // must resolve to white, NOT the #666 BACKGROUND default. (Regression guard for #175.)
+        XCTAssertEqual(state.badgeTextColorBytes(extensionID: "ext", tabId: nil), [255, 255, 255, 255])
+        // Setting the text color must not touch the background color, and vice-versa.
+        state.setBadgeColor(extensionID: "ext", tabId: nil, color: "#102030")
+        state.setBadgeTextColor(extensionID: "ext", tabId: nil, color: "#ff8800")
+        XCTAssertEqual(state.badgeTextColorBytes(extensionID: "ext", tabId: nil), [255, 136, 0, 255])
+        XCTAssertEqual(state.badgeColorBytes(extensionID: "ext", tabId: nil), [16, 32, 48, 255])
+        // Per-tab text color beats the default; an unrelated tab still resolves the default.
+        state.setBadgeTextColor(extensionID: "ext", tabId: 3, color: "#000000")
+        XCTAssertEqual(state.badgeTextColorBytes(extensionID: "ext", tabId: 3), [0, 0, 0, 255])
+        XCTAssertEqual(state.badgeTextColorBytes(extensionID: "ext", tabId: 9), [255, 136, 0, 255])
+        // Clearing re-exposes the white default.
+        state.setBadgeTextColor(extensionID: "ext", tabId: nil, color: "")
+        XCTAssertEqual(state.badgeTextColorBytes(extensionID: "ext", tabId: nil), [255, 255, 255, 255])
+    }
+
     func testIconPathResolution() {
         XCTAssertEqual(WebExtensionActionState.iconPath(from: "x.png"), "x.png")
         XCTAssertEqual(WebExtensionActionState.iconPath(from: ["16": "a.png", "32": "b.png"]), "b.png")
