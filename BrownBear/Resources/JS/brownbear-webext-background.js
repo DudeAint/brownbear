@@ -1727,10 +1727,34 @@
 
   // ---------------------------------------------------------------- assemble + expose
 
-  // chrome.commands has no keyboard source on iOS — stubbed so a worker that touches it doesn't throw.
+  // chrome.commands — iOS has no global keyboard-shortcut source, so onCommand never fires (an honest
+  // platform limit, like chrome.idle's input gaps). But getAll returns the REAL commands declared in the
+  // manifest (name/description/active shortcut) so an extension's shortcut UI lists them correctly
+  // (Dark Reader's getCommands reads this) instead of seeing an empty set. Chrome resolves suggested_key
+  // per platform + honors user rebinding; we have no rebinding, so the active shortcut is the manifest's
+  // suggested default (with a platform fallback). update/reset can't rebind a global shortcut on iOS, so
+  // they resolve as no-ops (Promise/callback shape preserved) rather than rejecting an extension's UI.
+  function manifestCommands() {
+    var defs = (manifest && manifest.commands) || {};
+    var out = [];
+    for (var name in defs) {
+      if (!Object.prototype.hasOwnProperty.call(defs, name)) { continue; }
+      var d = defs[name] || {};
+      var sk = d.suggested_key || {};
+      var shortcut = sk.default || sk.mac || sk.chromeos || sk.windows || sk.linux || '';
+      out.push({ name: name, description: d.description || '', shortcut: shortcut });
+    }
+    return out;
+  }
   var commands = {
     onCommand: makeEvent([]),
-    getAll: function (cb) { if (typeof cb === 'function') { cb([]); } }
+    getAll: function (cb) {
+      var list = manifestCommands();
+      if (typeof cb === 'function') { cb(list); return undefined; }
+      return Promise.resolve(list);
+    },
+    update: function (details, cb) { if (typeof cb === 'function') { cb(); return undefined; } return Promise.resolve(); },
+    reset: function (name, cb) { if (typeof cb === 'function') { cb(); return undefined; } return Promise.resolve(); }
   };
 
   // chrome.idle — iOS can't observe global user input, so queryState maps app/device state via native
