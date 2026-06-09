@@ -212,8 +212,11 @@ final class WebExtensionOffscreenManager {
         let ownPrefix = "\(WebExtensionSchemeHandler.scheme)://\(extID)/"
         if path.hasPrefix(ownPrefix) {
             path = String(path.dropFirst(ownPrefix.count))
-        } else if path.contains("://") {
-            return nil   // an absolute URL of another scheme/extension — never serve it
+        } else if path.contains(":") {
+            // Any colon in a non-own-prefix path is a smuggled scheme — `https://`, `file://`, but also
+            // single-colon ones like `javascript:` / `data:` / `mailto:`. A packaged relative resource
+            // path never contains a colon, so reject outright.
+            return nil
         }
         // Drop any query/fragment so traversal can't hide after a `?`/`#`, then strip leading slashes.
         if let cut = path.firstIndex(where: { $0 == "?" || $0 == "#" }) { path = String(path[..<cut]) }
@@ -233,6 +236,9 @@ final class WebExtensionOffscreenManager {
             decoded = once
         }
         if decoded.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }) { return nil }
+        // A colon surviving in the decoded path (e.g. own-prefix remainder, or a `%3a`-smuggled scheme)
+        // is likewise not a packaged resource path — reject.
+        if decoded.contains(":") { return nil }
         let segments = decoded.split(whereSeparator: { $0 == "/" || $0 == "\\" })
         if segments.contains("..") || segments.contains(".") { return nil }
         return path

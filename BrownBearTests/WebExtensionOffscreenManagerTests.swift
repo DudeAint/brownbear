@@ -44,9 +44,12 @@ final class WebExtensionOffscreenManagerTests: XCTestCase {
     }
 
     func testForeignSchemesRejected() {
-        XCTAssertNil(WebExtensionOffscreenManager.sanitizedPath(extID: extID, rawPath: "https://evil.example/x"))
-        XCTAssertNil(WebExtensionOffscreenManager.sanitizedPath(extID: extID, rawPath: "file:///etc/passwd"))
-        XCTAssertNil(WebExtensionOffscreenManager.sanitizedPath(extID: extID, rawPath: "javascript:alert(1)"))
+        // Both `scheme://` and single-colon schemes — a packaged relative path never contains a colon.
+        for raw in ["https://evil.example/x", "file:///etc/passwd", "javascript:alert(1)",
+                    "data:text/html,<script>1</script>", "mailto:a@b.com", "file%3a.html"] {
+            XCTAssertNil(WebExtensionOffscreenManager.sanitizedPath(extID: extID, rawPath: raw),
+                         "a colon-bearing (scheme-like) path must be rejected: \(raw)")
+        }
     }
 
     func testTraversalRejected() {
