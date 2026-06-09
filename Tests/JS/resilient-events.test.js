@@ -2,12 +2,14 @@
 //  resilient-events.test.js
 //  BrownBear
 //
-//  Tests the page-world resilience shim (brownbear-resilient-events.js). Some pages replace
-//  window.addEventListener/removeEventListener with an instrumentation wrapper (e.g. New Relic's
-//  nrWrapper); when that agent's external script is blocked, the wrapper throws on every call and
-//  poisons the page global, breaking the page AND any MAIN-world userscript. The shim keeps the methods
-//  working by trying the page's wrapper and falling back to the native ONLY when it throws — while
-//  leaving a WORKING wrapper untouched (identity restored after its first successful call).
+//  Tests the page-world resilience shim (brownbear-resilient-events.js). Instrumentation agents (New
+//  Relic's nrWrapper) capture the original window.addEventListener and replace it with a wrapper that
+//  calls back into that captured original. When the agent's external script is blocked the wrapper is
+//  half-initialized: it either throws, or forwards a bogus `this` to the native ("Can only call
+//  addEventListener on instances of EventTarget"). Either way it poisons the page global and breaks the
+//  page AND any MAIN-world userscript. The shim keeps the methods working: it tries the page's override,
+//  falls back to the native (with a real-EventTarget `this`) when the override throws OR would re-enter,
+//  and never recurses even though the override calls back into the captured "original" (= the shim).
 //
 //  Pure Node, no deps. Run by CI (`js-runtime` job globs Tests/JS/*.test.js) and locally with
 //  `node Tests/JS/resilient-events.test.js`. Exits non-zero on any failure.
@@ -28,93 +30,124 @@ function test(name, fn) {
     catch (e) { console.log("  FAIL " + name + "\n       " + (e && e.message ? e.message : e)); failed++; }
 }
 
-// Build a fresh window whose native add/removeEventListener (on EventTarget.prototype) record calls, run
-// the shim against it, and return the handle + the native call log.
+// A fresh window with a real EventTarget hierarchy: the native add/removeEventListener (on
+// EventTarget.prototype) record the (target, type, fn) they registered. Run the shim against it.
 function freshWindow() {
     const added = [], removed = [];
-    function NativeAdd(type, fn) { added.push([type, fn]); return "native-add"; }
-    function NativeRemove(type, fn) { removed.push([type, fn]); return "native-remove"; }
-    const EventTarget = function () {};
-    EventTarget.prototype.addEventListener = NativeAdd;
-    EventTarget.prototype.removeEventListener = NativeRemove;
-    const window = Object.create(EventTarget.prototype);
+    function EventTarget() {}
+    EventTarget.prototype.addEventListener = function (type, fn) {
+        if (!(this instanceof EventTarget)) {
+            throw new TypeError("Can only call EventTarget.addEventListener on instances of EventTarget");
+        }
+        added.push([this, type, fn]); return "native-add";
+    };
+    EventTarget.prototype.removeEventListener = function (type, fn) {
+        if (!(this instanceof EventTarget)) {
+            throw new TypeError("Can only call EventTarget.removeEventListener on instances of EventTarget");
+        }
+        removed.push([this, type, fn]); return "native-remove";
+    };
+    const window = new EventTarget();
     window.EventTarget = EventTarget;
     const ctx = { console, window };
     ctx.globalThis = ctx;
     vm.createContext(ctx);
     vm.runInContext(SRC, ctx);
-    return { window, added, removed };
+    return { window, EventTarget, added, removed };
 }
 
 console.log("resilient-events shim tests");
 
-test("transparent pass-through: with no page override, calls reach the native", () => {
+test("transparent pass-through: with no page override, calls reach the native on the window", () => {
     const { window, added } = freshWindow();
     const fn = function () {};
-    const ret = window.addEventListener("click", fn);
-    assert.strictEqual(ret, "native-add");
-    assert.ok(added.some((a) => a[0] === "click" && a[1] === fn), "registered natively");
+    assert.strictEqual(window.addEventListener("click", fn), "native-add");
+    assert.ok(added.some((a) => a[0] === window && a[1] === "click" && a[2] === fn));
 });
 
-test("a BROKEN wrapper (always throws) is bypassed: the call doesn't throw and registers natively", () => {
+// Model New Relic: capture the "original" (= the shim's guard), then replace with a wrapper that calls
+// back into it. `mode` controls how the (blocked) wrapper misbehaves.
+function installNRWrapper(window, mode) {
+    const origAdd = window.addEventListener;       // captures the guard
+    const origRemove = window.removeEventListener;
+    const stats = { add: 0, remove: 0 };
+    window.addEventListener = function nrWrapper(type, fn, opts) {
+        stats.add++;
+        if (mode === "throw") { var ie; return ie.addEventListener(type, fn); }       // throws outright
+        if (mode === "bad-this") { return origAdd.call(undefined, type, fn, opts); }   // bogus `this`
+        return origAdd.call(this, type, fn, opts);                                     // working: real `this`
+    };
+    window.removeEventListener = function nrWrapper(type, fn, opts) {
+        stats.remove++;
+        if (mode === "throw") { var ie; return ie.removeEventListener(type, fn); }
+        if (mode === "bad-this") { return origRemove.call(undefined, type, fn, opts); }
+        return origRemove.call(this, type, fn, opts);
+    };
+    return stats;
+}
+
+test("broken wrapper that THROWS: bot's addEventListener doesn't throw, registers on the window", () => {
     const { window, added } = freshWindow();
-    window.addEventListener = function nrBroken() { var ie; return ie.addEventListener.apply(ie, arguments); };
+    installNRWrapper(window, "throw");
     const fn = function () {};
     let threw = false;
     try { window.addEventListener("load", fn); } catch (e) { threw = true; }
-    assert.ok(!threw, "the throwing wrapper must not propagate");
-    assert.ok(added.some((a) => a[0] === "load" && a[1] === fn), "fell back to the native registration");
+    assert.ok(!threw, "must not propagate the wrapper's throw");
+    assert.ok(added.some((a) => a[0] === window && a[1] === "load" && a[2] === fn), "registered natively on window");
 });
 
-test("a broken wrapper stays SHADOWED (identity is the guard, not the broken function)", () => {
-    const { window } = freshWindow();
-    const broken = function nrBroken() { throw new Error("ie is undefined"); };
-    window.addEventListener = broken;
-    // never called successfully → never trusted → getter keeps returning the guard, not `broken`
-    assert.notStrictEqual(window.addEventListener, broken);
-    assert.ok(typeof window.addEventListener === "function");
-});
-
-test("a WORKING wrapper is preserved and its identity restored after one successful call", () => {
+test("broken wrapper that forwards a BOGUS this: no EventTarget error, registers on the window", () => {
     const { window, added } = freshWindow();
-    let calls = 0;
-    const good = function goodWrap(type, fn) { calls++; return window.EventTarget.prototype.addEventListener.call(window, type, fn); };
-    window.addEventListener = good;
-    assert.notStrictEqual(window.addEventListener, good, "before any call, the guard shadows it");
-    window.addEventListener("x", function () {});   // succeeds → trusted
-    assert.strictEqual(calls, 1, "the page wrapper actually ran");
-    assert.strictEqual(window.addEventListener, good, "identity restored after a successful call");
-    assert.ok(added.some((a) => a[0] === "x"), "the wrapper's native delegation still registered");
+    installNRWrapper(window, "bad-this");
+    const fn = function () {};
+    let err = null;
+    try { window.addEventListener("load", fn); } catch (e) { err = e; }
+    assert.strictEqual(err, null, "the 'Can only call ... on instances of EventTarget' error must not surface");
+    assert.ok(added.some((a) => a[0] === window && a[1] === "load" && a[2] === fn), "registered on the window");
+    assert.strictEqual(added.length, 1, "registered exactly once (no recursion-driven duplicates)");
 });
 
-test("re-assigning a new override resets trust (must prove itself again)", () => {
-    const { window } = freshWindow();
-    const good = function (t, f) { return window.EventTarget.prototype.addEventListener.call(window, t, f); };
-    window.addEventListener = good;
-    window.addEventListener("a", function () {});            // trusts `good`
-    assert.strictEqual(window.addEventListener, good);
-    const broken = function () { throw new Error("boom"); };
-    window.addEventListener = broken;                        // fresh override → untrusted again
-    assert.notStrictEqual(window.addEventListener, broken, "a new override is shadowed until it proves itself");
+test("the captured-original callback does NOT recurse (single registration, bounded wrapper calls)", () => {
+    const { window, added } = freshWindow();
+    const stats = installNRWrapper(window, "bad-this");
+    window.addEventListener("load", function () {});
+    assert.strictEqual(added.length, 1, "exactly one native registration");
+    assert.strictEqual(stats.add, 1, "the wrapper ran once, not unbounded (no infinite recursion)");
+});
+
+test("a WORKING wrapper still runs (instrumentation preserved) and the listener registers once", () => {
+    const { window, added } = freshWindow();
+    const stats = installNRWrapper(window, "working");
+    const fn = function () {};
+    window.addEventListener("scroll", fn);
+    assert.strictEqual(stats.add, 1, "the working wrapper ran");
+    assert.ok(added.some((a) => a[0] === window && a[1] === "scroll" && a[2] === fn), "registered on window");
+    assert.strictEqual(added.length, 1, "registered exactly once");
+});
+
+test("a direct call with a non-EventTarget this falls back to the window instead of throwing", () => {
+    const { window, added } = freshWindow();
+    const fn = function () {};
     let threw = false;
-    try { window.addEventListener("b", function () {}); } catch (e) { threw = true; }
-    assert.ok(!threw, "the new broken override is also bypassed");
+    try { window.addEventListener.call({ not: "an EventTarget" }, "x", fn); } catch (e) { threw = true; }
+    assert.ok(!threw, "a bogus this must not throw");
+    assert.ok(added.some((a) => a[0] === window && a[1] === "x"), "registered on the window as a safe default");
 });
 
-test("stable guard identity + native-looking toString (no obvious tampering tell)", () => {
-    const { window } = freshWindow();
-    assert.strictEqual(window.addEventListener, window.addEventListener, "guard reference is stable");
-    assert.ok(/\[native code\]/.test(window.addEventListener.toString()), "toString masked");
-});
-
-test("removeEventListener is guarded the same way", () => {
+test("removeEventListener gets the same resilience (broken bogus-this wrapper)", () => {
     const { window, removed } = freshWindow();
-    window.removeEventListener = function () { throw new Error("broken remove"); };
+    installNRWrapper(window, "bad-this");
     const fn = function () {};
     let threw = false;
     try { window.removeEventListener("load", fn); } catch (e) { threw = true; }
-    assert.ok(!threw, "a broken removeEventListener wrapper is bypassed");
-    assert.ok(removed.some((r) => r[0] === "load" && r[1] === fn), "fell back to native removeEventListener");
+    assert.ok(!threw, "broken removeEventListener wrapper must not throw");
+    assert.ok(removed.some((r) => r[0] === window && r[1] === "load" && r[2] === fn), "fell back to native remove");
+});
+
+test("stable guard identity + native-looking toString", () => {
+    const { window } = freshWindow();
+    assert.strictEqual(window.addEventListener, window.addEventListener, "guard reference is stable");
+    assert.ok(/\[native code\]/.test(window.addEventListener.toString()), "toString masked");
 });
 
 console.log("\n" + passed + " passed, " + failed + " failed");
