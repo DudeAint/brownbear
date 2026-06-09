@@ -869,25 +869,6 @@
     }
   }
 
-  // Install the PAGE half of the cross-world bridge and RESOLVE only once it has actually run in the page
-  // world. This MUST finish before the ISOLATED broker (e.g. ScriptCat's scripting.js) fires its first
-  // eventFlag broadcast — otherwise that synchronous broadcast is mirrored to a page world whose
-  // <bb-perf-bridge> listener does not exist yet, is dropped, the page<->isolated rendezvous never starts,
-  // and the userscript un-grays (scripting->SW is same-world) but NEVER runs, with no error. Awaiting the
-  // native page.injectMainWorld eval (which resolves after the eval completes) guarantees that ordering.
-  function installPagePerfBridge() {
-    if (__bbPageBridgeDone) { return _Promise.resolve(); }
-    __bbPageBridgeDone = true;
-    var src = "(" + installPerfBridge.toString() + ')("page");';
-    if (handler) { return bridge("page.injectMainWorld", { code: src }, null).catch(function () {}); }
-    try {
-      var s = document.createElement("script");
-      s.textContent = src;
-      var parent = document.head || document.documentElement || document.body;
-      if (parent) { parent.appendChild(s); if (s.parentNode) { s.parentNode.removeChild(s); } }
-    } catch (e) { /* ignore */ }
-    return _Promise.resolve();
-  }
 
   function runContentScript(data) {
     if (data.css) {
@@ -964,7 +945,7 @@
     var isSubframe = false;
     try { isSubframe = W.top !== W.self; } catch (e) { isSubframe = true; }
     bridge("getContentScripts", { url: location.href, isSubframe: isSubframe }, null)
-      .then(async function (scripts) {
+      .then(function (scripts) {
         if (!scripts || !scripts.length) { return; }
         var starts = [], ends = [], idles = [], hasCrossWorld = false;
         for (var i = 0; i < scripts.length; i += 1) {
@@ -978,12 +959,15 @@
         // isolated half of the `performance` bridge before ANY of its scripts (incl. the ISOLATED broker)
         // dispatch, so the eventFlag rendezvous can cross worlds.
         if (hasCrossWorld) {
-          // BOTH halves of the cross-world bridge must be live before ANY manager script runs. The ISOLATED
-          // half is synchronous; the PAGE half goes through a native eval, so AWAIT it — otherwise the
-          // synchronous ISOLATED broker (scripting.js, run first in runAll) fires its eventFlag broadcast
-          // into a page world with no listener yet and the rendezvous never starts (un-grays, never runs).
+          // Stand up the ISOLATED half of the `performance` bridge before any manager script runs. The PAGE
+          // half is installed SYNCHRONOUSLY by injectIntoPage(), which PREPENDS installPerfBridge("page") to
+          // the FIRST MAIN-world eval so it runs in the SAME page eval immediately before the manager's MAIN
+          // code (the proven ordering). We must NOT await a separate page-bridge install here: runAll(starts)
+          // has to run in THIS microtask tick — exactly as Chrome injects document_start — because the
+          // scripts array is frame-global across ALL enabled extensions, so deferring it past an await
+          // delays the WHOLE document_start batch (incl. other extensions' isolated content scripts) by a
+          // microtask + a native round-trip and breaks injection for every co-enabled extension (#177).
           ensureIsoPerfBridge();
-          await installPagePerfBridge();
           // Diagnostic (Logs tab): a userscript manager (ScriptCat/Tampermonkey) only runs if its ISOLATED
           // broker + MAIN inject + USER_SCRIPT content scripts are all injected. Surface what we actually
           // got so a registration/resolution gap (e.g. the broker never returned) is visible, not silent.
