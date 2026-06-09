@@ -1746,11 +1746,23 @@
       hasListeners: function () { return store.length > 0; }
     };
   }
-  // Match-pattern (<scheme>://<host><path>) → RegExp, for the webRequest url filter. Cached per pattern.
+  // Match-pattern (<scheme>://<host><path>) matcher for the webRequest url filter. Cached per pattern.
+  //
+  // SECURITY (ReDoS): an installed manager fully controls these filter patterns. The scheme+host are
+  // compiled to a bounded prefix RegExp (a single `[^/]+`/`(?:[^/]+\.)?` quantifier — no catastrophic
+  // backtracking), but the PATH is matched with a LINEAR glob (split on `*`, sequential indexOf), NOT a
+  // `^...a.*a.*a...$` regex. The naive `.*`-join is polynomial: against a long not-quite-matching URL the
+  // engine backtracks across every wildcard boundary and hangs the extension's serial worker queue. The
+  // glob is O(url.length × segments). We also cap pattern/URL length symmetrically with the DNR matcher
+  // (UserScriptInstallRouter: regexFilter ≤ 1000). Treat every stored filter pattern as hostile.
   var __bbMatchPatternCache = {};
+  var __BB_MP_MAX_PATTERN = 1000;   // symmetric with UserScriptInstallRouter's regexFilter cap
+  var __BB_MP_MAX_URL = 4096;
   function __bbCompileMatchPattern(pattern) {
     function esc(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
-    if (pattern === '<all_urls>') { return /^(?:https?|file|ftp|ws|wss):\/\//i; }
+    if (typeof pattern !== 'string' || pattern.length > __BB_MP_MAX_PATTERN) { return null; }
+    // `<all_urls>`: any supported scheme, any host, any path. segs:null ⇒ glob matches every path.
+    if (pattern === '<all_urls>') { return { prefixRe: /^(?:https?|file|ftp|ws|wss):\/\/[^/]*/i, segs: null }; }
     var m = /^(\*|[a-zA-Z][a-zA-Z0-9+.-]*):\/\/([^/]*)(\/.*)$/.exec(pattern);
     if (!m) { return null; }
     var scheme = m[1].toLowerCase(), host = m[2], path = m[3];
@@ -1760,13 +1772,37 @@
     else if (host.indexOf('*.') === 0) { hostRe = '(?:[^/]+\\.)?' + esc(host.slice(2)); }
     else if (host === '') { hostRe = ''; }
     else { hostRe = esc(host); }
-    var pathRe = path.split('*').map(esc).join('.*');
-    try { return new RegExp('^' + schemeRe + '://' + hostRe + pathRe + '$', 'i'); } catch (e) { return null; }
+    // prefixRe matches `scheme://host` only (no `$`); the remaining URL tail is the path, glob-matched
+    // below. `[^/]+`/`(?:[^/]+\.)?` are the only quantifiers ⇒ no super-linear backtracking on the prefix.
+    var prefixRe;
+    try { prefixRe = new RegExp('^' + schemeRe + '://' + hostRe, 'i'); } catch (e) { return null; }
+    return { prefixRe: prefixRe, segs: path.split('*') };
+  }
+  // Linear glob: do the literal `segs` (split of the path on `*`) appear in order in `s`, with the first
+  // anchored at the start and the last at the end? No backtracking — left-to-right indexOf scan.
+  function __bbGlobMatch(segs, s) {
+    if (!segs) { return true; }                          // <all_urls>: any path
+    if (segs.length === 1) { return s === segs[0]; }     // no wildcard ⇒ exact path
+    if (s.lastIndexOf(segs[0], 0) !== 0) { return false; }   // must start with the leading literal
+    var idx = segs[0].length;
+    for (var i = 1; i < segs.length - 1; i++) {
+      var found = s.indexOf(segs[i], idx);
+      if (found < 0) { return false; }
+      idx = found + segs[i].length;
+    }
+    var last = segs[segs.length - 1];
+    if (last === '') { return true; }                    // trailing `*` ⇒ anything remaining is fine
+    var at = s.length - last.length;
+    return at >= idx && s.indexOf(last, at) === at;       // must end with the trailing literal
   }
   function __bbMatchPattern(pattern, url) {
+    if (typeof url !== 'string' || !url || url.length > __BB_MP_MAX_URL) { return false; }
     if (!(pattern in __bbMatchPatternCache)) { __bbMatchPatternCache[pattern] = __bbCompileMatchPattern(pattern); }
-    var re = __bbMatchPatternCache[pattern];
-    return re ? re.test(url) : false;
+    var c = __bbMatchPatternCache[pattern];
+    if (!c) { return false; }
+    var m = c.prefixRe.exec(url);
+    if (!m || m.index !== 0) { return false; }
+    return __bbGlobMatch(c.segs, url.slice(m[0].length));
   }
   var __bbWebRequestSeq = 0;
   // Called from native when a main-frame `.user.js` navigation should be offered to a webRequest-based
@@ -1790,6 +1826,19 @@
       catch (e) { __bb_log('error', 'webRequest.onBeforeRequest dispatch threw: ' + (e && e.message ? e.message : e)); }
     }
     return handled;
+  };
+  // Detection-only twin of the dispatcher: does this worker have a main-frame onBeforeRequest listener
+  // whose filter matches `url`? Used to list this extension as an install TARGET without invoking the
+  // listener (which would start the install). No side effects.
+  globalThis.__bbHasWebRequestUserScriptListener = function (url) {
+    if (typeof url !== 'string' || !url) { return false; }
+    for (var i = 0; i < __bbWebRequestOnBeforeRequest.length; i++) {
+      var entry = __bbWebRequestOnBeforeRequest[i];
+      if (entry.types && entry.types.indexOf('main_frame') < 0) { continue; }
+      if (!entry.urls || entry.urls.length === 0) { return true; }
+      for (var j = 0; j < entry.urls.length; j++) { if (__bbMatchPattern(entry.urls[j], url)) { return true; } }
+    }
+    return false;
   };
 
   var webRequest = {

@@ -57,9 +57,10 @@ enum UserScriptInstallRouter {
             let caseSensitive = (condition["isUrlFilterCaseSensitive"] as? Bool) ?? false
 
             if let regexFilter = condition["regexFilter"] as? String, !regexFilter.isEmpty {
-                // Defense-in-depth against a pathological pattern: skip absurdly long regexFilters. The
-                // real ReDoS guard is that the caller runs this matcher OFF the main actor with a timeout
-                // (userScriptInstallRedirect), so even catastrophic backtracking can't freeze the UI.
+                // ReDoS defense-in-depth: a manager's regexFilter is untrusted. Two guards — (1) skip
+                // absurdly long patterns (cap below), and (2) the only caller runs this matcher OFF the main
+                // actor (Task.detached in userScriptInstallTargets), so even catastrophic backtracking can't
+                // freeze the UI — it burns a background thread the navigation can outlive.
                 guard regexFilter.count <= 1000 else { continue }
                 let options: NSRegularExpression.Options = caseSensitive ? [] : [.caseInsensitive]
                 guard let re = try? NSRegularExpression(pattern: regexFilter, options: options) else { continue }

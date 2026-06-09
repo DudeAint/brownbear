@@ -228,6 +228,21 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
         }
     }
 
+    /// Detection-only: does this worker have a main-frame `webRequest.onBeforeRequest` listener whose
+    /// filter matches `url`? Used to list the extension as an install TARGET without invoking the listener.
+    func hasUserScriptWebRequestListener(url: String) async -> Bool {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            queue.async { [self] in
+                guard isAlive, let context else { continuation.resume(returning: false); return }
+                context.setObject(url, forKeyedSubscript: "__bbPendingUserScriptURL" as NSString)
+                let result = context.evaluateScript(
+                    "(typeof __bbHasWebRequestUserScriptListener === 'function')"
+                    + " ? !!__bbHasWebRequestUserScriptListener(__bbPendingUserScriptURL) : false")
+                continuation.resume(returning: result?.toBool() ?? false)
+            }
+        }
+    }
+
     /// Fire chrome.storage.onChanged for a change set originating anywhere.
     func dispatchStorageChanged(area: String, changes: [String: [String: String]]) {
         let changesJSON = jsonString(changes)

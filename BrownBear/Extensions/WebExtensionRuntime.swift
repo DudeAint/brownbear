@@ -146,17 +146,23 @@ class WebExtensionRuntime {
         contexts[extensionID]?.fireActionClicked(tab: tab)
     }
 
-    /// Offer a main-frame `.user.js` navigation to a webRequest-based userscript manager (Violentmonkey):
-    /// dispatch a synthetic `webRequest.onBeforeRequest` into each running worker; the first whose
-    /// onBeforeRequest filter matches runs its own confirm flow and opens its confirm page. Returns
-    /// whether any worker took it (so the browser can skip its native install card). The navigation
-    /// delegate calls this only AFTER the declarativeNetRequest hand-off declines.
-    func handleUserScriptNavigation(url: URL) async -> Bool {
+    /// The ids of running workers that CLAIM this `.user.js` via a webRequest.onBeforeRequest filter
+    /// (detection only — does not invoke the listener). For listing install targets in the picker.
+    func userScriptWebRequestManagerIDs(url: URL) async -> [String] {
         let urlString = url.absoluteString
-        for context in contexts.values {
-            if await context.dispatchUserScriptWebRequest(url: urlString) { return true }
+        var ids: [String] = []
+        // Sorted iteration: `contexts` is a Dictionary (undefined order); the picker/route order must be
+        // deterministic so the offered target doesn't flip between runs.
+        for extID in contexts.keys.sorted() {
+            guard let context = contexts[extID] else { continue }
+            if await context.hasUserScriptWebRequestListener(url: urlString) { ids.append(extID) }
         }
-        return false
+        return ids
+    }
+
+    /// Dispatch a `.user.js` navigation to ONE webRequest-based manager's listener (picker routing).
+    func dispatchUserScript(extensionID: String, url: URL) async -> Bool {
+        await contexts[extensionID]?.dispatchUserScriptWebRequest(url: url.absoluteString) ?? false
     }
 
     /// Deliver chrome.contextMenus.onClicked to an extension's background worker. No-op if the
