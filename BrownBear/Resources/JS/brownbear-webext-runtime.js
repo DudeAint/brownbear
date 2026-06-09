@@ -861,7 +861,23 @@
       var fn = _Function("chrome", "browser", "window", "self", "globalThis", data.js + "\n" + sourceURL);
       fn.call(W, chrome, chrome, W, W, W);
     } catch (e) {
-      if (_console.error) { _console.error("[BrownBear ext] content script error:", e); }
+      // A thrown content/registered-userScript script (e.g. a manager's ISOLATED-world broker like
+      // ScriptCat's scripting.js) would otherwise vanish into the page console — the runtime only forwards
+      // UNCAUGHT window errors. Surface it on the Logs tab so a broker that dies before it can message the
+      // worker is diagnosable, not silently dead.
+      reportContentError(e, data.token);
+    }
+  }
+
+  // Forward a caught content-world error to the Logs tab (the page console isn't captured for the isolated
+  // world). Best-effort: needs the native bridge + a token to attribute the line to the extension.
+  function reportContentError(e, token) {
+    var msg = (e && e.stack) ? e.stack : ((e && e.message) ? e.message : String(e));
+    if (_console.error) { _console.error("[BrownBear ext] content script error:", e); }
+    var tok = token || __bbLogToken;
+    if (handler && tok) {
+      try { bridge("runtime.pageLog", { level: "error", message: "[content] " + msg }, tok).catch(function () {}); }
+      catch (ignored) {}
     }
   }
 
@@ -893,7 +909,23 @@
         // A page-world (MAIN) or USER_SCRIPT script means a cross-world manager is present; stand up the
         // isolated half of the `performance` bridge before ANY of its scripts (incl. the ISOLATED broker)
         // dispatch, so the eventFlag rendezvous can cross worlds.
-        if (hasCrossWorld) { ensureIsoPerfBridge(); }
+        if (hasCrossWorld) {
+          ensureIsoPerfBridge();
+          // Diagnostic (Logs tab): a userscript manager (ScriptCat/Tampermonkey) only runs if its ISOLATED
+          // broker + MAIN inject + USER_SCRIPT content scripts are all injected. Surface what we actually
+          // got so a registration/resolution gap (e.g. the broker never returned) is visible, not silent.
+          try {
+            var worlds = scripts.map(function (s) {
+              return (s.world || "ISOLATED") + ":" + s.runAt + ":" + ((s.js && s.js.length) || 0) + "b";
+            });
+            var tok = scripts[0] && scripts[0].token;
+            if (handler && tok) {
+              bridge("runtime.pageLog", { level: "info",
+                message: "[content] inject " + scripts.length + " ext script(s): " + worlds.join(", ") }, tok)
+                .catch(function () {});
+            }
+          } catch (ignored) {}
+        }
         if (starts.length) { runAll(starts); }
         if (ends.length) { whenDOMReady(function () { runAll(ends); }); }
         if (idles.length) { whenLoaded(function () { runAll(idles); }); }
