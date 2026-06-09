@@ -200,8 +200,8 @@
         for (var i = 0; i < buffer.length; i++) { bridge("port.postMessage", { portId: id, message: buffer[i] }, token); }
         buffer = [];
       };
-      port._fireMessage = function (m) { for (var i = 0; i < msgListeners.length; i++) { try { msgListeners[i](m, port); } catch (e) {} } };
-      port._fireDisconnect = function () { disconnected = true; for (var i = 0; i < discListeners.length; i++) { try { discListeners[i](port); } catch (e) {} } };
+      port._fireMessage = function (m) { for (var i = 0; i < msgListeners.length; i++) { try { msgListeners[i](m, port); } catch (e) { reportContentError(e, token); } } };
+      port._fireDisconnect = function () { disconnected = true; for (var i = 0; i < discListeners.length; i++) { try { discListeners[i](port); } catch (e) { reportContentError(e, token); } } };
       return port;
     }
     function runtimeConnect(connectInfo) {
@@ -685,7 +685,7 @@
         var port = makePort(typeof name === "string" ? name : "", sender || null);
         port._bindId(portId);
         for (var i = 0; i < connectListeners.length; i++) {
-          try { connectListeners[i](port); } catch (e) { if (_console.error) { _console.error("[BrownBear ext] onConnect:", e); } }
+          try { connectListeners[i](port); } catch (e) { reportContentError(e, token); }
         }
       },
       onPortMessage: function (portId, message) {
@@ -854,7 +854,7 @@
       }
       return injectPageWorldCode(payload);
     } catch (e) {
-      if (_console.error) { _console.error("[BrownBear ext] MAIN-world inject error:", e); }
+      reportContentError(e, null);   // no token here; reportContentError falls back to __bbLogToken
       return false;
     }
   }
