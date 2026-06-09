@@ -54,17 +54,52 @@ final class WebExtensionSchemeHandler: NSObject, WKURLSchemeHandler {
         if path.isEmpty { path = "index.html" }
         let resolvedPath = path
 
+        // A page module graph we pre-linked for this extension is served from memory under a synthetic
+        // `__bb-page-bundle/<hash>.js` path (no packaged file). This must run BEFORE the store read so the
+        // generated bundle, which has no file on disk, resolves. See WebExtensionPageModuleBundler.
+        if let bundleJS = WebExtensionPageModuleBundler.cachedBundle(extensionID: extensionID, path: resolvedPath) {
+            liveTasks.remove(key)
+            let data = Data(bundleJS.utf8)
+            let headers = Self.responseHeaders(path: resolvedPath, dataCount: data.count,
+                                               extensionID: extensionID, csp: nil)
+            if let response = HTTPURLResponse(url: url, statusCode: 200,
+                                              httpVersion: "HTTP/1.1", headerFields: headers) {
+                urlSchemeTask.didReceive(response)
+                urlSchemeTask.didReceive(data)
+                urlSchemeTask.didFinish()
+            } else {
+                logResourceFailure(level: "error", reason: "bad response for generated bundle \(resolvedPath)")
+                urlSchemeTask.didFailWithError(BrownBearError.bridgeRejected("bad response"))
+            }
+            return
+        }
+
         let isHTMLPage = Self.mimeType(forPath: resolvedPath).hasPrefix("text/html")
+        let store = self.store
         Task { [weak self] in
             guard let self else { return }
-            let data = await self.store.file(extensionID: extensionID, path: resolvedPath)
+            let data = await store.file(extensionID: extensionID, path: resolvedPath)
             // Only HTML documents carry the page CSP (it governs the document + its subresources); fetch
             // the declared policy lazily so JS/CSS/image responses don't touch the store actor twice.
-            let csp = isHTMLPage ? await self.store.ext(for: extensionID)?.manifest?.contentSecurityPolicy : nil
+            let csp = isHTMLPage ? await store.ext(for: extensionID)?.manifest?.contentSecurityPolicy : nil
+            // If this HTML page loads ES-module scripts (which WKWebView won't run over our custom scheme),
+            // pre-link them into a same-origin classic bundle and serve the rewritten HTML; nil falls back
+            // to the original bytes. Done off the main thread (this Task), before delivery.
+            var payload = data
+            if isHTMLPage, let data, let htmlString = String(data: data, encoding: .utf8) {
+                let rewritten = WebExtensionPageModuleBundler.rewrittenHTML(
+                    extensionID: extensionID, htmlPath: resolvedPath, html: htmlString,
+                    moduleSource: { store.fileSync(extensionID: extensionID, path: $0) },
+                    log: { level, message in
+                        Task { await BrownBearServices.shared.webExtensionRuntime
+                            .logFromPage(extensionID: extensionID, level: level, message: message) }
+                    })
+                if let rewritten { payload = Data(rewritten.utf8) }
+            }
             await MainActor.run {
                 guard self.liveTasks.contains(key) else { return }   // stopped while we were reading
                 self.liveTasks.remove(key)
-                guard let data else {
+                guard let data = payload else {
                     // A missing packaged resource is the canonical blank-popup / dead-options cause and the
                     // ONE place the failed path is known for certain (a missing subresource fires no JS error
                     // event, so nothing else can surface it). Log it so the Logs tab names the file.
