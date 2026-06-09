@@ -626,6 +626,16 @@
       extension: {
         getURL: getURL,
         inIncognitoContext: false
+      },
+      // chrome.dom.openOrClosedShadowRoot(el) — content scripts (e.g. uBO Lite's cosmetic filtering,
+      // 12 call sites) use it to reach an element's shadow root for selector matching. WebKit exposes
+      // OPEN shadow roots via element.shadowRoot; CLOSED ones are inaccessible to any script on WebKit
+      // (no equivalent of Chrome's privileged access), so we return the open root or null instead of
+      // throwing "chrome.dom is undefined" and killing the content script.
+      dom: {
+        openOrClosedShadowRoot: function (element) {
+          try { return (element && element.shadowRoot) || null; } catch (e) { return null; }
+        }
       }
     };
 
