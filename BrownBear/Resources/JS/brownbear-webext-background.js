@@ -2418,8 +2418,15 @@
   var notificationClosedListeners = [];
   var notificationButtonListeners = [];
   function notificationsCall(method, args) {
-    return new Promise(function (resolve) {
-      __bb_notifications(method, JSON.stringify(args || {}), function (resJSON) { resolve(parseJSON(resJSON)); });
+    return new Promise(function (resolve, reject) {
+      __bb_notifications(method, JSON.stringify(args || {}), function (resJSON) {
+        var r = parseJSON(resJSON);
+        if (r && typeof r === 'object' && typeof r.__bbError === 'string') {
+          // Native failed (was a silent phantom-success null id) — log + reject so it's diagnosable.
+          __bb_log('warn', 'chrome.notifications.' + method + ' failed: ' + r.__bbError);
+          reject(new Error(r.__bbError));
+        } else { resolve(r); }
+      });
     });
   }
   var notifications = {
@@ -2568,7 +2575,7 @@
         } else if (returned && typeof returned.then === 'function') {
           willRespondAsync = true;
           (function (promise) {
-            promise.then(function (v) { sendResponse(v); }, function () { sendResponse(undefined); });
+            promise.then(function (v) { sendResponse(v); }, function (e) { __bb_log('error', 'onMessage async listener rejected: ' + (e && e.message ? e.message : e)); sendResponse(undefined); });
           })(returned);
         }
         if (responded) { break; }
@@ -2602,7 +2609,7 @@
         if (returned === true) { willRespondAsync = true; }
         else if (returned && typeof returned.then === 'function') {
           willRespondAsync = true;
-          (function (promise) { promise.then(function (v) { sendResponse(v); }, function () { sendResponse(undefined); }); })(returned);
+          (function (promise) { promise.then(function (v) { sendResponse(v); }, function (e) { __bb_log('error', 'onMessage async listener rejected: ' + (e && e.message ? e.message : e)); sendResponse(undefined); }); })(returned);
         }
         if (responded) { break; }
       }

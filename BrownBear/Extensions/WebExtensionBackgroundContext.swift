@@ -96,7 +96,14 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
 
             context.exceptionHandler = { [weak self] _, value in
                 guard let self else { return }
-                self.logSink(self.makeLog(.error, "uncaught: \(value?.toString() ?? "unknown exception")"))
+                var message = "uncaught: \(value?.toString() ?? "unknown exception")"
+                // JSC error values carry a `.stack`; toString() alone drops it (the same class as the
+                // content-side JSC-omits-the-stack gap). Append it so a background throw is pinpointable.
+                if let stack = value?.objectForKeyedSubscript("stack")?.toString(),
+                   !stack.isEmpty, stack != "undefined" {
+                    message += "\n\(stack)"
+                }
+                self.logSink(self.makeLog(.error, message))
             }
 
             installNatives(into: context)
@@ -707,7 +714,9 @@ extension WebExtensionBackgroundContext {
                 return NSNull()
             }
         } catch {
-            return NSNull()
+            // Return an error marker (was a silent NSNull phantom-success); the JS notifications shim
+            // unwraps {__bbError} to reject + log, so a failing chrome.notifications call is diagnosable.
+            return ["__bbError": error.localizedDescription]
         }
     }
 
