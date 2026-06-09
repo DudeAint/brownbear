@@ -1477,6 +1477,37 @@
     }
     return message;
   }
+  // The device UI language (BCP-47, e.g. "en-US"), from native. chrome.i18n.getUILanguage returns it;
+  // getAcceptLanguages derives a short ordered list (["en-US","en"]) from it.
+  function uiLanguage() {
+    return (typeof globalThis.__bbLanguage === 'string' && globalThis.__bbLanguage) ? globalThis.__bbLanguage : 'en-US';
+  }
+  function acceptLanguages() {
+    var lang = uiLanguage();
+    var base = lang.indexOf('-') >= 0 ? lang.split('-')[0] : null;
+    return base && base !== lang ? [lang, base] : [lang];
+  }
+  var i18n = {
+    getMessage: getMessage,
+    getUILanguage: function () { return uiLanguage(); },
+    getAcceptLanguages: function (cb) {
+      var langs = acceptLanguages();
+      if (typeof cb === 'function') { cb(langs); return undefined; }
+      return Promise.resolve(langs);   // MV3 Promise form
+    },
+    // chrome.i18n.detectLanguage — native NLLanguageRecognizer (returns the dominant languages of `text`
+    // with confidence percentages, matching Chrome's CLD shape).
+    detectLanguage: function (text, cb) {
+      var p = new Promise(function (resolve) {
+        __bb_i18n_detect(String(text == null ? '' : text), function (resJSON) {
+          var r = parseJSON(resJSON);
+          resolve(r && r.languages ? r : { isReliable: false, languages: [] });
+        });
+      });
+      if (typeof cb === 'function') { p.then(function (v) { cb(v); }); return undefined; }
+      return p;
+    }
+  };
 
   // ---------------------------------------------------------------- chrome.runtime
 
@@ -1620,6 +1651,75 @@
     getAll: function (cb) { if (typeof cb === 'function') { cb([]); } }
   };
 
+  // chrome.idle — iOS can't observe global user input, so queryState maps app/device state via native
+  // (locked when data-protected, active when the app is foreground-active, else idle). onStateChanged
+  // fires on app foreground/background (and lock/unlock) transitions, pushed from native.
+  var idleStateListeners = [];
+  var idle = {
+    IdleState: { ACTIVE: 'active', IDLE: 'idle', LOCKED: 'locked' },
+    queryState: function (detectionIntervalInSeconds, cb) {
+      var p = new Promise(function (resolve) {
+        __bb_idle('queryState', JSON.stringify({ interval: detectionIntervalInSeconds }), function (resJSON) {
+          var r = parseJSON(resJSON);
+          resolve(typeof r === 'string' ? r : 'active');
+        });
+      });
+      if (typeof cb === 'function') { p.then(function (v) { cb(v); }); return undefined; }
+      return p;
+    },
+    setDetectionInterval: function (intervalInSeconds, cb) {
+      __bb_idle('setDetectionInterval', JSON.stringify({ interval: intervalInSeconds }),
+        function () { if (typeof cb === 'function') { cb(); } });
+    },
+    getAutoLockDelay: function (cb) {
+      if (typeof cb === 'function') { cb(0); return undefined; }
+      return Promise.resolve(0);
+    },
+    onStateChanged: makeEvent(idleStateListeners)
+  };
+
+  // chrome.downloads — native runs the transfer (URLSession) into the app's Downloads folder and fires
+  // onCreated/onChanged/onErased back here. The "downloads" permission gate is enforced natively.
+  var downloadCreatedListeners = [], downloadChangedListeners = [], downloadErasedListeners = [];
+  function downloadsCall(method, args) {
+    return new Promise(function (resolve, reject) {
+      __bb_downloads(method, JSON.stringify(args || {}), function (resJSON) {
+        var r = parseJSON(resJSON) || {};
+        if (r.error) { var e = new Error(r.error); e.__bbLastError = true; reject(e); } else { resolve(r); }
+      });
+    });
+  }
+  function settleDownloads(promise, cb, pick) {
+    var p = promise.then(pick);
+    if (typeof cb === 'function') {
+      p.then(function (v) { cb(v); }, function (e) {
+        if (e && e.__bbLastError) { _bbLastError = { message: e.message }; }
+        try { cb(undefined); } finally { _bbLastError = null; }
+      });
+      return undefined;
+    }
+    return p;
+  }
+  var downloads = {
+    download: function (options, cb) {
+      return settleDownloads(downloadsCall('download', options || {}), cb, function (r) { return r.downloadId; });
+    },
+    search: function (query, cb) {
+      return settleDownloads(downloadsCall('search', query || {}), cb, function (r) { return r.items || []; });
+    },
+    cancel: function (id, cb) { return settleDownloads(downloadsCall('cancel', { id: id }), cb, function () { return undefined; }); },
+    pause: function (id, cb) { return settleDownloads(downloadsCall('pause', { id: id }), cb, function () { return undefined; }); },
+    resume: function (id, cb) { return settleDownloads(downloadsCall('resume', { id: id }), cb, function () { return undefined; }); },
+    erase: function (query, cb) { return settleDownloads(downloadsCall('erase', query || {}), cb, function (r) { return r.erased || []; }); },
+    removeFile: function (id, cb) { return settleDownloads(downloadsCall('removeFile', { id: id }), cb, function () { return undefined; }); },
+    // No iOS file-manager surface to drive these — accept and no-op so callers don't throw.
+    open: function () {}, show: function () {}, showDefaultFolder: function () {}, setShelfEnabled: function () {},
+    acceptDanger: function (id, cb) { if (typeof cb === 'function') { cb(); return undefined; } return Promise.resolve(); },
+    onCreated: makeEvent(downloadCreatedListeners),
+    onChanged: makeEvent(downloadChangedListeners),
+    onErased: makeEvent(downloadErasedListeners)
+  };
+
   // ---------------------------------------------------------------- chrome.action / chrome.browserAction
   // Backed by native WebExtensionActionState via __bb_action; onClicked is delivered from the browser
   // (overflow-menu tap on an action with no popup) through __bbBg.dispatchActionClicked. setIcon
@@ -1674,6 +1774,22 @@
     onClicked: makeEvent(actionClickedListeners)
   };
 
+  // chrome.pageAction (MV2): iOS has no per-tab page-action button, so show/hide/isShown are no-ops, but
+  // the title/icon/popup setters and onClicked alias chrome.action so an MV2 extension that drives a page
+  // action still configures its toolbar item and receives clicks (an extension uses pageAction OR action,
+  // not both, so sharing the click listeners is safe).
+  var pageAction = {
+    show: function (_tabId, cb) { if (typeof cb === 'function') { cb(); return undefined; } return Promise.resolve(); },
+    hide: function (_tabId, cb) { if (typeof cb === 'function') { cb(); return undefined; } return Promise.resolve(); },
+    isShown: function (_details, cb) { if (typeof cb === 'function') { cb(false); return undefined; } return Promise.resolve(false); },
+    setTitle: actionSetter('setTitle'),
+    getTitle: actionGetter('getTitle'),
+    setIcon: actionSetIcon,
+    setPopup: actionSetter('setPopup'),
+    getPopup: function (_details, cb) { if (typeof cb === 'function') { cb(''); return undefined; } return Promise.resolve(''); },
+    onClicked: makeEvent(actionClickedListeners)
+  };
+
   // ---------------------------------------------------------------- chrome.tabs
 
   function settleBg(promise, cb) {
@@ -1697,6 +1813,32 @@
   };
   var tabs = {
     query: function (q, cb) { return settleBg(tabsCall('query', { query: q || {} }), cb); },
+    captureVisibleTab: function () {
+      // (windowId?, options?, callback?) — windowId is ignored (single window on iOS). Returns a data URL.
+      var args = Array.prototype.slice.call(arguments);
+      var cb = (args.length && typeof args[args.length - 1] === 'function') ? args.pop() : null;
+      var options = null;
+      for (var i = 0; i < args.length; i++) { if (args[i] && typeof args[i] === 'object') { options = args[i]; } }
+      options = options || {};
+      var p = new Promise(function (resolve, reject) {
+        __bb_capture_visible_tab(JSON.stringify({
+          format: options.format || 'png',
+          quality: typeof options.quality === 'number' ? options.quality : 92
+        }), function (resJSON) {
+          var r = parseJSON(resJSON);
+          if (r && r.dataUrl) { resolve(r.dataUrl); }
+          else { var e = new Error((r && r.error) || 'captureVisibleTab failed'); e.__bbLastError = true; reject(e); }
+        });
+      });
+      if (typeof cb === 'function') {
+        p.then(function (v) { cb(v); }, function (e) {
+          if (e && e.__bbLastError) { _bbLastError = { message: e.message }; }
+          try { cb(undefined); } finally { _bbLastError = null; }
+        });
+        return undefined;
+      }
+      return p;
+    },
     get: function (id, cb) { return settleBg(tabsCall('get', { tabId: id }), cb); },
     getCurrent: function (cb) { return settleBg(tabsCall('getCurrent', {}), cb); },
     create: function (props, cb) { props = props || {}; return settleBg(tabsCall('create', { url: props.url, active: props.active !== false }), cb); },
@@ -2250,13 +2392,16 @@
     offscreen: offscreen,
     alarms: alarms,
     commands: commands,
+    idle: idle,
+    downloads: downloads,
     contextMenus: contextMenus,
     menus: contextMenus,
     action: action,
     browserAction: action,
+    pageAction: pageAction,
     tabs: tabs,
     scripting: scripting,
-    i18n: { getMessage: getMessage, getUILanguage: function () { return 'en-US'; }, getAcceptLanguages: function (cb) { if (typeof cb === 'function') { cb(['en-US', 'en']); } } },
+    i18n: i18n,
     extension: { getURL: getURL }
   };
 
@@ -2372,6 +2517,25 @@
       for (var i = 0; i < contextMenuClickedListeners.length; i++) {
         try { contextMenuClickedListeners[i](info, tab); }
         catch (e) { __bb_log('error', 'contextMenus.onClicked listener threw: ' + (e && e.message ? e.message : e)); }
+      }
+    },
+
+    dispatchIdleStateChanged: function (state) {
+      for (var i = 0; i < idleStateListeners.length; i++) {
+        try { idleStateListeners[i](state); }
+        catch (e) { __bb_log('error', 'idle.onStateChanged listener threw: ' + (e && e.message ? e.message : e)); }
+      }
+    },
+
+    dispatchDownloadEvent: function (kind, payloadJSON) {
+      var payload = parseJSON(payloadJSON);
+      var list = kind === 'onCreated' ? downloadCreatedListeners
+        : kind === 'onChanged' ? downloadChangedListeners
+        : kind === 'onErased' ? downloadErasedListeners : null;
+      if (!list) { return; }
+      for (var i = 0; i < list.length; i++) {
+        try { list[i](payload); }
+        catch (e) { __bb_log('error', 'downloads.' + kind + ' listener threw: ' + (e && e.message ? e.message : e)); }
       }
     },
 

@@ -46,6 +46,70 @@ enum WebExtensionFetchSecurity {
         URLSession(configuration: .default, delegate: RedirectGuard(hostPatterns: hostPatterns), delegateQueue: nil)
     }
 
+    /// Redirect guard for chrome.downloads. Unlike the host_permissions-allowlisted fetch guard, downloads
+    /// may target any PUBLIC http(s) host (Chrome does), so this guard fails closed on the SSRF vectors:
+    /// a redirect to a non-http(s) scheme, or to a loopback/private/link-local host. It also strips the
+    /// `Authorization`/`Cookie` request headers on a CROSS-ORIGIN redirect so worker-supplied credentials
+    /// can't be forwarded to the redirect target.
+    final class DownloadRedirectGuard: NSObject, URLSessionTaskDelegate {
+        func urlSession(_ session: URLSession, task: URLSessionTask,
+                        willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+                        completionHandler: @escaping (URLRequest?) -> Void) {
+            guard let url = request.url, let scheme = url.scheme?.lowercased(),
+                  scheme == "http" || scheme == "https", !isBlockedHost(url.host) else {
+                completionHandler(nil)   // non-http(s) or internal target → stop following (SSRF guard)
+                return
+            }
+            // Strip credentials when the redirect crosses origin (scheme+host+port).
+            var forwarded = request
+            if !sameOrigin(task.originalRequest?.url, url) {
+                forwarded.setValue(nil, forHTTPHeaderField: "Authorization")
+                forwarded.setValue(nil, forHTTPHeaderField: "Cookie")
+            }
+            completionHandler(forwarded)
+        }
+
+        private func sameOrigin(_ a: URL?, _ b: URL?) -> Bool {
+            guard let a, let b else { return false }
+            return a.scheme?.lowercased() == b.scheme?.lowercased()
+                && a.host?.lowercased() == b.host?.lowercased() && a.port == b.port
+        }
+    }
+
+    /// A per-download URLSession that fails closed on SSRF redirect targets. Invalidate after the task
+    /// settles (`finishTasksAndInvalidate`).
+    static func downloadGuardedSession() -> URLSession {
+        URLSession(configuration: .default, delegate: DownloadRedirectGuard(), delegateQueue: nil)
+    }
+
+    /// Whether `host` is a loopback / private / link-local / `.local` target an extension download must
+    /// not reach (SSRF). String-based (covers literal IPs + localhost/.local); DNS-rebinding to an
+    /// internal IP via a public hostname is out of scope here, as in the fetch guard.
+    static func isBlockedHost(_ host: String?) -> Bool {
+        guard var host = host?.lowercased(), !host.isEmpty else { return false }
+        if host.hasPrefix("[") && host.hasSuffix("]") { host = String(host.dropFirst().dropLast()) }  // IPv6 literal
+        if host == "localhost" || host.hasSuffix(".localhost") || host.hasSuffix(".local") { return true }
+        // IPv6 literal (contains a colon, so it can't be confused with a hostname like "fcdn.com"):
+        // loopback ::1, unique-local fc00::/7, link-local fe80::/10.
+        if host.contains(":") {
+            return host == "::1" || host.hasPrefix("fc") || host.hasPrefix("fd") || host.hasPrefix("fe8")
+                || host.hasPrefix("fe9") || host.hasPrefix("fea") || host.hasPrefix("feb")
+        }
+        // IPv4 literal in private/loopback/link-local ranges.
+        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
+        if parts.count == 4, let octets = try? parts.map({ (s) -> Int in
+            guard let n = Int(s), (0...255).contains(n) else { throw NSError(domain: "", code: 0) }
+            return n
+        }) {
+            switch (octets[0], octets[1]) {
+            case (127, _), (10, _), (192, 168), (169, 254): return true
+            case (172, let b) where (16...31).contains(b): return true
+            default: return false
+            }
+        }
+        return false
+    }
+
     /// Apply caller-supplied request headers, dropping any whose name isn't a valid HTTP token or whose
     /// value contains CR/LF/NUL — closing the header-injection / request-smuggling hole (URLRequest's
     /// setValue does NOT reject CRLF).

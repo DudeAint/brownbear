@@ -111,6 +111,28 @@ final class DownloadManager: NSObject, ObservableObject {
               let index = downloads.firstIndex(where: { $0.id == id }) else { return }
         apply(&downloads[index])
     }
+
+    // MARK: - Extension-initiated downloads (chrome.downloads)
+
+    /// A unique destination in the app's Downloads directory for an extension download with the given
+    /// suggested name (e.g. "file.pdf" → "file.pdf", then "file (1).pdf"). The bytes are written by the
+    /// chrome.downloads bridge's own URLSession task; this only reserves the path.
+    func extensionDownloadDestination(suggestedName: String) -> URL {
+        uniqueDestination(in: downloadsDirectory(), fileName: suggestedName)
+    }
+
+    /// Surface an extension-initiated download in the Downloads list (chrome.downloads.download). The
+    /// bridge owns the URLSession task and drives state via updateExtensionDownload.
+    func insertExtensionDownload(_ item: DownloadItem) {
+        downloads.insert(item, at: 0)
+        onDownloadStarted?()
+    }
+
+    /// Update an extension download's UI row by id (progress / finished / failed). No-op if absent.
+    func updateExtensionDownload(id: UUID, _ apply: (inout DownloadItem) -> Void) {
+        guard let index = downloads.firstIndex(where: { $0.id == id }) else { return }
+        apply(&downloads[index])
+    }
 }
 
 // MARK: - WKDownloadDelegate

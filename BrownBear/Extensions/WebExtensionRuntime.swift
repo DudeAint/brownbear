@@ -13,6 +13,7 @@
 //
 
 import Foundation
+import UIKit
 
 // Not `final`: WebExtensionEventEmitterTests subclasses it (SpyRuntime) to capture the event fan-out
 // without booting a JSContext. dispatchEventToAll is likewise overridable.
@@ -36,6 +37,10 @@ class WebExtensionRuntime {
     /// is the app-lifetime object that already holds `host` (the view container) and fans runtime
     /// messages to every page — an offscreen document is just another message-receiving page.
     let offscreenManager = WebExtensionOffscreenManager()
+
+    /// chrome.downloads state (per-extension download records + URLSession tasks). Owned here so it can
+    /// fan onCreated/onChanged/onErased into the owning worker and be torn down on unload.
+    let downloadsManager = WebExtensionDownloadsManager()
 
     /// Live extension PAGES (popups/options) that want browser-pushed chrome.tabs/webNavigation
     /// events, held weakly so a dismissed page is skipped (and cleaned up) on the next fan-out.
@@ -94,8 +99,35 @@ class WebExtensionRuntime {
             forName: .brownBearExtensionNotificationEvent, object: nil, queue: .main) { [weak self] note in
             Task { @MainActor in self?.handleNotificationEvent(note) }
         })
+        // chrome.idle.onStateChanged: app foreground/background + device lock/unlock drive the idle state
+        // (iOS can't observe true user idle). Coalesced so only real transitions fire. The lock
+        // notification fires just before lock while applicationState is still .active, so we force the
+        // "locked" state from the NOTIFICATION rather than recomputing (which would race the state change).
+        let lockName = UIApplication.protectedDataWillBecomeUnavailableNotification
+        for name: NSNotification.Name in [UIApplication.didBecomeActiveNotification,
+                                          UIApplication.willResignActiveNotification,
+                                          UIApplication.didEnterBackgroundNotification,
+                                          UIApplication.protectedDataDidBecomeAvailableNotification,
+                                          lockName] {
+            observers.append(NotificationCenter.default.addObserver(
+                forName: name, object: nil, queue: .main) { [weak self] note in
+                let forced = note.name == lockName ? "locked" : nil
+                Task { @MainActor in self?.pushIdleStateIfChanged(forced: forced) }
+            })
+        }
 
         Task { await reload() }
+    }
+
+    /// Deliver chrome.idle.onStateChanged to every running worker when the state changes. `forced` pins
+    /// the state for a notification whose meaning is unambiguous (lock), avoiding a recompute that races
+    /// the underlying state transition; otherwise we recompute from app/device condition.
+    private var lastIdleState: String?
+    private func pushIdleStateIfChanged(forced: String? = nil) {
+        let state = forced ?? WebExtensionBackgroundContext.currentIdleState()
+        guard state != lastIdleState else { return }
+        lastIdleState = state
+        for context in contexts.values { context.fireIdleStateChanged(state) }
     }
 
     // MARK: - Message bus
@@ -177,6 +209,35 @@ class WebExtensionRuntime {
     /// chrome.offscreen.closeDocument — returns false if there was no document to close.
     func closeOffscreenDocument(extensionID: String) -> Bool {
         offscreenManager.closeDocument(extensionID: extensionID)
+    }
+
+    // MARK: - chrome.downloads
+
+    func downloadsDownload(extensionID: String, options: [String: Any]) -> [String: Any] {
+        downloadsManager.download(extensionID: extensionID, options: options)
+    }
+    func downloadsSearch(extensionID: String, query: [String: Any]) -> [[String: Any]] {
+        downloadsManager.search(extensionID: extensionID, query: query)
+    }
+    func downloadsCancel(extensionID: String, id: Int) -> Bool {
+        downloadsManager.cancel(extensionID: extensionID, id: id)
+    }
+    func downloadsPause(extensionID: String, id: Int) -> Bool {
+        downloadsManager.pause(extensionID: extensionID, id: id)
+    }
+    func downloadsResume(extensionID: String, id: Int) -> Bool {
+        downloadsManager.resume(extensionID: extensionID, id: id)
+    }
+    func downloadsErase(extensionID: String, query: [String: Any]) -> [Int] {
+        downloadsManager.erase(extensionID: extensionID, query: query)
+    }
+    func downloadsRemoveFile(extensionID: String, id: Int) -> Bool {
+        downloadsManager.removeFile(extensionID: extensionID, id: id)
+    }
+
+    /// Deliver a chrome.downloads.onCreated/onChanged/onErased event to the owning extension's worker.
+    func fireDownloadEvent(extensionID: String, kind: String, payload: Any) {
+        contexts[extensionID]?.fireDownloadEvent(kind: kind, payload: JSONSanitize.string(payload))
     }
 
     /// chrome.runtime.getContexts — the extension's live contexts: its background worker plus every open
@@ -285,6 +346,8 @@ class WebExtensionRuntime {
             BrownBearServices.shared.webExtensionContextMenuStore.forgetExtension(id)
             // Close any offscreen document — its worker is gone, so the hidden web view must not linger.
             offscreenManager.close(extensionID: id)
+            // Cancel any in-flight downloads the gone worker started.
+            downloadsManager.close(extensionID: id)
         }
 
         // Spin up newly enabled extensions.
