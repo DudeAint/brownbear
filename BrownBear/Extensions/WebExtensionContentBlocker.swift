@@ -30,6 +30,10 @@ final class WebExtensionContentBlocker {
     private let dnrStore: WebExtensionDNRStore
     private let ruleListStore: WKContentRuleListStore?
     private(set) var reports: [Report] = []
+    /// declarativeNetRequest `redirect` rules for MAIN-FRAME navigations, across all enabled extensions,
+    /// priority-ordered. WKContentRuleList can't express `redirect`, so these are matched at navigation
+    /// time (see WebExtensionDNRRedirect + the nav delegate). Rebuilt on every refresh; read synchronously.
+    private(set) var redirectRules: [WebExtensionDNRRedirect.Rule] = []
     // Single-flight: refresh suspends at every await, and it's fired fire-and-forget from boot AND
     // every extension-change notification. Without coalescing, two overlapping refreshes interleave
     // their remove/add calls and install a stale rule-list set.
@@ -70,6 +74,7 @@ final class WebExtensionContentBlocker {
     private func performRefresh(into userContentController: WKUserContentController) async {
         var newReports: [Report] = []
         var compiledLists: [WKContentRuleList] = []
+        var newRedirect: [WebExtensionDNRRedirect.Rule] = []
         let exclusions = shieldsDisabledHosts
 
         // BrownBear's own built-in ad/tracker list, applied to every site EXCEPT the hosts where the
@@ -101,6 +106,10 @@ final class WebExtensionContentBlocker {
                 let merged = DeclarativeNetRequestRuleMerge.merge(staticRules: staticRules,
                                                                   dynamicRules: dynamicRules,
                                                                   sessionRules: sessionRules)
+                // Extract main-frame redirect rules BEFORE compiling — the content-rule-list compiler
+                // .skip()s `redirect`, so an extension whose ONLY rules are redirects compiles to nothing
+                // (result.isEmpty → continue below) but its redirect rules must still be applied at nav time.
+                newRedirect.append(contentsOf: WebExtensionDNRRedirect.redirectRules(from: merged, extensionID: ext.id))
                 let result = DeclarativeNetRequest.compile(rules: merged)
                 let identifier = "brownbear-dnr-\(ext.id)"
                 guard !result.isEmpty else {
@@ -134,6 +143,16 @@ final class WebExtensionContentBlocker {
         userContentController.removeAllContentRuleLists()
         for list in compiledLists { userContentController.add(list) }
         reports = newReports
+        // Highest priority first so the matcher's first-match-wins picks the top rule across extensions.
+        redirectRules = newRedirect.sorted { $0.priority > $1.priority }
+    }
+
+    /// The declarativeNetRequest main-frame redirect target for `url`, or nil if no enabled rule applies.
+    /// Synchronous (reads the cache rebuilt on every refresh), so the navigation delegate can consult it
+    /// without blocking the hot path. `extensionOrigin` maps an extension id to its chrome-extension origin.
+    func redirectTarget(for url: String, extensionOrigin: (String) -> String) -> URL? {
+        guard !redirectRules.isEmpty else { return nil }
+        return WebExtensionDNRRedirect.target(for: url, rules: redirectRules, extensionOrigin: extensionOrigin)
     }
 
     private func compile(store: WKContentRuleListStore,

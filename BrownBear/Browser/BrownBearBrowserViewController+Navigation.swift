@@ -37,6 +37,7 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         // The page's main document has started rendering — refresh the security indicator.
+        extensionRedirectDepth.removeValue(forKey: ObjectIdentifier(webView))   // a page committed: redirect chain ended
         if webView == installedWebView { refreshChrome() }
         applyStoredZoom(for: webView)
         if let id = extTabId(for: webView) {
@@ -158,6 +159,27 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
                 pendingNavTargets.removeValue(forKey: ObjectIdentifier(webView))
                 decisionHandler(.cancel, preferences)
                 handleUserScriptInstall(for: url)
+                return
+            }
+
+            // declarativeNetRequest main-frame redirect (the redirect-extension class: old-reddit-redirect,
+            // LibRedirect, privacy redirectors). WKContentRuleList can't express `redirect`, so we match the
+            // enabled extensions' redirect rules here and divert the navigation. Fail-safe by construction:
+            // only a top-level http(s) navigation, only when a rule definitively matches (the matcher is
+            // conservative — explicit main_frame, no domain conditions, no self/no-op target), and capped at
+            // a few redirects in a row so a misconfigured pair of rules can't loop. Anything else falls
+            // through to .allow — a normal navigation is never broken.
+            let key = ObjectIdentifier(webView)
+            if isMainFrame, scheme == "http" || scheme == "https",
+               (extensionRedirectDepth[key] ?? 0) < 5,
+               let redirectTo = injection.contentBlocker.redirectTarget(
+                   for: url.absoluteString,
+                   extensionOrigin: { "\(WebExtensionSchemeHandler.scheme)://\($0)" }) {
+                extensionRedirectDepth[key] = (extensionRedirectDepth[key] ?? 0) + 1
+                pendingNavTargets.removeValue(forKey: key)
+                decisionHandler(.cancel, preferences)
+                if let tab = tabManager.tabs.first(where: { $0.webView === webView }) { tab.load(redirectTo) }
+                else { webView.load(URLRequest(url: redirectTo)) }
                 return
             }
         }
