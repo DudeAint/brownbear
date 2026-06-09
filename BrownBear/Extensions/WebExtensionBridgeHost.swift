@@ -34,6 +34,17 @@ protocol WebExtensionBridgeHost: AnyObject {
     /// chrome.tabs.reload — reload a tab (`nil` ext id = the active tab).
     func webExtReloadTab(extTabId: Int?, bypassCache: Bool)
 
+    /// chrome.tabs.move — reorder the given tabs to position `index` (`< 0` = end). Returns the moved
+    /// tab records in their new order. iOS is single-window, so windowId is ignored.
+    func webExtMoveTabs(extTabIds: [Int], index: Int) -> [[String: Any]]
+    /// chrome.tabs.duplicate — open a new tab loading the same URL as `extTabId`. Returns the new tab.
+    func webExtDuplicateTab(extTabId: Int) -> [String: Any]?
+    /// chrome.tabs.getZoom — the tab's current zoom factor (1.0 = 100%); `nil` id = the active tab.
+    func webExtGetZoom(extTabId: Int?) -> Double
+    /// chrome.tabs.setZoom — set the tab's zoom factor (`0` = reset to the default 1.0; clamped to a
+    /// sane range); `nil` id = the active tab.
+    func webExtSetZoom(extTabId: Int?, factor: Double)
+
     /// chrome.search.query — run a web search for `text` using the user's default search engine.
     /// `disposition` is "CURRENT_TAB" (default), "NEW_TAB", or "NEW_WINDOW" (treated as NEW_TAB — iOS is
     /// single-window); `extTabId` (when set, with CURRENT_TAB) targets that tab instead of the active one.

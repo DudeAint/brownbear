@@ -2098,6 +2098,29 @@
       props = props || {};
       return settleBg(tabsCall('reload', { tabId: id, bypassCache: !!props.bypassCache }).then(function () { return undefined; }), cb);
     },
+    move: function (tabIds, moveProps, cb) {
+      if (typeof moveProps === 'function') { cb = moveProps; moveProps = {}; }
+      moveProps = moveProps || {};
+      var single = !Array.isArray(tabIds);
+      var ids = single ? [tabIds] : tabIds;
+      return settleBg(tabsCall('move', { tabIds: ids, index: typeof moveProps.index === 'number' ? moveProps.index : -1 })
+        .then(function (moved) { return (single && Array.isArray(moved)) ? moved[0] : moved; }), cb);
+    },
+    duplicate: function (tabId, cb) { return settleBg(tabsCall('duplicate', { tabId: tabId }), cb); },
+    getZoom: function (a, b) {
+      // (tabId?, callback?) — tabId may be omitted.
+      var tabId = (typeof a === 'number') ? a : null;
+      var cb = (typeof a === 'function') ? a : (typeof b === 'function' ? b : null);
+      return settleBg(tabsCall('getZoom', { tabId: tabId }), cb);
+    },
+    setZoom: function (a, b, c) {
+      // (tabId, zoomFactor, cb?) or (zoomFactor, cb?) — disambiguate by whether the 2nd arg is a number.
+      var tabId = null, zoomFactor, cb = null;
+      if (typeof b === 'number') { tabId = a; zoomFactor = b; cb = (typeof c === 'function') ? c : null; }
+      else { zoomFactor = a; cb = (typeof b === 'function') ? b : null; }
+      return settleBg(tabsCall('setZoom', { tabId: typeof tabId === 'number' ? tabId : null, zoomFactor: zoomFactor })
+        .then(function () { return undefined; }), cb);
+    },
     sendMessage: function () {
       // chrome.tabs.sendMessage(tabId, message, options?, callback?) — worker → a tab's content
       // scripts, via native, resolving with the first content listener's response.
