@@ -122,12 +122,26 @@ final class WebExtensionPageViewController: UIViewController {
 // MARK: - WKNavigationDelegate (surface load failures instead of a blank sheet)
 
 extension WebExtensionPageViewController: WKNavigationDelegate {
-    func webView(_ webView: WKWebView, didFailProvisional navigation: WKNavigation!, withError error: Error) {
-        showCenteredMessage("Couldn’t open this \(session.kind.title.lowercased()) page.\n\(error.localizedDescription)")
+    // NOTE: the selector MUST be `didFailProvisionalNavigation` — the prior `didFailProvisional:` was a typo
+    // WebKit never calls, so the most common popup/options failure (the page HTML 404ing through the scheme
+    // handler — a PROVISIONAL nav failure) showed neither this message NOR a log. That made a missing/blank
+    // popup completely undiagnosable.
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        reportPageLoadFailure(error)
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        reportPageLoadFailure(error)
+    }
+
+    /// Show the failure in the sheet AND forward it to the Logs tab (it persists after the sheet closes,
+    /// so a transient blank popup is still diagnosable).
+    private func reportPageLoadFailure(_ error: Error) {
         showCenteredMessage("Couldn’t open this \(session.kind.title.lowercased()) page.\n\(error.localizedDescription)")
+        let extID = session.ext.id, kind = session.kind.title
+        Task { await BrownBearServices.shared.webExtensionRuntime
+            .logFromPage(extensionID: extID, level: "error",
+                         message: "\(kind) page failed to load: \(error.localizedDescription)") }
     }
 }
 
