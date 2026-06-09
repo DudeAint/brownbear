@@ -368,6 +368,16 @@ class WebExtensionRuntime {
         return background.serviceWorker != nil || !background.scripts.isEmpty
     }
 
+    /// Record that an extension's background worker failed to boot (missing/mis-pathed source), so a broken
+    /// manifest shows an "extension X never started" line instead of failing silently. The legit
+    /// no-background (content-only) case is NOT routed here.
+    private func logBootFailure(_ ext: WebExtension, _ message: String) {
+        let entry = LogEntry(scriptID: nil, scriptName: ext.displayName, level: .error,
+                             message: message, context: .background, source: .engine)
+        let store = logStore
+        Task { await store.append(entry) }
+    }
+
     private func startContext(for ext: WebExtension) async {
         guard let manifest = ext.manifest, let background = manifest.background else { return }
 
@@ -380,7 +390,10 @@ class WebExtensionRuntime {
             if isModuleWorker {
                 moduleEntry = serviceWorker
                 // Confirm the entry exists up front so a typo'd manifest fails fast rather than at link.
-                guard await store.text(extensionID: ext.id, path: serviceWorker) != nil else { return }
+                guard await store.text(extensionID: ext.id, path: serviceWorker) != nil else {
+                    logBootFailure(ext, "background module service worker not found: \(serviceWorker)")
+                    return
+                }
             } else {
                 source = await store.text(extensionID: ext.id, path: serviceWorker) ?? ""
             }
@@ -389,7 +402,13 @@ class WebExtensionRuntime {
                 if let text = await store.text(extensionID: ext.id, path: path) { source += text + "\n;\n" }
             }
         }
-        guard isModuleWorker || !source.isEmpty else { return }
+        // A declared background that resolves to no source never boots — the extension's whole chrome.*
+        // surface is dead. Previously a SILENT return; now logged so "extension X never started" is visible.
+        guard isModuleWorker || !source.isEmpty else {
+            let what = background.serviceWorker ?? background.scripts.joined(separator: ", ")
+            logBootFailure(ext, "background source missing/empty: \(what)")
+            return
+        }
 
         let messages = await loadMessages(ext, manifest: manifest)
         let logStore = self.logStore

@@ -58,4 +58,24 @@
   wrap("warn", "warn");
   wrap("error", "error");
   wrap("debug", "debug");
+
+  // Uncaught PAGE-WORLD (MAIN) errors + promise rejections. The isolated-world runtime's error listener
+  // lives in a different content world and never sees these, so a world:"MAIN" userscript — or a manager's
+  // page-world bundle like ScriptCat's inject.js — throwing at top level was completely silent (the exact
+  // "injects but no error, no script runs" symptom). Forward to the Page Logs. Refs captured at
+  // document-start; a page tampering afterward only loses its own diagnostics.
+  try {
+    window.addEventListener("error", function (e) {
+      var msg = (e && e.message) ? e.message : "script error";
+      if (e && e.filename) { msg += " (" + e.filename + ":" + (e.lineno || 0) + ":" + (e.colno || 0) + ")"; }
+      if (e && e.error && e.error.stack) { msg += "\n" + e.error.stack; }
+      forward("error", ["[page] " + msg]);
+    }, true);
+    window.addEventListener("unhandledrejection", function (e) {
+      var r = e && e.reason;
+      var msg = (r && r.message) ? r.message : String(r);
+      if (r && r.stack) { msg += "\n" + r.stack; }
+      forward("error", ["[page] Unhandled promise rejection: " + msg]);
+    }, true);
+  } catch (e) { /* ignore */ }
 })();

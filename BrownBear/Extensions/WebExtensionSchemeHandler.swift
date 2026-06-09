@@ -65,6 +65,10 @@ final class WebExtensionSchemeHandler: NSObject, WKURLSchemeHandler {
                 guard self.liveTasks.contains(key) else { return }   // stopped while we were reading
                 self.liveTasks.remove(key)
                 guard let data else {
+                    // A missing packaged resource is the canonical blank-popup / dead-options cause and the
+                    // ONE place the failed path is known for certain (a missing subresource fires no JS error
+                    // event, so nothing else can surface it). Log it so the Logs tab names the file.
+                    self.logResourceFailure(level: "warn", reason: "resource not found: \(resolvedPath)")
                     urlSchemeTask.didFailWithError(BrownBearError.bridgeRejected("not found: \(resolvedPath)"))
                     return
                 }
@@ -76,6 +80,7 @@ final class WebExtensionSchemeHandler: NSObject, WKURLSchemeHandler {
                     urlSchemeTask.didReceive(data)
                     urlSchemeTask.didFinish()
                 } else {
+                    self.logResourceFailure(level: "error", reason: "bad response for \(resolvedPath)")
                     urlSchemeTask.didFailWithError(BrownBearError.bridgeRejected("bad response"))
                 }
             }
@@ -89,7 +94,17 @@ final class WebExtensionSchemeHandler: NSObject, WKURLSchemeHandler {
     private func fail(_ task: WKURLSchemeTask, key: ObjectIdentifier, reason: String) {
         guard liveTasks.contains(key) else { return }
         liveTasks.remove(key)
+        logResourceFailure(level: "error", reason: reason)
         task.didFailWithError(BrownBearError.bridgeRejected(reason))
+    }
+
+    /// Surface a resource-load failure to the Logs tab. This handler is the only place a missing/denied
+    /// chrome-extension resource is known for certain — a 404 of the popup/options HTML or a subresource
+    /// is the canonical blank-page cause and fires NO JS error event, so without this it is fully silent.
+    private func logResourceFailure(level: String, reason: String) {
+        let extID = allowedExtensionID
+        Task { await BrownBearServices.shared.webExtensionRuntime
+            .logFromPage(extensionID: extID, level: level, message: "extension resource failed: \(reason)") }
     }
 
     /// The response headers for a served extension resource: content type, content length, and CORS

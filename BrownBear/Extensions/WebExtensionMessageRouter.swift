@@ -135,11 +135,25 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
                                                   webView: webView, frameInfo: frameInfo)
                 replyHandler(result, nil)
             } catch let error as BrownBearError {
-                replyHandler(nil, error.errorDescription ?? "extension bridge error")
+                let msg = error.errorDescription ?? "extension bridge error"
+                await self.logBridgeError(api: api, token: token, message: msg)
+                replyHandler(nil, msg)
             } catch {
+                await self.logBridgeError(api: api, token: token, message: error.localizedDescription)
                 replyHandler(nil, error.localizedDescription)
             }
         }
+    }
+
+    /// Surface a routed chrome.* failure to the Logs tab. Every chrome.* call funnels through route(); a
+    /// thrown failure was previously returned ONLY to the JS promise, so an extension that fire-and-forgets
+    /// or omits .catch (most chrome.* calls) lost the error with zero Logs signal. Best-effort attribution:
+    /// resolve the extension from the token (nil/stale token → unattributed engine line).
+    private func logBridgeError(api: String, token: String?, message: String) async {
+        // Non-mutating token→extension lookup (resolve() would evict a disabled session as a side effect).
+        let extensionID = token.flatMap { sessions[$0]?.extensionID } ?? ""
+        await runtime.logFromPage(extensionID: extensionID,
+                                  level: "error", message: "chrome.\(api) failed: \(message)")
     }
 
     // MARK: - Routing
@@ -162,6 +176,14 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
                     BBEvaluateJavaScript(webView, code, .page)
                 }
             }
+            return NSNull()
+        }
+        // Tokenless frame-level diagnostic (the content-script loader uses token=null and resolve() would
+        // throw on it). The loader aborting means NO content scripts inject for the frame — a total, silent
+        // failure — so route it here, before resolve(token), to make it visible in the Logs.
+        if api == "runtime.frameLog" {
+            await runtime.logFromPage(extensionID: "", level: payload["level"] as? String ?? "info",
+                                      message: payload["message"] as? String ?? "")
             return NSNull()
         }
         // A content script answering a pushed message. No grant needed — it only resumes a continuation
