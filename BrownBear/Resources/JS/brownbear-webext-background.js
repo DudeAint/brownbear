@@ -1797,6 +1797,13 @@
     search: function (query, cb) {
       var q = typeof query === 'string' ? query : ((query && query.query) || '');
       return settleBg(browserDataCall('bookmarks.search', { query: q }), cb);
+    },
+    create: function (bookmark, cb) {
+      var b = bookmark || {};
+      return settleBg(browserDataCall('bookmarks.create', { title: b.title || '', url: b.url || '' }), cb);
+    },
+    remove: function (id, cb) {
+      return settleBg(browserDataCall('bookmarks.remove', { id: String(id) }).then(function () { return undefined; }), cb);
     }
   };
   var historyVisitedListeners = [], historyVisitRemovedListeners = [];
@@ -1807,6 +1814,21 @@
         text: typeof info.text === 'string' ? info.text : '',
         maxResults: typeof info.maxResults === 'number' ? info.maxResults : 0
       }), cb);
+    },
+    addUrl: function (details, cb) {
+      var d = details || {};
+      return settleBg(browserDataCall('history.addUrl', { url: d.url || '', title: d.title }).then(function () { return undefined; }), cb);
+    },
+    deleteUrl: function (details, cb) {
+      var d = details || {};
+      return settleBg(browserDataCall('history.deleteUrl', { url: d.url || '' }).then(function () { return undefined; }), cb);
+    },
+    deleteRange: function (range, cb) {
+      var r = range || {};
+      return settleBg(browserDataCall('history.deleteRange', {
+        startTime: typeof r.startTime === 'number' ? r.startTime : 0,
+        endTime: typeof r.endTime === 'number' ? r.endTime : 0
+      }).then(function () { return undefined; }), cb);
     },
     // Real event objects (addListener never throws). They do not fire yet — iOS doesn't push per-visit
     // history changes to the worker — so a consumer relying on incremental updates falls back to search.

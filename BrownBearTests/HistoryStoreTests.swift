@@ -19,6 +19,19 @@ final class HistoryStoreTests: XCTestCase {
         return (HistoryStore(fileURL: url), url)
     }
 
+    func testRemoveEntriesInRangeIsBounded() async {
+        let (store, _) = makeStore()
+        await store.record(url: URL(string: "https://a.com")!, title: "A")   // lastVisit ~= now
+        // A range entirely in the distant past must NOT touch a just-now visit.
+        await store.removeEntries(from: Date(timeIntervalSince1970: 0), to: Date(timeIntervalSince1970: 1))
+        let afterPast = await store.all()
+        XCTAssertEqual(afterPast.count, 1, "a past-only range must not delete a just-now entry (no over-delete)")
+        // A range covering now removes it.
+        await store.removeEntries(from: Date(timeIntervalSince1970: 0), to: Date().addingTimeInterval(60))
+        let afterNow = await store.all()
+        XCTAssertTrue(afterNow.isEmpty, "a range covering the visit time deletes it")
+    }
+
     func testRevisitBumpsCountNotDuplicate() async {
         let (store, url) = makeStore()
         defer { try? FileManager.default.removeItem(at: url) }
