@@ -1776,6 +1776,60 @@
     }
   };
 
+  // chrome.bookmarks / chrome.history / chrome.sessions — read-only views of the user's own bookmarks,
+  // visited URLs, and recently-closed tabs, backed natively by BrownBear's stores. Each method is gated
+  // on the matching manifest permission natively; a `{__bbError}` reply (missing permission / unsupported)
+  // rejects the promise. Vimium calls bookmarks.getTree / history.search / sessions.restore unguarded —
+  // these return real Chrome shapes so its Vomnibar + 'u' tab-restore work instead of throwing.
+  function browserDataCall(method, args) {
+    return new Promise(function (resolve, reject) {
+      __bb_browser_data(method, JSON.stringify(args || {}), function (resJSON) {
+        var r = parseJSON(resJSON);
+        if (r && typeof r === 'object' && typeof r.__bbError === 'string') { reject(new Error(r.__bbError)); }
+        else { resolve(r); }
+      });
+    });
+  }
+  var bookmarks = {
+    getTree: function (cb) { return settleBg(browserDataCall('bookmarks.getTree', {}), cb); },
+    // BrownBear's bookmarks are flat; getSubTree returns the full tree (a faithful superset for walkers).
+    getSubTree: function (id, cb) { return settleBg(browserDataCall('bookmarks.getTree', {}), cb); },
+    search: function (query, cb) {
+      var q = typeof query === 'string' ? query : ((query && query.query) || '');
+      return settleBg(browserDataCall('bookmarks.search', { query: q }), cb);
+    }
+  };
+  var historyVisitedListeners = [], historyVisitRemovedListeners = [];
+  var history = {
+    search: function (query, cb) {
+      var info = query || {};
+      return settleBg(browserDataCall('history.search', {
+        text: typeof info.text === 'string' ? info.text : '',
+        maxResults: typeof info.maxResults === 'number' ? info.maxResults : 0
+      }), cb);
+    },
+    // Real event objects (addListener never throws). They do not fire yet — iOS doesn't push per-visit
+    // history changes to the worker — so a consumer relying on incremental updates falls back to search.
+    onVisited: makeEvent(historyVisitedListeners),
+    onVisitRemoved: makeEvent(historyVisitRemovedListeners)
+  };
+  var sessions = {
+    MAX_SESSION_RESULTS: 25,
+    getRecentlyClosed: function (filter, cb) {
+      if (typeof filter === 'function') { cb = filter; filter = null; }
+      return settleBg(browserDataCall('sessions.getRecentlyClosed', {
+        maxResults: (filter && typeof filter.maxResults === 'number') ? filter.maxResults : 0
+      }), cb);
+    },
+    restore: function (sessionId, cb) {
+      if (typeof sessionId === 'function') { cb = sessionId; sessionId = null; }
+      return settleBg(browserDataCall('sessions.restore', {
+        sessionId: typeof sessionId === 'string' ? sessionId : null
+      }), cb);
+    },
+    onChanged: makeEvent([])
+  };
+
   // chrome.idle — iOS can't observe global user input, so queryState maps app/device state via native
   // (locked when data-protected, active when the app is foreground-active, else idle). onStateChanged
   // fires on app foreground/background (and lock/unlock) transitions, pushed from native.
@@ -2581,6 +2635,9 @@
     alarms: alarms,
     commands: commands,
     search: search,
+    bookmarks: bookmarks,
+    history: history,
+    sessions: sessions,
     idle: idle,
     downloads: downloads,
     contextMenus: contextMenus,

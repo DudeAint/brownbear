@@ -312,6 +312,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
         installOffscreenNatives(into: context)
         installPlatformNatives(into: context)
         installDownloadsNatives(into: context)
+        installBrowserDataNatives(into: context)
 
         // chrome.tabs from the background worker. Hop to the main actor (TabManager is MainActor),
         // run the op, then call back onto this context's queue with the JSON result.
