@@ -97,6 +97,15 @@ extension WebExtensionBackgroundContext {
             case "resetWorldConfiguration":
                 await usStore.resetWorldConfiguration(extensionID: extensionID, worldId: args["worldId"] as? String)
                 return NSNull()
+            case "getWorldConfigurations":
+                // chrome.userScripts.getWorldConfigurations() → the persisted per-world settings, as Chrome's
+                // WorldProperties ([{worldId?, csp?, messaging}]). A nil worldId is the default USER_SCRIPT world.
+                return (await usStore.worldConfigs(extensionID: extensionID)).map { config -> [String: Any] in
+                    var dict: [String: Any] = ["messaging": config.messaging]
+                    dict["worldId"] = config.worldId ?? NSNull()
+                    dict["csp"] = config.csp ?? NSNull()
+                    return dict
+                }
             default:
                 return NSNull()
             }

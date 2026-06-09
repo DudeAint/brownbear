@@ -2572,7 +2572,13 @@
     resetWorldConfiguration: function (worldId, cb) {
       if (typeof worldId === 'function') { cb = worldId; worldId = null; }
       return settleBg(userScriptsCall('resetWorldConfiguration', { worldId: worldId || null }).then(function () { return undefined; }), cb);
-    }
+    },
+    // chrome.userScripts.getWorldConfigurations() → the stored per-world settings ([{worldId,csp,messaging}]).
+    getWorldConfigurations: function (cb) { return settleBg(userScriptsCall('getWorldConfigurations', {}), cb); },
+    // chrome.userScripts.execute(injection) → run JS in a user-script world of the target tab NOW, returning
+    // one InjectionResult ({frameId,result|error}) per frame. Mirrors scripting.executeScript but in the
+    // USER_SCRIPT world by default (Chrome 135+).
+    execute: function (injection, cb) { return settleBg(userScriptsCall('execute', { injection: injection || {} }), cb); }
   };
 
   // ---------------------------------------------------------------- chrome.cookies
