@@ -286,16 +286,24 @@ extension WebExtensionPageSession: WebExtensionEventReceiver {
         case .options: contextType = "TAB"
         case .offscreen: contextType = "OFFSCREEN_DOCUMENT"
         }
+        // An offscreen document isn't associated with a top frame or a window — Chrome reports
+        // frameId/windowId as -1 for it (unlike a popup/options page, which lives in the lone window).
+        let isOffscreen = kind == .offscreen
         return [
             "contextId": pageToken,
             "contextType": contextType,
             "documentId": pageToken,
             "documentUrl": pageURL?.absoluteString ?? NSNull(),
             "documentOrigin": "\(WebExtensionSchemeHandler.scheme)://\(ext.id)",
-            "frameId": 0,
+            "frameId": isOffscreen ? -1 : 0,
             "tabId": -1,
-            "windowId": BrownBearBrowserViewController.webExtWindowID,
+            "windowId": isOffscreen ? -1 : BrownBearBrowserViewController.webExtWindowID,
             "incognito": false
         ]
     }
+
+    /// Whether a runtime.sendMessage can actually be delivered into this page (its web view is live).
+    /// The runtime uses this so a registered-but-dead page doesn't count as a receiver and wrongly
+    /// suppress chrome.runtime.lastError's "no receiving end" signal.
+    var isDeliverable: Bool { webView != nil }
 }

@@ -124,7 +124,10 @@ class WebExtensionRuntime {
             }
         }
         for box in eventReceivers.values {
-            guard let receiver = box.value, receiver.receiverExtensionID == extensionID else { continue }
+            // Skip a registered-but-dead page (web view gone): it can't receive, so it must not count
+            // toward `sawReceiver` — otherwise it would suppress the no-receiving-end lastError.
+            guard let receiver = box.value, receiver.receiverExtensionID == extensionID,
+                  receiver.isDeliverable else { continue }
             sawReceiver = true   // an open page of this extension exists to receive
             if let response = await receiver.deliverRuntimeMessage(message: message, sender: sender,
                                                                    senderToken: senderToken) {

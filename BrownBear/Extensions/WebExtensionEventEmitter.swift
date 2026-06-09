@@ -195,6 +195,10 @@ protocol WebExtensionEventReceiver: AnyObject {
     /// A chrome.runtime ExtensionContext record for this live page (chrome.runtime.getContexts), or nil
     /// if it shouldn't be listed. Default nil.
     func contextRecord() -> [String: Any]?
+    /// Whether a runtime.sendMessage can actually be delivered to this receiver right now. The runtime
+    /// skips non-deliverable receivers so a registered-but-dead page doesn't count toward "a receiver
+    /// existed" (which would suppress the no-receiving-end lastError). Default true.
+    var isDeliverable: Bool { get }
 }
 
 extension WebExtensionEventReceiver {
@@ -204,4 +208,6 @@ extension WebExtensionEventReceiver {
     }
     /// Default: not surfaced in getContexts.
     func contextRecord() -> [String: Any]? { nil }
+    /// Default: deliverable.
+    var isDeliverable: Bool { true }
 }
