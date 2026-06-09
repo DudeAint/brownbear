@@ -61,6 +61,19 @@ extension BrownBearBrowserViewController {
         return true
     }
 
+    /// chrome-extension page opened by an extension's own UI via `window.open()`/`target="_blank"` (e.g.
+    /// ScriptCat's popup "Options"/"new script" buttons). Opens the requested path as a real browser tab
+    /// with the per-extension scheme handler + chrome.* page bridge, exactly like openOptionsPage. Returns
+    /// true optimistically (the store lookup is async); an unknown extension/page no-ops in the task.
+    @discardableResult
+    func webExtOpenExtensionPage(extensionID: String, path: String) -> Bool {
+        Task { @MainActor in
+            guard let ext = await BrownBearServices.shared.webExtensionStore.ext(for: extensionID) else { return }
+            openExtensionPageTab(ext: ext, kind: .options, path: path)
+        }
+        return true
+    }
+
     /// Host view for a chrome.offscreen document's hidden web view. The browser's root view is always
     /// in the window while the app is foreground, so a child positioned off-screen keeps its JS live.
     func webExtOffscreenContainer() -> UIView? { view }
