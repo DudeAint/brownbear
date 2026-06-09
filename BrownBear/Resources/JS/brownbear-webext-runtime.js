@@ -683,12 +683,150 @@
     return chrome;
   }
 
+  // ---------------------------------------------------------------- cross-world `performance` bridge
+  //
+  // ScriptCat/Tampermonkey-style managers run as THREE cooperating scripts that must message each other
+  // across world boundaries: inject.js (page MAIN world), content.js (USER_SCRIPT world) and scripting.js
+  // (ISOLATED world). Their home-grown bus dispatches CustomEvents on the `performance` object and carries
+  // every payload in `event.detail`. In WebKit a WKContentWorld shares the DOM but NOT JS state — and
+  // CustomEvent.detail is a world-bound value (WebCore CustomEvent::detail() returns a JSValueInWrappedObject),
+  // so a detail created in the page world reads as `null` from our isolated world and vice-versa. The
+  // manager's eventFlag handshake therefore never completes and no userscript ever runs.
+  //
+  // We bridge the ONE boundary that matters for us — page MAIN world <-> our single isolated content world
+  // (content.js + scripting.js already share that isolated world, so they talk directly). The relay mirrors
+  // every `performance`-dispatched CustomEvent/MouseEvent to the other world over a channel that DOES cross:
+  // the SHARED DOM. We dispatch a bare signal Event on a shared sentinel element (events on shared DOM nodes
+  // fire listeners in every world) and pass the serialized payload through a string attribute (strings cross
+  // worlds). Dispatch is synchronous, so the manager's sync readiness ping (preventDefault round-trip) and
+  // syncSendMessage keep working. The shim is self-contained (no closure refs) so it can be re-serialized via
+  // toString() and injected verbatim into the page world.
+  function installPerfBridge(role) {
+    try {
+      var perf = (typeof performance !== "undefined") ? performance : null;
+      if (!perf || perf.__bbPerfBridge) { return; }
+      var doc = document;
+      var rootEl = doc.documentElement || doc.head || doc.body;
+      if (!rootEl) { return; }
+      var JSONlocal = JSON, CE = CustomEvent, EV = Event;
+      var ME = (typeof MouseEvent !== "undefined") ? MouseEvent : null;
+      var origDispatch = perf.dispatchEvent.bind(perf);
+
+      // One shared sentinel element, the same DOM node in every world (find-or-create).
+      var chan = rootEl.querySelector("bb-perf-bridge[data-bb-perf-bridge]");
+      if (!chan) {
+        chan = doc.createElement("bb-perf-bridge");
+        chan.setAttribute("data-bb-perf-bridge", "1");
+        try { chan.style.display = "none"; } catch (e) {}
+        rootEl.appendChild(chan);
+      }
+      var IN = (role === "page") ? "i2p" : "p2i";   // events the OTHER world relayed to me
+      var OUT = (role === "page") ? "p2i" : "i2p";   // events I relay to the OTHER world
+      var relCounter = 0;
+
+      // Inbound: reconstruct the event the other world dispatched and fire it on our local `performance`.
+      chan.addEventListener(IN, function () {
+        var raw = chan.getAttribute("data-" + IN);   // read FIRST (before any re-entrant dispatch)
+        if (raw == null) { return; }
+        var d;
+        try { d = JSONlocal.parse(raw); } catch (e) { return; }
+        var ev;
+        try {
+          if (d.k === "m" && ME) {
+            var mi = { cancelable: !!d.c, bubbles: false };
+            if (typeof d.mx === "number") { mi.movementX = d.mx; }
+            if (d.rt) {
+              var el = rootEl.querySelector('[data-bb-perf-rt="' + d.rt + '"]');
+              if (el) { mi.relatedTarget = el; }
+            }
+            ev = new ME(d.t, mi);
+          } else {
+            ev = new CE(d.t, { detail: ("d" in d ? d.d : null), cancelable: !!d.c, bubbles: false });
+          }
+        } catch (e) { return; }
+        ev.__bbPerfMirror = 1;
+        var notCancelled = origDispatch(ev);
+        if (d.k === "m") { chan.setAttribute("data-prev", notCancelled === false ? "1" : "0"); }
+      });
+
+      // Outbound: run locally, then mirror to the other world. Skip events we ourselves mirrored in.
+      var patched = function (ev) {
+        var localResult = origDispatch(ev);
+        if (!ev || ev.__bbPerfMirror) { return localResult; }
+        try {
+          var d = { t: ev.type, c: !!ev.cancelable };
+          if (ME && ev instanceof ME) {
+            d.k = "m";
+            d.mx = ev.movementX;
+            if (ev.relatedTarget && ev.relatedTarget.setAttribute) {
+              var id = "" + (++relCounter);
+              ev.relatedTarget.setAttribute("data-bb-perf-rt", id);
+              d.rt = id;
+            }
+          } else if (ev instanceof CE) {
+            d.k = "c";
+            try { d.d = (ev.detail === undefined) ? null : JSONlocal.parse(JSONlocal.stringify(ev.detail)); }
+            catch (e) { return localResult; }   // detail not JSON-serializable: nothing to relay
+          } else {
+            return localResult;   // only CustomEvent / MouseEvent traffic is relayed
+          }
+          chan.setAttribute("data-prev", "0");
+          chan.setAttribute("data-" + OUT, JSONlocal.stringify(d));
+          chan.dispatchEvent(new EV(OUT));   // synchronous; fires the other world's listener
+          if (d.rt) {
+            var rel = rootEl.querySelector('[data-bb-perf-rt="' + d.rt + '"]');
+            if (rel) { rel.removeAttribute("data-bb-perf-rt"); }
+          }
+          if (d.k === "m" && chan.getAttribute("data-prev") === "1") { return false; }
+        } catch (e) {}
+        return localResult;
+      };
+      try {
+        Object.defineProperty(perf, "dispatchEvent", { value: patched, writable: true, configurable: true });
+      } catch (e) {
+        try { perf.dispatchEvent = patched; } catch (e2) { return; }
+      }
+      perf.__bbPerfBridge = 1;
+    } catch (e) {}
+  }
+
+  // Install the isolated-world half once (before any cross-world content script runs).
+  var __bbIsoBridgeDone = false;
+  function ensureIsoPerfBridge() {
+    if (__bbIsoBridgeDone) { return; }
+    __bbIsoBridgeDone = true;
+    installPerfBridge("iso");
+  }
+
+  // Install the page-world half once, by injecting the SAME shim (serialized) as a <script> so it runs in
+  // the page's MAIN world before any world:"MAIN" manager code.
+  var __bbPageBridgeDone = false;
+  function ensurePagePerfBridge() {
+    if (__bbPageBridgeDone) { return; }
+    __bbPageBridgeDone = true;
+    try {
+      var src = "(" + installPerfBridge.toString() + ')("page");';
+      var s = document.createElement("script");
+      s.textContent = src;
+      var parent = document.head || document.documentElement || document.body;
+      if (parent) {
+        parent.appendChild(s);
+        if (s.parentNode) { s.parentNode.removeChild(s); }
+      }
+    } catch (e) {
+      if (_console.error) { _console.error("[BrownBear ext] page perf-bridge inject error:", e); }
+    }
+  }
+
   // Inject code into the page's REAL main world (MV3 `world:"MAIN"` userScripts). We're in an isolated
   // world, which can't eval into the page world directly — but a <script> element appended to the page
   // DOM runs in the page world (the same mechanism real managers use). No extension/chrome API is exposed
   // to MAIN-world code, per the userScripts contract. At document_start `documentElement` already exists.
   function injectIntoPage(code, extensionId) {
     try {
+      // Ensure the page-world half of the cross-world `performance` bridge is present before any
+      // world:"MAIN" manager code runs, so its eventFlag handshake can reach our isolated world.
+      ensurePagePerfBridge();
       var script = document.createElement("script");
       script.textContent = code + "\n//# sourceURL=chrome-extension://" + extensionId + "/userscript-main.js";
       var parent = document.head || document.documentElement || document.body;
@@ -742,13 +880,18 @@
     bridge("getContentScripts", { url: location.href, isSubframe: isSubframe }, null)
       .then(function (scripts) {
         if (!scripts || !scripts.length) { return; }
-        var starts = [], ends = [], idles = [];
+        var starts = [], ends = [], idles = [], hasCrossWorld = false;
         for (var i = 0; i < scripts.length; i += 1) {
           var s = scripts[i];
+          if (s.world === "MAIN" || s.world === "USER_SCRIPT") { hasCrossWorld = true; }
           if (s.runAt === "document_start") { starts.push(s); }
           else if (s.runAt === "document_idle") { idles.push(s); }
           else { ends.push(s); }
         }
+        // A page-world (MAIN) or USER_SCRIPT script means a cross-world manager is present; stand up the
+        // isolated half of the `performance` bridge before ANY of its scripts (incl. the ISOLATED broker)
+        // dispatch, so the eventFlag rendezvous can cross worlds.
+        if (hasCrossWorld) { ensureIsoPerfBridge(); }
         if (starts.length) { runAll(starts); }
         if (ends.length) { whenDOMReady(function () { runAll(ends); }); }
         if (idles.length) { whenLoaded(function () { runAll(idles); }); }
