@@ -62,6 +62,26 @@ extension WebExtensionBackgroundContext {
             return host.webExtSessionsRecentlyClosed(maxResults: (args["maxResults"] as? Int) ?? 0)
         case "sessions.restore":
             return host.webExtSessionsRestore(sessionId: args["sessionId"] as? String) ?? NSNull()
+        case "bookmarks.create":
+            return await host.webExtBookmarksCreate(title: (args["title"] as? String) ?? "",
+                                                    url: (args["url"] as? String) ?? "") ?? NSNull()
+        case "bookmarks.remove":
+            await host.webExtBookmarksRemove(id: (args["id"] as? String) ?? "")
+            return NSNull()
+        case "history.addUrl":
+            await host.webExtHistoryAddUrl(url: (args["url"] as? String) ?? "", title: args["title"] as? String)
+            return NSNull()
+        case "history.deleteUrl":
+            await host.webExtHistoryDeleteUrl(url: (args["url"] as? String) ?? "")
+            return NSNull()
+        case "history.deleteRange":
+            // startTime/endTime are epoch ms — both REQUIRED by Chrome's deleteRange, so the caller
+            // always supplies them; a missing endTime collapses the range (deletes nothing) rather than
+            // over-deleting.
+            let start = (args["startTime"] as? Double) ?? 0
+            let end = (args["endTime"] as? Double) ?? start
+            await host.webExtHistoryDeleteRange(startMs: start, endMs: end)
+            return NSNull()
         default:
             return ["__bbError": "unsupported browsing-data method '\(method)'"]
         }

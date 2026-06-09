@@ -55,6 +55,18 @@ enum WebExtensionBrowserData {
         return [root]
     }
 
+    /// One chrome.bookmarks.BookmarkTreeNode for a single bookmark (a URL leaf under the "1" folder).
+    /// Used by chrome.bookmarks.create's return value.
+    static func bookmarkNode(from bm: Bookmark) -> [String: Any] {
+        [
+            "id": bm.id.uuidString,
+            "parentId": "1",
+            "title": bm.displayTitle,
+            "url": bm.url.absoluteString,
+            "dateAdded": Int(bm.createdAt.timeIntervalSince1970 * 1000)
+        ]
+    }
+
     /// chrome.bookmarks.search(query) → flat list of matching URL leaves (title or URL contains the
     /// query, case-insensitive). Chrome also accepts an object `{query,url,title}`; we honor the text.
     static func bookmarkSearch(_ query: String, in bookmarks: [Bookmark]) -> [[String: Any]] {

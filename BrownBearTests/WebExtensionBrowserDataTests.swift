@@ -50,6 +50,17 @@ final class WebExtensionBrowserDataTests: XCTestCase {
         XCTAssertEqual((folders?[0]["children"] as? [[String: Any]])?.count, 0)
     }
 
+    func testBookmarkNodeShape() {
+        let bm = Bookmark(title: "GH", url: URL(string: "https://github.com/")!,
+                          createdAt: Date(timeIntervalSince1970: 4))
+        let node = WebExtensionBrowserData.bookmarkNode(from: bm)
+        XCTAssertEqual(node["id"] as? String, bm.id.uuidString)
+        XCTAssertEqual(node["parentId"] as? String, "1")
+        XCTAssertEqual(node["title"] as? String, "GH")
+        XCTAssertEqual(node["url"] as? String, "https://github.com/")
+        XCTAssertEqual(node["dateAdded"] as? Int, 4000)
+    }
+
     func testBookmarkSearchMatchesTitleAndURLCaseInsensitively() {
         let a = Bookmark(title: "Hacker News", url: URL(string: "https://news.ycombinator.com/")!)
         let b = Bookmark(title: "Docs", url: URL(string: "https://developer.mozilla.org/")!)

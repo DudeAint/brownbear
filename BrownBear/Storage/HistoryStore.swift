@@ -147,6 +147,14 @@ actor HistoryStore {
         scheduleFlush()
     }
 
+    /// Remove every entry whose lastVisit falls within `[start, end]` — backs chrome.history.deleteRange.
+    /// A precise range (not "everything since X") so an extension's deleteRange can't over-delete.
+    func removeEntries(from start: Date, to end: Date) {
+        loadIfNeeded()
+        entries.removeAll { $0.lastVisit >= start && $0.lastVisit <= end }
+        scheduleFlush()
+    }
+
     /// Wipe all history. Cancels any pending debounced write and persists the empty state at once,
     /// so a "Clear browsing data" can't be undone by a late flush of stale entries.
     func clear() {

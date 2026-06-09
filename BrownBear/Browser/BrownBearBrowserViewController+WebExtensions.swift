@@ -91,6 +91,34 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
         return WebExtensionBrowserData.sessionRecords(from: [record]).first
     }
 
+    func webExtBookmarksCreate(title: String, url: String) async -> [String: Any]? {
+        guard let parsed = URL(string: url), parsed.scheme != nil else { return nil }
+        let bookmark = await BrownBearServices.shared.bookmarkStore.add(title: title, url: parsed)
+        return WebExtensionBrowserData.bookmarkNode(from: bookmark)
+    }
+
+    func webExtBookmarksRemove(id: String) async {
+        guard let uuid = UUID(uuidString: id) else { return }
+        await BrownBearServices.shared.bookmarkStore.remove(id: uuid)
+    }
+
+    func webExtHistoryAddUrl(url: String, title: String?) async {
+        guard let parsed = URL(string: url), parsed.scheme != nil else { return }
+        await BrownBearServices.shared.historyStore.record(url: parsed, title: title)
+    }
+
+    func webExtHistoryDeleteUrl(url: String) async {
+        guard let parsed = URL(string: url) else { return }
+        await BrownBearServices.shared.historyStore.remove(url: parsed)
+    }
+
+    func webExtHistoryDeleteRange(startMs: Double, endMs: Double) async {
+        let start = Date(timeIntervalSince1970: startMs / 1000)
+        let end = Date(timeIntervalSince1970: endMs / 1000)
+        guard start <= end else { return }
+        await BrownBearServices.shared.historyStore.removeEntries(from: start, to: end)
+    }
+
     func webExtTabRecord(forWebView webView: WKWebView) -> [String: Any]? {
         // A content script's message arrives on the tab's own web view; a popup/options page's does not
         // map to any tab here, so the caller (the MessageSender builder) correctly omits `tab` for it.

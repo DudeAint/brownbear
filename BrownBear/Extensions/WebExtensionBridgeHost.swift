@@ -55,6 +55,21 @@ protocol WebExtensionBridgeHost: AnyObject {
     /// Returns the restored Session, or nil if there was nothing to restore.
     func webExtSessionsRestore(sessionId: String?) -> [String: Any]?
 
+    // chrome.bookmarks / chrome.history WRITE ops — mutate the user's own bookmarks / history via
+    // BookmarkStore / HistoryStore. Same permission gate as the reads (bookmarks/history). Used by
+    // keyboard-nav extensions (Surfingkeys / Vimium C) for bookmark + history keybindings.
+    /// chrome.bookmarks.create — add a bookmark; returns the created node (nil if the URL is invalid).
+    func webExtBookmarksCreate(title: String, url: String) async -> [String: Any]?
+    /// chrome.bookmarks.remove — delete the bookmark with this id (the stable UUID string).
+    func webExtBookmarksRemove(id: String) async
+    /// chrome.history.addUrl — record a visit to `url` (with optional title).
+    func webExtHistoryAddUrl(url: String, title: String?) async
+    /// chrome.history.deleteUrl — remove all history entries for `url`.
+    func webExtHistoryDeleteUrl(url: String) async
+    /// chrome.history.deleteRange — remove history entries whose last visit is within [startMs, endMs]
+    /// (epoch milliseconds).
+    func webExtHistoryDeleteRange(startMs: Double, endMs: Double) async
+
     /// chrome.scripting.executeScript / chrome.tabs.executeScript — run `code` in a tab (`nil` ext id =
     /// active) and return one `{result, frameId}` per frame. `world` is "MAIN" (page) or "ISOLATED"
     /// (the extension content world). Main frame only on iOS.
