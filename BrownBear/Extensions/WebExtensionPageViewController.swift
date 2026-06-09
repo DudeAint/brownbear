@@ -134,6 +134,32 @@ extension WebExtensionPageViewController: WKNavigationDelegate {
         reportPageLoadFailure(error)
     }
 
+    /// A 200-OK extension page whose top-level script / ES-module graph silently fails to run (e.g. a
+    /// `<script type="module">` that won't load over the custom scheme — the suspected uBO Lite popup/
+    /// options blank) fires NO error: it just renders blank. didFail/didFailProvisionalNavigation never
+    /// fire. So probe shortly after load and, if the body is empty or stuck in a loading state, log it —
+    /// turning an invisible blank dead-end into a diagnosable Logs line.
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        let extID = session.ext.id, kind = session.kind.title
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self, weak webView] in
+            guard let self, let webView, self.webView === webView else { return }
+            let probe = """
+            (function () {
+              var b = document.body; if (!b) { return 'no-body'; }
+              var loading = /\\b(loading|busy|spinner)\\b/i.test(b.className || '');
+              var empty = b.childElementCount === 0 && (b.textContent || '').trim().length === 0;
+              return empty ? 'blank' : (loading ? 'still-loading' : 'ok');
+            })()
+            """
+            BBEvaluateJavaScriptForResult(webView, probe, .page) { result, _ in
+                guard let state = result as? String, state != "ok" else { return }
+                Task { await BrownBearServices.shared.webExtensionRuntime.logFromPage(
+                    extensionID: extID, level: "warn",
+                    message: "\(kind) page loaded but rendered '\(state)' — its script/module likely failed to run") }
+            }
+        }
+    }
+
     /// Show the failure in the sheet AND forward it to the Logs tab (it persists after the sheet closes,
     /// so a transient blank popup is still diagnosable).
     private func reportPageLoadFailure(_ error: Error) {
