@@ -143,21 +143,65 @@ extension WebExtensionPageViewController: WKNavigationDelegate {
         let extID = session.ext.id, kind = session.kind.title
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self, weak webView] in
             guard let self, let webView, self.webView === webView else { return }
+            // Probe the rendered body AND the page-module bundle's run report (globalThis.__bbPageBundle,
+            // set by brownbear-esm-page-bundler.js). The body state alone can't tell apart "a module
+            // threw" from "the bundle ran but the page is still waiting on the background worker" — the
+            // run report (entries ran / total + the first failing module) disambiguates them, so the Logs
+            // tab names the exact cause instead of a bare "still-loading".
             let probe = """
             (function () {
-              var b = document.body; if (!b) { return 'no-body'; }
-              var loading = /\\b(loading|busy|spinner)\\b/i.test(b.className || '');
-              var empty = b.childElementCount === 0 && (b.textContent || '').trim().length === 0;
-              return empty ? 'blank' : (loading ? 'still-loading' : 'ok');
+              var b = document.body;
+              var state = !b ? 'no-body'
+                : ((b.childElementCount === 0 && (b.textContent || '').trim().length === 0) ? 'blank'
+                   : (/\\b(loading|busy|spinner)\\b/i.test(b.className || '') ? 'still-loading' : 'ok'));
+              var out = { state: state };
+              var rep = (typeof globalThis !== 'undefined') ? globalThis.__bbPageBundle : null;
+              if (rep) {
+                out.total = rep.total; out.ran = rep.ran;
+                out.errors = (rep.errors || []).slice(0, 4).map(function (e) {
+                  return { entry: String(e.entry || ''), message: String(e.message || '').slice(0, 300) };
+                });
+              }
+              return JSON.stringify(out);
             })()
             """
             BBEvaluateJavaScriptForResult(webView, probe, .page) { result, _ in
-                guard let state = result as? String, state != "ok" else { return }
+                guard let raw = result as? String, let data = raw.data(using: .utf8),
+                      let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                      let state = obj["state"] as? String else { return }
+                let errors = (obj["errors"] as? [[String: Any]]) ?? []
+                // A fully-rendered page with every module entry run and no errors is healthy — say nothing.
+                guard state != "ok" || !errors.isEmpty else { return }
                 Task { await BrownBearServices.shared.webExtensionRuntime.logFromPage(
                     extensionID: extID, level: "warn",
-                    message: "\(kind) page loaded but rendered '\(state)' — its script/module likely failed to run") }
+                    message: Self.pageDiagnostic(kind: kind, state: state,
+                                                 ran: obj["ran"] as? Int, total: obj["total"] as? Int,
+                                                 errors: errors)) }
             }
         }
+    }
+
+    /// Build the Logs-tab line for a popup/options page that didn't render cleanly. Pulled out (and
+    /// `internal`) so the body-state → message mapping is unit-testable without a live web view. The
+    /// run report (`ran`/`total` + first failing module) is what tells apart a module that threw from a
+    /// bundle that ran but is still waiting on the worker.
+    nonisolated static func pageDiagnostic(kind: String, state: String, ran: Int?, total: Int?,
+                                           errors: [[String: Any]]) -> String {
+        var message = "\(kind) page rendered '\(state)'"
+        if let total {
+            message += " — page module bundle ran \(ran ?? 0)/\(total) entries"
+        }
+        if let first = errors.first, let entry = first["entry"] as? String, !entry.isEmpty {
+            let detail = (first["message"] as? String) ?? ""
+            message += "; first failing module \(entry): \(detail)"
+        } else if let ran, let total, ran >= total, state != "ok" {
+            // Every entry ran yet the page is still in a loading state → its script is waiting on
+            // something (typically a background-worker round-trip), not a module that failed to load.
+            message += " (all modules ran — the page is waiting on the background worker)"
+        } else if total == nil {
+            message += " — its script/module likely failed to run"
+        }
+        return message
     }
 
     /// Show the failure in the sheet AND forward it to the Logs tab (it persists after the sheet closes,

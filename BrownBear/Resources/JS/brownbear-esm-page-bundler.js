@@ -107,6 +107,16 @@
     out.push("var resolve=" + esm.resolve.toString() + ";");
     out.push("var __reg=Object.create(null),__cache=Object.create(null);");
 
+    // A page-visible run report so a stuck/blank page is diagnosable from the host: how many of the
+    // page's module entries fully evaluated, and the error (message + stack) for any that threw. The
+    // scheme handler's load probe reads `globalThis.__bbPageBundle` and surfaces it to the Logs tab,
+    // naming the exact failing module instead of just "still-loading".
+    out.push("var __bbg=(typeof globalThis!==\"undefined\")?globalThis:((typeof self!==\"undefined\")?self:this);");
+    out.push("var __bbrep=__bbg.__bbPageBundle={total:" + entryPaths.length + ",ran:0,errors:[]};");
+    out.push("function __bbrec(entry,e){__bbrep.errors.push({entry:entry," +
+             "message:String((e&&e.message)||e),stack:String((e&&e.stack)||\"\")});" +
+             "if(typeof console!==\"undefined\"){console.error(\"[bb page bundle] \"+entry,e);}}");
+
     if (!anyAsync) {
       out.push(
         "function __eval(path){var rec=__cache[path];if(rec)return rec.exports;" +
@@ -158,16 +168,23 @@
     }
 
     if (!anyAsync) {
+      // Each entry is its OWN `<script type="module">` in the page — independent evaluation roots that
+      // merely share the module map. In a browser a throw in one entry's graph does NOT stop a sibling
+      // entry from running, so isolate each here (catch + record). Without this, an early entry throwing
+      // (e.g. a chrome.* call the bridge doesn't satisfy) would abort the whole chain and the last entry —
+      // the one that typically clears a page's "loading" state — would never run (the uBO Lite "popup
+      // rendered still-loading" symptom). Matches the async runtime's per-entry isolation below.
       for (var k = 0; k < entryPaths.length; k++) {
-        out.push("__eval(" + JSON.stringify(entryPaths[k]) + ");");
+        var ek = JSON.stringify(entryPaths[k]);
+        out.push("try{__eval(" + ek + ");__bbrep.ran++;}catch(__e){__bbrec(" + ek + ",__e);}");
       }
     } else {
       // Run entries sequentially, each fully awaited — matching deferred module-script ordering where a
-      // TLA entry blocks the next. A failed entry is logged (console.error), not swallowed silently.
+      // TLA entry blocks the next. A failed entry is recorded (and console.error'd), not swallowed.
       out.push("(async function(){");
       for (var m = 0; m < entryPaths.length; m++) {
-        out.push("try{await __eval(" + JSON.stringify(entryPaths[m]) +
-                 ");}catch(__e){(typeof console!==\"undefined\")&&console.error(__e);}");
+        var em = JSON.stringify(entryPaths[m]);
+        out.push("try{await __eval(" + em + ");__bbrep.ran++;}catch(__e){__bbrec(" + em + ",__e);}");
       }
       out.push("})();");
     }
