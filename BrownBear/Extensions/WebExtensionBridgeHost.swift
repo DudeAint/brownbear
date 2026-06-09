@@ -83,6 +83,13 @@ protocol WebExtensionBridgeHost: AnyObject {
     @discardableResult
     func webExtOpenOptionsPage(extensionID: String) -> Bool
 
+    /// Open an arbitrary extension page (`<scheme>://<id>/<path>`) as a real browser tab — the path an
+    /// extension popup hands to `window.open()` / a `target="_blank"` link (ScriptCat opens its options
+    /// and new-script pages this way, not via chrome.runtime.openOptionsPage). Returns false if the
+    /// extension/page is unknown. `path` is the requested resource path (e.g. "/src/options.html").
+    @discardableResult
+    func webExtOpenExtensionPage(extensionID: String, path: String) -> Bool
+
     /// A view to parent a chrome.offscreen document's hidden WKWebView into, so its JS/timers keep
     /// running (an off-window web view can be suspended by WebKit). The browser returns its root view;
     /// the offscreen manager positions the web view off-screen behind all chrome. nil ⇒ no window yet,

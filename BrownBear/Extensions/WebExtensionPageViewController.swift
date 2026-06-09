@@ -68,6 +68,7 @@ final class WebExtensionPageViewController: UIViewController {
         webView.isOpaque = false
         webView.backgroundColor = BrownBearTheme.Palette.background
         webView.navigationDelegate = self   // surface load failures instead of a blank sheet
+        webView.uiDelegate = self            // route window.open() (e.g. ScriptCat's Options button) to a real tab
         view.addSubview(webView)
         self.webView = webView
         session.bind(to: webView)
@@ -127,6 +128,35 @@ extension WebExtensionPageViewController: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         showCenteredMessage("Couldn’t open this \(session.kind.title.lowercased()) page.\n\(error.localizedDescription)")
+    }
+}
+
+// MARK: - WKUIDelegate (window.open from an extension popup → a real tab)
+
+extension WebExtensionPageViewController: WKUIDelegate {
+    /// An extension popup opens its own pages with `window.open("/src/options.html", "_blank")` (ScriptCat's
+    /// Options & new-script buttons) rather than chrome.runtime.openOptionsPage. WKWebView routes that
+    /// through here; with no uiDelegate it returns nil and the click is silently dropped — the dead-button
+    /// symptom. There is no child web view to hand back on iOS, so we open the target ourselves and return
+    /// nil: an extension-scheme URL becomes a real extension tab (scheme handler + chrome.* bridge); an
+    /// http(s) target opens as a normal browser tab. The popup sheet is dismissed so the new tab is visible.
+    func webView(_ webView: WKWebView,
+                 createWebViewWith configuration: WKWebViewConfiguration,
+                 for navigationAction: WKNavigationAction,
+                 windowFeatures: WKWindowFeatures) -> WKWebView? {
+        guard let url = navigationAction.request.url else { return nil }
+        let host = BrownBearServices.shared.webExtensionRuntime.host
+        if url.scheme == WebExtensionSchemeHandler.scheme {
+            // Resolve against THIS popup's extension origin (a popup only opens its own pages); the path is
+            // what openExtensionPageTab needs. Restrict to the popup's own extension as a trust boundary.
+            let path = url.path.isEmpty ? "/" : url.path
+            _ = host?.webExtOpenExtensionPage(extensionID: session.ext.id, path: path)
+            dismiss(animated: true)
+        } else if let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" {
+            _ = host?.webExtCreateTab(url: url.absoluteString, active: true)
+            dismiss(animated: true)
+        }
+        return nil
     }
 }
 
