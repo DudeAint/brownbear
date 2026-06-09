@@ -72,6 +72,48 @@ final class WebExtensionPermissionGrantsTests: XCTestCase {
         XCTAssertNil(url)
     }
 
+    // MARK: - chrome.permissions.onAdded / onRemoved fan-out (delta diffing)
+
+    func testGrantBroadcastsAddedDelta() async {
+        let store = WebExtensionPermissionGrants(fileURL: tempURL())
+        let exp = expectation(forNotification: .brownBearExtensionPermissionsDidChange, object: nil) { note in
+            guard let info = note.userInfo, info["extensionID"] as? String == "ext1" else { return false }
+            let added = info["added"] as? [String: Any] ?? [:]
+            let removed = info["removed"] as? [String: Any] ?? [:]
+            return Set(added["permissions"] as? [String] ?? []) == ["bookmarks"]
+                && Set(added["origins"] as? [String] ?? []) == ["https://a.com/*"]
+                && (removed["permissions"] as? [String] ?? []).isEmpty
+                && (removed["origins"] as? [String] ?? []).isEmpty
+        }
+        await store.grant(extensionID: "ext1", .init(permissions: ["bookmarks"], origins: ["https://a.com/*"]))
+        await fulfillment(of: [exp], timeout: 2.0)
+    }
+
+    func testReGrantingHeldPermissionFiresNothing() async {
+        let store = WebExtensionPermissionGrants(fileURL: tempURL())
+        await store.grant(extensionID: "ext1", .init(permissions: ["bookmarks"]))  // first grant fires
+        let exp = expectation(forNotification: .brownBearExtensionPermissionsDidChange, object: nil) { note in
+            (note.userInfo?["extensionID"] as? String) == "ext1"   // any further post for ext1 = failure
+        }
+        exp.isInverted = true
+        await store.grant(extensionID: "ext1", .init(permissions: ["bookmarks"]))  // re-grant held → empty delta
+        await fulfillment(of: [exp], timeout: 0.4)
+    }
+
+    func testSetGrantedBroadcastsRemovedDelta() async {
+        let store = WebExtensionPermissionGrants(fileURL: tempURL())
+        await store.grant(extensionID: "ext1", .init(permissions: ["bookmarks", "history"]))
+        let exp = expectation(forNotification: .brownBearExtensionPermissionsDidChange, object: nil) { note in
+            guard let info = note.userInfo, info["extensionID"] as? String == "ext1" else { return false }
+            let added = info["added"] as? [String: Any] ?? [:]
+            let removed = info["removed"] as? [String: Any] ?? [:]
+            return Set(removed["permissions"] as? [String] ?? []) == ["bookmarks"]
+                && (added["permissions"] as? [String] ?? []).isEmpty
+        }
+        await store.setGranted(extensionID: "ext1", .init(permissions: ["history"]))
+        await fulfillment(of: [exp], timeout: 2.0)
+    }
+
     func testPersistsAcrossInstances() async {
         let url = tempURL()
         let first = WebExtensionPermissionGrants(fileURL: url)

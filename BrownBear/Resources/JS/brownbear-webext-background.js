@@ -1953,6 +1953,10 @@
     'webNavigation.onDOMContentLoaded': [], 'webNavigation.onCompleted': [],
     'webNavigation.onHistoryStateUpdated': [], 'webNavigation.onErrorOccurred': []
   };
+  // chrome.permissions.onAdded/onRemoved — fired by native (dispatchExtEvent) after a runtime
+  // permissions.request grant or permissions.remove, with one {permissions, origins} arg, so an
+  // extension can react to optional-permission changes exactly as in Chrome (uBO Lite / Dark Reader).
+  var permissionsEventLists = { 'permissions.onAdded': [], 'permissions.onRemoved': [] };
   var tabs = {
     query: function (q, cb) { return settleBg(tabsCall('query', { query: q || {} }), cb); },
     captureVisibleTab: function () {
@@ -2337,7 +2341,8 @@
     contains: function (p, cb) { return settleBg(permissionsCall('contains', permObj(p)), cb); },
     request: function (p, cb) { return settleBg(permissionsCall('request', permObj(p)), cb); },
     remove: function (p, cb) { return settleBg(permissionsCall('remove', permObj(p)), cb); },
-    onAdded: makeEvent([]), onRemoved: makeEvent([])
+    onAdded: makeEvent(permissionsEventLists['permissions.onAdded']),
+    onRemoved: makeEvent(permissionsEventLists['permissions.onRemoved'])
   };
 
   // ---------------------------------------------------------------- chrome.declarativeNetRequest
@@ -2748,7 +2753,7 @@
     dispatchExtEvent: function (name, argsJSON) {
       var args = parseJSON(argsJSON);
       if (!Array.isArray(args)) { args = []; }
-      var list = tabEventLists[name] || webNavLists[name];
+      var list = tabEventLists[name] || webNavLists[name] || permissionsEventLists[name];
       if (!list) { return; }
       for (var i = 0; i < list.length; i++) {
         try { list[i].apply(null, args); }

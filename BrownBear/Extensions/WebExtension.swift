@@ -24,6 +24,13 @@ extension Notification.Name {
     /// userInfo: `extensionID: String`, `kind: String` ("clicked"|"closed"|"buttonClicked"),
     /// `notificationID: String`, and either `byUser: Bool` (closed) or `buttonIndex: Int` (buttonClicked).
     static let brownBearExtensionNotificationEvent = Notification.Name("brownBearExtensionNotificationEvent")
+
+    /// Posted when an extension's runtime-granted optional permissions change (chrome.permissions.request
+    /// grant or chrome.permissions.remove). Drives `chrome.permissions.onAdded` / `onRemoved` in the
+    /// extension's worker AND its open pages. userInfo: `extensionID: String`, `added: [String: Any]`,
+    /// `removed: [String: Any]`, each a `{ permissions: [String], origins: [String] }` delta (either may
+    /// be empty). A purely-empty change is not posted.
+    static let brownBearExtensionPermissionsDidChange = Notification.Name("brownBearExtensionPermissionsDidChange")
 }
 
 struct WebExtension: Codable, Identifiable, Equatable {
