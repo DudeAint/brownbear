@@ -2145,11 +2145,31 @@
   // `.user.js` URL into the worker (`__bbDispatchWebRequestUserScript`), letting the manager's own confirm
   // flow run — the webRequest analog of the declarativeNetRequest hand-off used for MV3 managers.
   var __bbWebRequestOnBeforeRequest = [];   // [{ fn, urls:[pattern], types:[type]|null }]
+  // Warn ONCE per worker when an extension registers a BLOCKING webRequest listener against general
+  // traffic. WebKit gives no synchronous request-interception hook, so such a listener never fires —
+  // the extension silently does nothing (uBlock Origin, Privacy Badger, Decentraleyes, ClearURLs all
+  // hit this). Surfacing it turns an invisible dead feature into a diagnosable Logs line that points at
+  // declarativeNetRequest. We do NOT warn for the legitimate `*.user.js` install handoff (which a V2
+  // manager registers as a blocking onBeforeRequest and which DOES work via the synthetic dispatch).
+  var __bbWarnedBlockingWebRequest = false;
+  function __bbNoteBlockingWebRequest(filter, extraInfoSpec) {
+    if (__bbWarnedBlockingWebRequest) { return; }
+    if (!Array.isArray(extraInfoSpec) || extraInfoSpec.indexOf('blocking') < 0) { return; }
+    var urls = (filter && filter.urls) || [];
+    // The userscript-install listener targets only `*.user.js` and is genuinely honored — don't warn for it.
+    var userScriptOnly = urls.length > 0 && urls.every(function (u) { return /\.user\.js(\b|$)/i.test(String(u)); });
+    if (userScriptOnly) { return; }
+    __bbWarnedBlockingWebRequest = true;
+    __bb_log('warn', 'chrome.webRequest blocking/redirect listeners cannot intercept requests on ' +
+      'WKWebView (iOS) — this listener will never fire, so request blocking/modification here is inert. ' +
+      'Use declarativeNetRequest for network blocking.');
+  }
   function makeWebRequestEvent(store) {
     return {
       addListener: function (fn, filter, _extraInfoSpec) {
         if (typeof fn !== 'function') { return; }
         store.push({ fn: fn, urls: (filter && filter.urls) || [], types: (filter && filter.types) || null });
+        __bbNoteBlockingWebRequest(filter, _extraInfoSpec);
       },
       removeListener: function (fn) { for (var i = store.length - 1; i >= 0; i--) { if (store[i].fn === fn) { store.splice(i, 1); } } },
       hasListener: function (fn) { for (var i = 0; i < store.length; i++) { if (store[i].fn === fn) { return true; } } return false; },
