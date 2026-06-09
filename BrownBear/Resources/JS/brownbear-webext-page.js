@@ -467,6 +467,7 @@
     return {
       setBadgeText: setter("action.setBadgeText"),
       setBadgeBackgroundColor: setter("action.setBadgeBackgroundColor"),
+      setBadgeTextColor: setter("action.setBadgeTextColor"),
       setTitle: setter("action.setTitle"),
       setPopup: setter("action.setPopup"),
       setIcon: setIcon,
@@ -475,6 +476,7 @@
       getBadgeText: getter("action.getBadgeText"),
       getTitle: getter("action.getTitle"),
       getBadgeBackgroundColor: getter("action.getBadgeBackgroundColor"),
+      getBadgeTextColor: getter("action.getBadgeTextColor"),
       onClicked: makeEvent(actionClickedListeners)
     };
   }

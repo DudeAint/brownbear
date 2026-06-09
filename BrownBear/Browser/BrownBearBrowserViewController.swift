@@ -547,6 +547,7 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
                     title: Self.webExtMenuActionTitle(resolved.title, ext: ext),
                     badgeText: resolved.badgeText,
                     badgeColor: Self.actionBadgeColor(actionState.badgeColorBytes(extensionID: ext.id, tabId: actionTabId)),
+                    badgeTextColor: Self.actionBadgeColor(actionState.badgeTextColorBytes(extensionID: ext.id, tabId: actionTabId)),
                     iconPath: resolved.iconPath,
                     hasPopup: (action.defaultPopup?.isEmpty == false),
                     hasOptions: (ext.manifest?.optionsPage?.isEmpty == false)))

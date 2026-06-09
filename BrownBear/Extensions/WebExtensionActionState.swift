@@ -28,7 +28,8 @@ final class WebExtensionActionState {
     /// any per-tab overrides. This is what the menu renders and what `get*` calls return.
     struct Resolved {
         var badgeText: String
-        var badgeColor: String      // CSS-ish "#rrggbb" / "#rrggbbaa"
+        var badgeColor: String      // CSS-ish "#rrggbb" / "#rrggbbaa" — badge BACKGROUND
+        var badgeTextColor: String  // CSS-ish — badge TEXT color (chrome.action.setBadgeTextColor)
         var title: String
         var popup: String?          // resolved popup path ("" disables it; nil = use manifest default)
         var iconPath: String?       // chosen icon path, if any
@@ -42,6 +43,7 @@ final class WebExtensionActionState {
     fileprivate struct Layer {
         var badgeText: String?
         var badgeColor: String?
+        var badgeTextColor: String?
         var title: String?
         var popup: String?
         var iconPath: String?
@@ -104,6 +106,7 @@ final class WebExtensionActionState {
 
         let badgeText = pick(\.badgeText) ?? ""
         let badgeColor = pick(\.badgeColor) ?? "#666666"
+        let badgeTextColor = pick(\.badgeTextColor) ?? "#ffffff"   // Chrome's default badge text is white
         let title = pick(\.title) ?? manifest?.defaultTitle ?? ""
         // popup: an explicit "" means "no popup, fire onClicked"; nil falls through to the manifest.
         let popup: String?
@@ -115,8 +118,8 @@ final class WebExtensionActionState {
         let iconPath = pick(\.iconPath) ?? bestManifestIcon(manifest, fallbackIcons: manifestIcons[extensionID])
         let enabled = pick(\.enabled) ?? true
 
-        return Resolved(badgeText: badgeText, badgeColor: badgeColor, title: title,
-                        popup: popup, iconPath: iconPath, enabled: enabled)
+        return Resolved(badgeText: badgeText, badgeColor: badgeColor, badgeTextColor: badgeTextColor,
+                        title: title, popup: popup, iconPath: iconPath, enabled: enabled)
     }
 
     /// chrome.action.getBadgeText / getTitle / getBadgeBackgroundColor / getPopup readback.
@@ -133,6 +136,13 @@ final class WebExtensionActionState {
     /// stored "#rgb"/"#rrggbb"/"#rrggbbaa" to that shape; opaque grey if it can't be parsed.
     func badgeColorBytes(extensionID: String, tabId: Int?) -> [Int] {
         Self.colorBytes(badgeColor(extensionID: extensionID, tabId: tabId))
+    }
+    /// chrome.action.getBadgeTextColor → ColorArray ([r,g,b,a]) for the badge TEXT color.
+    func badgeTextColor(extensionID: String, tabId: Int?) -> String {
+        resolved(extensionID: extensionID, tabId: tabId).badgeTextColor
+    }
+    func badgeTextColorBytes(extensionID: String, tabId: Int?) -> [Int] {
+        Self.colorBytes(badgeTextColor(extensionID: extensionID, tabId: tabId))
     }
     static func colorBytes(_ css: String) -> [Int] {
         var hex = css.hasPrefix("#") ? String(css.dropFirst()) : css
@@ -159,6 +169,10 @@ final class WebExtensionActionState {
 
     func setBadgeText(extensionID: String, tabId: Int?, text: String?) {
         mutate(extensionID: extensionID, tabId: tabId) { $0.badgeText = (text?.isEmpty == false) ? text : nil }
+    }
+
+    func setBadgeTextColor(extensionID: String, tabId: Int?, color: String?) {
+        mutate(extensionID: extensionID, tabId: tabId) { $0.badgeTextColor = (color?.isEmpty == false) ? color : nil }
     }
 
     func setBadgeColor(extensionID: String, tabId: Int?, color: String?) {
@@ -283,7 +297,7 @@ final class WebExtensionActionState {
 
 private extension WebExtensionActionState.Layer {
     var isEmpty: Bool {
-        badgeText == nil && badgeColor == nil && title == nil && popup == nil
+        badgeText == nil && badgeColor == nil && badgeTextColor == nil && title == nil && popup == nil
             && iconPath == nil && enabled == nil
     }
 }
@@ -292,6 +306,7 @@ private extension WebExtensionActionState.Layer {
 private struct LayerCodable: Codable {
     var badgeText: String?
     var badgeColor: String?
+    var badgeTextColor: String?
     var title: String?
     var popup: String?
     var iconPath: String?
@@ -300,6 +315,7 @@ private struct LayerCodable: Codable {
     init(_ layer: WebExtensionActionState.Layer) {
         badgeText = layer.badgeText
         badgeColor = layer.badgeColor
+        badgeTextColor = layer.badgeTextColor
         title = layer.title
         popup = layer.popup
         iconPath = layer.iconPath
@@ -310,6 +326,7 @@ private struct LayerCodable: Codable {
         var l = WebExtensionActionState.Layer()
         l.badgeText = badgeText
         l.badgeColor = badgeColor
+        l.badgeTextColor = badgeTextColor
         l.title = title
         l.popup = popup
         l.iconPath = iconPath

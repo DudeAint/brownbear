@@ -1854,10 +1854,28 @@
       return Promise.resolve(value);
     };
   }
+  // chrome.action color setters accept a CSS string OR a ColorArray [r,g,b,a]. Native stores a hex
+  // string, so normalize an array to "#rrggbbaa" here; the badge (rendered in the Quick Look menu) then
+  // honors both forms — managers like ScriptCat pass either.
+  function cssFromColor(c) {
+    if (typeof c === 'string') { return c; }
+    if (Array.isArray(c) && c.length === 4) {
+      var h = function (n) { var s = ((n | 0) & 255).toString(16); return s.length === 1 ? '0' + s : s; };
+      return '#' + h(c[0]) + h(c[1]) + h(c[2]) + h(c[3]);
+    }
+    return undefined;
+  }
+  function actionColorSetter(method) {
+    return function (details, cb) {
+      details = details || {};
+      return settleBg(actionCall(method, { tabId: details.tabId, color: cssFromColor(details.color) })
+        .then(function () { return undefined; }), cb);
+    };
+  }
   var action = {
     setBadgeText: actionSetter('setBadgeText'),
-    setBadgeBackgroundColor: actionSetter('setBadgeBackgroundColor'),
-    setBadgeTextColor: actionLocalResolve(undefined),
+    setBadgeBackgroundColor: actionColorSetter('setBadgeBackgroundColor'),
+    setBadgeTextColor: actionColorSetter('setBadgeTextColor'),
     setTitle: actionSetter('setTitle'),
     setPopup: actionSetter('setPopup'),
     setIcon: actionSetIcon,
@@ -1866,7 +1884,7 @@
     getBadgeText: actionGetter('getBadgeText'),
     getTitle: actionGetter('getTitle'),
     getBadgeBackgroundColor: actionGetter('getBadgeBackgroundColor'),
-    getBadgeTextColor: actionLocalResolve([255, 255, 255, 255]),
+    getBadgeTextColor: actionGetter('getBadgeTextColor'),
     getPopup: actionLocalResolve(''),
     isEnabled: actionLocalResolve(true),
     getUserSettings: actionLocalResolve({ isOnToolbar: true }),
