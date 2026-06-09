@@ -88,6 +88,23 @@ extension WebExtensionBackgroundContext {
             }
         }
         context.setObject(capture, forKeyedSubscript: "__bb_capture_visible_tab" as NSString)
+
+        // chrome.search.query — run a web search via the user's default search engine. No permission is
+        // required (Chrome's chrome.search needs none); it just opens the results tab. Hop to the main
+        // actor (TabManager) to open/navigate, then settle the JS promise.
+        let search: @convention(block) (String, JSValue) -> Void = { [weak self] argsJSON, callback in
+            guard let self else { return }
+            let args = ((try? JSONSerialization.jsonObject(with: Data(argsJSON.utf8))) as? [String: Any]) ?? [:]
+            let text = (args["text"] as? String) ?? ""
+            let disposition = args["disposition"] as? String
+            let tabId = args["tabId"] as? Int
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.host?.webExtSearchQuery(text: text, disposition: disposition, extTabId: tabId)
+                self.callBack(callback, with: self.jsonString(NSNull()))
+            }
+        }
+        context.setObject(search, forKeyedSubscript: "__bb_search" as NSString)
     }
 
     /// Fire chrome.idle.onStateChanged into this worker. Called from the main actor (the runtime's app-

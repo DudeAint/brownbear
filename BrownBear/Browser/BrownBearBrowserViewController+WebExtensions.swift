@@ -33,6 +33,27 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
         resolveTab(extTabId).map(webExtTabRecord)
     }
 
+    /// chrome.search.query — resolve `text` against the user's default search engine and open the
+    /// results per `disposition`. Uses the SAME encoding/template the omnibox uses, so a query from an
+    /// extension behaves identically to one typed in the bar. A blank query is ignored (Chrome no-ops it).
+    func webExtSearchQuery(text: String, disposition: String?, extTabId: Int?) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        // Query-value encoding: alphanumerics + unreserved, matching the omnibox's stricter set (NOT
+        // `.urlQueryAllowed`, which leaves `&=` unescaped and would corrupt the query string).
+        var queryAllowed = CharacterSet.alphanumerics
+        queryAllowed.insert(charactersIn: "-._~")
+        let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: queryAllowed) ?? trimmed
+        let template = AppSettings.searchEngine.template
+        guard let url = URL(string: template.replacingOccurrences(of: "%@", with: encoded)) else { return }
+        switch (disposition ?? "CURRENT_TAB").uppercased() {
+        case "NEW_TAB", "NEW_WINDOW":   // iOS is single-window → NEW_WINDOW opens a new tab.
+            _ = webExtCreateTab(url: url.absoluteString, active: true)
+        default:                         // CURRENT_TAB — the targeted tab, or the active one.
+            _ = webExtUpdateTab(extTabId: extTabId, url: url.absoluteString, active: true)
+        }
+    }
+
     func webExtTabRecord(forWebView webView: WKWebView) -> [String: Any]? {
         // A content script's message arrives on the tab's own web view; a popup/options page's does not
         // map to any tab here, so the caller (the MessageSender builder) correctly omits `tab` for it.
