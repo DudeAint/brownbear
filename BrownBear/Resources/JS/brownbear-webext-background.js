@@ -376,6 +376,41 @@
           var baseSet = node.setAttribute;
           node.setAttribute = function (k, v) { baseSet.call(this, k, v); if (String(k).toLowerCase() === 'href') { applyHref(v); } };
         }
+        // <canvas>: a non-throwing 2D context + toDataURL. A headless JSContext can't rasterize, but an
+        // MV2 background page has a real canvas, and libraries use it (e.g. Violentmonkey's icon loader
+        // does `new Image()` → `createElement('canvas')` → `getContext('2d').drawImage` → `toDataURL` on
+        // EVERY popup/options open). Returning null from getContext made `ctx.drawImage` throw, which
+        // rejected VM's GetData/InitPopup handler and broke the whole popup. Stub the surface so it no-ops
+        // and returns a valid 1×1 transparent PNG instead of throwing.
+        if (tag === 'canvas') {
+          node.width = 300; node.height = 150;
+          var __bbCtx2d = {
+            canvas: node,
+            drawImage: function () {}, clearRect: function () {}, fillRect: function () {}, strokeRect: function () {},
+            beginPath: function () {}, closePath: function () {}, moveTo: function () {}, lineTo: function () {},
+            arc: function () {}, arcTo: function () {}, rect: function () {}, ellipse: function () {},
+            fill: function () {}, stroke: function () {}, clip: function () {},
+            save: function () {}, restore: function () {}, scale: function () {}, rotate: function () {},
+            translate: function () {}, transform: function () {}, setTransform: function () {}, resetTransform: function () {},
+            fillText: function () {}, strokeText: function () {}, measureText: function () { return { width: 0 }; },
+            createLinearGradient: function () { return { addColorStop: function () {} }; },
+            createRadialGradient: function () { return { addColorStop: function () {} }; },
+            createPattern: function () { return null; },
+            getImageData: function (x, y, w, h) {
+              w = Math.max(1, w || node.width || 1); h = Math.max(1, h || node.height || 1);
+              return { data: new Uint8ClampedArray(w * h * 4), width: w, height: h };
+            },
+            putImageData: function () {},
+            createImageData: function (w, h) {
+              w = Math.max(1, (typeof w === 'object' && w) ? w.width : (w || 1)); h = Math.max(1, h || 1);
+              return { data: new Uint8ClampedArray(w * h * 4), width: w, height: h };
+            },
+            setLineDash: function () {}, getLineDash: function () { return []; }
+          };
+          node.getContext = function (t) { return (t === '2d') ? __bbCtx2d : null; };
+          node.toDataURL = function () { return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='; };
+          node.toBlob = function (cb) { if (typeof cb === 'function') { cb(null); } };
+        }
         return node;
       };
       var __bbDocEl = __bbMakeNode('html'), __bbHead = __bbMakeNode('head'), __bbBody = __bbMakeNode('body');
@@ -407,6 +442,32 @@
       };
       __bbDocEl.ownerDocument = globalThis.document; __bbHead.ownerDocument = globalThis.document; __bbBody.ownerDocument = globalThis.document;
       __bbDocEl.appendChild(__bbHead); __bbDocEl.appendChild(__bbBody);
+
+      // Image: an MV2 background page has one; libraries `new Image()` then await onload/onerror. We can't
+      // load pixels in a headless JSContext, so report load-failure on a later tick (so the awaiter
+      // unblocks) — the caller then draws onto the stub canvas and gets the transparent-PNG toDataURL.
+      // Without this, `new Image()` is a ReferenceError that aborts the caller (e.g. VM's icon loader).
+      if (typeof globalThis.Image === 'undefined') {
+        globalThis.Image = function (w, h) {
+          this.width = w || 0; this.height = h || 0; this.naturalWidth = 0; this.naturalHeight = 0;
+          this.complete = false; this.onload = null; this.onerror = null; this.crossOrigin = null;
+          var self = this, _src = '';
+          Object.defineProperty(this, 'src', {
+            configurable: true, enumerable: true,
+            get: function () { return _src; },
+            set: function (v) {
+              _src = String(v);
+              globalThis.setTimeout(function () {
+                self.complete = true;
+                if (typeof self.onerror === 'function') { try { self.onerror({ type: 'error' }); } catch (e) {} }
+              }, 0);
+            }
+          });
+          this.addEventListener = function (t, fn) { if (t === 'load') { self.onload = fn; } else if (t === 'error') { self.onerror = fn; } };
+          this.removeEventListener = function () {};
+          this.setAttribute = function () {}; this.getAttribute = function () { return null; };
+        };
+      }
     }
 
     var B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
