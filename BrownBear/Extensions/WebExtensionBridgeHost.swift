@@ -88,6 +88,13 @@ protocol WebExtensionBridgeHost: AnyObject {
     /// the offscreen manager positions the web view off-screen behind all chrome. nil ⇒ no window yet,
     /// in which case createDocument rejects.
     func webExtOffscreenContainer() -> UIView?
+
+    /// The active tab's URL string (for the captureVisibleTab permission gate), or nil if no active tab.
+    func webExtActiveTabURLString() -> String?
+    /// chrome.tabs.captureVisibleTab — snapshot the active tab's web view and return a `data:` URL in the
+    /// requested format ("png"/"jpeg", quality 0–100 for jpeg). nil if there's no capturable tab. The
+    /// CALLER gates on permission first (page pixels are sensitive).
+    func webExtCaptureVisibleTab(format: String, quality: Int) async -> String?
 }
 
 /// The native side of `chrome.cookies` — the browser implements it over the shared WKHTTPCookieStore

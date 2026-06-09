@@ -281,6 +281,31 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
         return tabManager.tab(for: uuid)
     }
 
+    func webExtActiveTabURLString() -> String? {
+        tabManager.activeTab?.webView.url?.absoluteString
+    }
+
+    /// chrome.tabs.captureVisibleTab — snapshot the active tab's web view to a `data:` URL. Permission is
+    /// already checked by the caller (the worker native); here we just render the visible pixels.
+    func webExtCaptureVisibleTab(format: String, quality: Int) async -> String? {
+        guard let tab = tabManager.activeTab,
+              tab.webView.bounds.width > 0, tab.webView.bounds.height > 0 else { return nil }
+        let config = WKSnapshotConfiguration()
+        config.afterScreenUpdates = false
+        let image: UIImage? = await withCheckedContinuation { continuation in
+            tab.webView.takeSnapshot(with: config) { image, _ in continuation.resume(returning: image) }
+        }
+        guard let image else { return nil }
+        let lower = format.lowercased()
+        if lower == "jpeg" || lower == "jpg" {
+            let q = CGFloat(max(0, min(100, quality))) / 100.0
+            guard let data = image.jpegData(compressionQuality: q) else { return nil }
+            return "data:image/jpeg;base64,\(data.base64EncodedString())"
+        }
+        guard let data = image.pngData() else { return nil }
+        return "data:image/png;base64,\(data.base64EncodedString())"
+    }
+
     private func urlPatterns(from value: Any?) -> [String] {
         if let single = value as? String { return [single] }
         if let many = value as? [String] { return many }

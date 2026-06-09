@@ -1771,6 +1771,32 @@
   };
   var tabs = {
     query: function (q, cb) { return settleBg(tabsCall('query', { query: q || {} }), cb); },
+    captureVisibleTab: function () {
+      // (windowId?, options?, callback?) — windowId is ignored (single window on iOS). Returns a data URL.
+      var args = Array.prototype.slice.call(arguments);
+      var cb = (args.length && typeof args[args.length - 1] === 'function') ? args.pop() : null;
+      var options = null;
+      for (var i = 0; i < args.length; i++) { if (args[i] && typeof args[i] === 'object') { options = args[i]; } }
+      options = options || {};
+      var p = new Promise(function (resolve, reject) {
+        __bb_capture_visible_tab(JSON.stringify({
+          format: options.format || 'png',
+          quality: typeof options.quality === 'number' ? options.quality : 92
+        }), function (resJSON) {
+          var r = parseJSON(resJSON);
+          if (r && r.dataUrl) { resolve(r.dataUrl); }
+          else { var e = new Error((r && r.error) || 'captureVisibleTab failed'); e.__bbLastError = true; reject(e); }
+        });
+      });
+      if (typeof cb === 'function') {
+        p.then(function (v) { cb(v); }, function (e) {
+          if (e && e.__bbLastError) { _bbLastError = { message: e.message }; }
+          try { cb(undefined); } finally { _bbLastError = null; }
+        });
+        return undefined;
+      }
+      return p;
+    },
     get: function (id, cb) { return settleBg(tabsCall('get', { tabId: id }), cb); },
     getCurrent: function (cb) { return settleBg(tabsCall('getCurrent', {}), cb); },
     create: function (props, cb) { props = props || {}; return settleBg(tabsCall('create', { url: props.url, active: props.active !== false }), cb); },
