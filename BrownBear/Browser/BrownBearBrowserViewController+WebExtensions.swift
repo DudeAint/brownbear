@@ -39,7 +39,11 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
     func webExtSearchQuery(text: String, disposition: String?, extTabId: Int?) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryValueAllowed) ?? trimmed
+        // Query-value encoding: alphanumerics + unreserved, matching the omnibox's stricter set (NOT
+        // `.urlQueryAllowed`, which leaves `&=` unescaped and would corrupt the query string).
+        var queryAllowed = CharacterSet.alphanumerics
+        queryAllowed.insert(charactersIn: "-._~")
+        let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: queryAllowed) ?? trimmed
         let template = AppSettings.searchEngine.template
         guard let url = URL(string: template.replacingOccurrences(of: "%@", with: encoded)) else { return }
         switch (disposition ?? "CURRENT_TAB").uppercased() {
