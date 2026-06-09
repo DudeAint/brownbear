@@ -44,14 +44,17 @@ let failed = 0;
  * @param htmlPath the page path the entries resolve against.
  * @returns the sandbox global after the bundle runs (with whatever the modules recorded on `out`).
  */
-function runGraph(files, entries, htmlPath) {
+function runGraph(files, entries, htmlPath, opts) {
     global.__bbModuleSource = function (p) {
         return Object.prototype.hasOwnProperty.call(files, p) ? files[p] : null;
     };
     global.__bbBgBaseURL = BASE;
     const code = global.__bbBundlePage(JSON.stringify(entries), htmlPath, BASE);
     new vm.Script(code, { filename: htmlPath + ".bundle.js" }); // must parse as a classic script
-    const sandbox = { out: [], console, Promise, Object, Array, JSON, Math, String, Number };
+    // The bundle console.error's a per-entry failure (the diagnostic); a case that deliberately makes an
+    // entry throw passes `quietConsole` so that expected noise doesn't clutter green CI output.
+    const con = (opts && opts.quietConsole) ? { error() {}, log() {}, warn() {} } : console;
+    const sandbox = { out: [], console: con, Promise, Object, Array, JSON, Math, String, Number };
     sandbox.globalThis = sandbox;
     sandbox.self = sandbox;
     const ctx = vm.createContext(sandbox);
@@ -190,6 +193,51 @@ function tick() { return new Promise((r) => setTimeout(r, 0)); }
             runGraph({ "t9/main.js": "import { x } from './gone.js'; out.push(x);" }, ["main.js"], "t9/index.html");
         } catch (e) { threw = /module not found/.test(e && e.message || ""); }
         assert.ok(threw, "expected a 'module not found' throw for an absent dependency");
+    });
+
+    await test("sync runtime: a throwing entry does NOT block a later independent entry (Chrome parity)", () => {
+        // Each <script type="module"> is its own evaluation root that only shares the module map, so in a
+        // browser one entry throwing never stops a sibling. This is the uBO Lite popup "still-loading"
+        // fix: if theme/fa-icons/i18n throw, popup.js (which clears the page's `loading` class) must
+        // still run. The run report names the failing entry for the host's load probe.
+        const s = runGraph({
+            "tiso/e1.js": "out.push('e1-start'); throw new Error('boom-sync');",
+            "tiso/e2.js": "out.push('e2-ran');"
+        }, ["e1.js", "e2.js"], "tiso/index.html", { quietConsole: true });
+        assert.deepStrictEqual(s.out, ["e1-start", "e2-ran"], "e2 must run even though e1 threw");
+        const rep = s.__bbPageBundle;
+        assert.ok(rep, "__bbPageBundle run report missing");
+        assert.strictEqual(rep.total, 2, "report.total");
+        assert.strictEqual(rep.ran, 1, "exactly one entry (e2) fully ran");
+        assert.strictEqual(rep.errors.length, 1, "one entry error recorded");
+        assert.ok(/tiso\/e1\.js/.test(rep.errors[0].entry), "error names the failing entry: " + rep.errors[0].entry);
+        assert.ok(/boom-sync/.test(rep.errors[0].message), "error carries the thrown message");
+    });
+
+    await test("async runtime: a throwing entry does NOT block a later entry (TLA bundle)", async () => {
+        // One module using top-level await flips the whole bundle to the async runtime; entry isolation
+        // must hold there too (it already did — this pins it + the run report).
+        const s = runGraph({
+            "tisoa/e1.js": "out.push('e1a-start'); await Promise.resolve(); throw new Error('boom-async');",
+            "tisoa/e2.js": "out.push('e2a-ran');"
+        }, ["e1.js", "e2.js"], "tisoa/index.html", { quietConsole: true });
+        await tick(); await tick(); await tick(); await tick();
+        assert.ok(s.out.indexOf("e2a-ran") !== -1, "e2 must run even though e1 rejected: " + JSON.stringify(s.out));
+        const rep = s.__bbPageBundle;
+        assert.strictEqual(rep.total, 2, "report.total (async)");
+        assert.strictEqual(rep.errors.length, 1, "one entry error recorded (async)");
+        assert.ok(/boom-async/.test(rep.errors[0].message), "async error carries the message");
+    });
+
+    await test("run report marks every entry ran with no errors on a clean page", () => {
+        const s = runGraph({
+            "tok/e1.js": "out.push('1');",
+            "tok/e2.js": "out.push('2');"
+        }, ["e1.js", "e2.js"], "tok/index.html");
+        const rep = s.__bbPageBundle;
+        assert.strictEqual(rep.total, 2, "report.total");
+        assert.strictEqual(rep.ran, 2, "both entries ran");
+        assert.strictEqual(rep.errors.length, 0, "no errors on a clean run");
     });
 
     console.log("\n" + passed + " passed, " + failed + " failed");
