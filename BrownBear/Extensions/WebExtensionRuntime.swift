@@ -32,6 +32,11 @@ class WebExtensionRuntime {
     /// WebExtensionPortBackgroundDeliverer conformance), which routes to the right worker's context.
     let portHub = WebExtensionPortHub()
 
+    /// chrome.offscreen documents (one hidden WKWebView per extension). Owned here because the runtime
+    /// is the app-lifetime object that already holds `host` (the view container) and fans runtime
+    /// messages to every page — an offscreen document is just another message-receiving page.
+    let offscreenManager = WebExtensionOffscreenManager()
+
     /// Live extension PAGES (popups/options) that want browser-pushed chrome.tabs/webNavigation
     /// events, held weakly so a dismissed page is skipped (and cleaned up) on the next fan-out.
     private final class WeakEventReceiver { weak var value: WebExtensionEventReceiver?; init(_ v: WebExtensionEventReceiver) { value = v } }
@@ -101,12 +106,15 @@ class WebExtensionRuntime {
     /// first context that answers wins. `senderToken` is the sending page's token (if a page sent it),
     /// so that page is skipped. Content scripts receive via tabs.sendMessage, not this fan-out.
     func sendRuntimeMessage(_ message: Any, sender: [String: Any], to extensionID: String,
-                            senderToken: String? = nil) async -> [String: Any]? {
+                            senderToken: String? = nil, senderIsBackground: Bool = false) async -> [String: Any]? {
         // Track whether ANY context of this extension had a receiving onMessage listener. Chrome only
         // raises "Could not establish connection. Receiving end does not exist." when NOTHING received.
         var sawReceiver = false
-        // Background worker first (the common responder), then open extension pages.
-        if let context = contexts[extensionID] {
+        // Background worker first (the common responder), then open extension pages — but when the
+        // BACKGROUND is the sender (chrome.runtime.sendMessage from the worker), skip it: Chrome never
+        // delivers a context its own broadcast, and the worker fans out only to its pages (popup /
+        // options / offscreen document).
+        if !senderIsBackground, let context = contexts[extensionID] {
             if let response = await context.deliverRuntimeMessage(message: message, sender: sender) {
                 // A `{__bbNoListener:true}` reply means the worker booted but registered no onMessage
                 // listener — keep looking. Any other reply is an actual answer.
@@ -144,6 +152,28 @@ class WebExtensionRuntime {
     /// record (or nil if there's no active tab).
     func fireActionClicked(extensionID: String, tab: [String: Any]?) {
         contexts[extensionID]?.fireActionClicked(tab: tab)
+    }
+
+    // MARK: - chrome.offscreen
+
+    /// chrome.offscreen.createDocument — create the extension's single hidden offscreen document.
+    /// Returns `[:]` on success or `["error": <message>]` for the worker's Promise to reject with.
+    func createOffscreenDocument(extensionID: String, path: String, reasons: [String],
+                                 justification: String) async -> [String: Any] {
+        guard let ext = await store.ext(for: extensionID) else { return ["error": "Unknown extension."] }
+        let container = host?.webExtOffscreenContainer()
+        return await offscreenManager.createDocument(ext: ext, path: path, reasons: reasons,
+                                                     justification: justification, container: container)
+    }
+
+    /// chrome.offscreen.hasDocument.
+    func hasOffscreenDocument(extensionID: String) -> Bool {
+        offscreenManager.hasDocument(extensionID: extensionID)
+    }
+
+    /// chrome.offscreen.closeDocument — returns false if there was no document to close.
+    func closeOffscreenDocument(extensionID: String) -> Bool {
+        offscreenManager.closeDocument(extensionID: extensionID)
     }
 
     /// The ids of running workers that CLAIM this `.user.js` via a webRequest.onBeforeRequest filter
@@ -225,6 +255,8 @@ class WebExtensionRuntime {
             permissionsByExtension.removeValue(forKey: id)
             // Drop this extension's context-menu items so stale rows never show after disable/uninstall.
             BrownBearServices.shared.webExtensionContextMenuStore.forgetExtension(id)
+            // Close any offscreen document — its worker is gone, so the hidden web view must not linger.
+            offscreenManager.close(extensionID: id)
         }
 
         // Spin up newly enabled extensions.

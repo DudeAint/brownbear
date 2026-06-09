@@ -20,11 +20,15 @@ final class WebExtensionPageSession {
     enum Kind {
         case popup
         case options
+        /// An MV3 `chrome.offscreen` document — the same page engine, but hosted in a hidden WKWebView
+        /// (no UI) so a DOM-less service worker can do DOM work. Always loads an explicit packaged path.
+        case offscreen
 
         var title: String {
             switch self {
             case .popup: return "Popup"
             case .options: return "Options"
+            case .offscreen: return "Offscreen document"
             }
         }
     }
@@ -85,6 +89,7 @@ final class WebExtensionPageSession {
         switch kind {
         case .popup: return ext.manifest?.action?.defaultPopup
         case .options: return ext.manifest?.optionsPage
+        case .offscreen: return nil   // offscreen always supplies an explicit path (handled above)
         }
     }
 

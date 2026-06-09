@@ -61,6 +61,10 @@ extension BrownBearBrowserViewController {
         return true
     }
 
+    /// Host view for a chrome.offscreen document's hidden web view. The browser's root view is always
+    /// in the window while the app is foreground, so a child positioned off-screen keeps its JS live.
+    func webExtOffscreenContainer() -> UIView? { view }
+
     // MARK: - Helpers
 
     /// The chrome.windows Window record for BrownBear's lone window. `populate` includes the tab list.
