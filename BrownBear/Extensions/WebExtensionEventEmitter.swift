@@ -192,6 +192,13 @@ protocol WebExtensionEventReceiver: AnyObject {
     /// sendResponse. `senderToken` is the sending page's token (when the sender is itself a page) so a
     /// page never receives its own broadcast. Returns `["value": ...]` for an answer, nil otherwise.
     func deliverRuntimeMessage(message: Any, sender: [String: Any], senderToken: String?) async -> [String: Any]?
+    /// A chrome.runtime ExtensionContext record for this live page (chrome.runtime.getContexts), or nil
+    /// if it shouldn't be listed. Default nil.
+    func contextRecord() -> [String: Any]?
+    /// Whether a runtime.sendMessage can actually be delivered to this receiver right now. The runtime
+    /// skips non-deliverable receivers so a registered-but-dead page doesn't count toward "a receiver
+    /// existed" (which would suppress the no-receiving-end lastError). Default true.
+    var isDeliverable: Bool { get }
 }
 
 extension WebExtensionEventReceiver {
@@ -199,4 +206,8 @@ extension WebExtensionEventReceiver {
     func deliverRuntimeMessage(message: Any, sender: [String: Any], senderToken: String?) async -> [String: Any]? {
         nil
     }
+    /// Default: not surfaced in getContexts.
+    func contextRecord() -> [String: Any]? { nil }
+    /// Default: deliverable.
+    var isDeliverable: Bool { true }
 }

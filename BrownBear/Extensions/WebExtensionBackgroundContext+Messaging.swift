@@ -20,12 +20,32 @@ extension WebExtensionBackgroundContext {
     /// script's pushed message (resolving a parked continuation), and chrome.tabs.sendMessage out to a
     /// tab's content scripts. Grouped so installNatives stays readable as the surface grows.
     func installMessagingNatives(into context: JSContext) {
-        // background runtime.sendMessage → other extension contexts. Content scripts receive via
-        // tabs.sendMessage, not this. Delivery from a CONTENT SCRIPT or PAGE to an open popup/options
-        // page is wired through WebExtensionRuntime.sendRuntimeMessage; the worker-as-SENDER path
-        // (background → page) is not yet routed here, so resolve with no value for now.
-        let sendMessage: @convention(block) (String, JSValue) -> Void = { [weak self] _, callback in
-            self?.callBack(callback, with: "null")
+        // background chrome.runtime.sendMessage → the extension's PAGES (popup / options / offscreen
+        // document). Chrome delivers a worker's broadcast to every other context of the extension; on
+        // iOS there's only one worker per extension, so we fan out to the live pages (senderIsBackground
+        // skips re-delivering to this same worker) and return the first responder's `{value}`. This is
+        // what makes chrome.offscreen useful: the worker posts work to its offscreen document and awaits
+        // the reply. Content scripts receive via tabs.sendMessage, not this fan-out.
+        let extID = self.extensionID
+        let sendMessage: @convention(block) (String, JSValue) -> Void = { [weak self] payloadJSON, callback in
+            guard let self else { return }
+            let parsed = ((try? JSONSerialization.jsonObject(with: Data(payloadJSON.utf8))) as? [String: Any]) ?? [:]
+            let message = parsed["message"] ?? NSNull()
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let response = await BrownBearServices.shared.webExtensionRuntime.sendRuntimeMessage(
+                    message, sender: ["id": extID], to: extID, senderIsBackground: true)
+                // Three outcomes, mirroring Chrome: a real responder replies `{value:…}`; NO context had
+                // a listener → pass `{__bbNoReceiver}` through so the JS sets lastError / rejects the
+                // Promise; nil (received but declined/no answer) → null → resolves undefined, no error.
+                if let response, response["__bbNoReceiver"] == nil {
+                    self.callBack(callback, with: self.jsonString(response))
+                } else if response?["__bbNoReceiver"] != nil {
+                    self.callBack(callback, with: self.jsonString(["__bbNoReceiver": true]))
+                } else {
+                    self.callBack(callback, with: "null")
+                }
+            }
         }
         context.setObject(sendMessage, forKeyedSubscript: "__bb_send_message" as NSString)
 

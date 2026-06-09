@@ -20,11 +20,15 @@ final class WebExtensionPageSession {
     enum Kind {
         case popup
         case options
+        /// An MV3 `chrome.offscreen` document — the same page engine, but hosted in a hidden WKWebView
+        /// (no UI) so a DOM-less service worker can do DOM work. Always loads an explicit packaged path.
+        case offscreen
 
         var title: String {
             switch self {
             case .popup: return "Popup"
             case .options: return "Options"
+            case .offscreen: return "Offscreen document"
             }
         }
     }
@@ -85,6 +89,7 @@ final class WebExtensionPageSession {
         switch kind {
         case .popup: return ext.manifest?.action?.defaultPopup
         case .options: return ext.manifest?.optionsPage
+        case .offscreen: return nil   // offscreen always supplies an explicit path (handled above)
         }
     }
 
@@ -253,6 +258,10 @@ extension WebExtensionPageSession: WebExtensionEventReceiver {
 
     /// Deliver a browser-pushed chrome.tabs/webNavigation event into this page's chrome.* surface.
     func dispatchExtEvent(name: String, argsJSON: String) {
+        // An offscreen document has no chrome.tabs/webNavigation surface in Chrome — it must still be a
+        // registered event receiver (that's how it gets runtime.sendMessage via deliverRuntimeMessage),
+        // but browser-pushed tab/navigation events are not delivered to it.
+        if kind == .offscreen { return }
         guard let webView else { return }
         let js = "window.__brownbearExtPage && window.__brownbearExtPage.dispatchExtEvent("
             + "\(Self.jsonString(name)), \(Self.jsonString(argsJSON)));"
@@ -265,4 +274,36 @@ extension WebExtensionPageSession: WebExtensionEventReceiver {
         guard let pageToken, senderToken != pageToken, webView != nil else { return nil }
         return await router.deliverRuntimeMessageToPage(token: pageToken, message: message, sender: sender)
     }
+
+    /// This page's chrome.runtime.getContexts record (popup → POPUP, options → TAB, offscreen →
+    /// OFFSCREEN_DOCUMENT). Only listed while the web view is live. The offscreen document is reported
+    /// here too — it's a registered event receiver — so getContexts needs no separate offscreen lookup.
+    func contextRecord() -> [String: Any]? {
+        guard webView != nil, let pageToken else { return nil }
+        let contextType: String
+        switch kind {
+        case .popup: contextType = "POPUP"
+        case .options: contextType = "TAB"
+        case .offscreen: contextType = "OFFSCREEN_DOCUMENT"
+        }
+        // An offscreen document isn't associated with a top frame or a window — Chrome reports
+        // frameId/windowId as -1 for it (unlike a popup/options page, which lives in the lone window).
+        let isOffscreen = kind == .offscreen
+        return [
+            "contextId": pageToken,
+            "contextType": contextType,
+            "documentId": pageToken,
+            "documentUrl": pageURL?.absoluteString ?? NSNull(),
+            "documentOrigin": "\(WebExtensionSchemeHandler.scheme)://\(ext.id)",
+            "frameId": isOffscreen ? -1 : 0,
+            "tabId": -1,
+            "windowId": isOffscreen ? -1 : BrownBearBrowserViewController.webExtWindowID,
+            "incognito": false
+        ]
+    }
+
+    /// Whether a runtime.sendMessage can actually be delivered into this page (its web view is live).
+    /// The runtime uses this so a registered-but-dead page doesn't count as a receiver and wrongly
+    /// suppress chrome.runtime.lastError's "no receiving end" signal.
+    var isDeliverable: Bool { webView != nil }
 }

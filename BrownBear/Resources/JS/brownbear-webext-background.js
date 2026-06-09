@@ -1525,6 +1525,10 @@
     return baseURL + (path.charAt(0) === '/' ? path.slice(1) : path);
   }
 
+  // chrome.runtime.lastError slot for the worker. Settable so the messaging path can populate it before
+  // invoking a callback (Chrome calls the callback with lastError set, then clears it), mirroring the
+  // page/content runtimes. The Promise form rejects instead.
+  var _bbLastError = null;
   var runtime = {
     id: extId,
     // Chrome exposes these enums on chrome.runtime; extensions read them directly (e.g. an onInstalled
@@ -1545,14 +1549,34 @@
     onConnect: makeEvent(connectListeners),
     onSuspend: makeEvent([]),
     sendMessage: function () {
-      // Accept (extensionId?, message, options?, callback?) — Chrome's overloaded shape.
+      // Accept (extensionId?, message, options?, callback?) — Chrome's overloaded shape. Returns a
+      // Promise when no callback is given (MV3), which is how a worker awaits its offscreen document's
+      // reply: `const res = await chrome.runtime.sendMessage(...)`.
       var args = Array.prototype.slice.call(arguments);
       var cb = (args.length && typeof args[args.length - 1] === 'function') ? args.pop() : null;
       var message = (typeof args[0] === 'string' && args.length > 1) ? args[1] : args[0];
-      __bb_send_message(JSON.stringify({ message: (message === undefined ? null : message) }), function (resJSON) {
-        var r = parseJSON(resJSON);
-        if (typeof cb === 'function') { cb(r ? r.value : undefined); }
+      var p = new Promise(function (resolve, reject) {
+        __bb_send_message(JSON.stringify({ message: (message === undefined ? null : message) }), function (resJSON) {
+          var r = parseJSON(resJSON);
+          if (r && r.__bbNoReceiver) {
+            // No context of this extension had an onMessage listener — Chrome rejects the Promise (and
+            // sets lastError for the callback form). Tagged so the callback branch can surface it.
+            var err = new Error('Could not establish connection. Receiving end does not exist.');
+            err.__bbLastError = true;
+            reject(err);
+          } else {
+            resolve(r ? r.value : undefined);
+          }
+        });
       });
+      if (typeof cb === 'function') {
+        p.then(function (v) { cb(v); }, function (e) {
+          if (e && e.__bbLastError) { _bbLastError = { message: e.message }; }
+          try { cb(undefined); } finally { _bbLastError = null; }
+        });
+        return undefined;
+      }
+      return p;
     },
     connect: function (connectInfo) {
       // iOS: the worker has no addressable content/page peer to open a port TOWARD (the hub is
@@ -1575,7 +1599,17 @@
       if (typeof cb === 'function') { cb(info); return undefined; }
       return Promise.resolve(info);
     },
-    get lastError() { return undefined; }
+    getContexts: function (filter, cb) {
+      var p = new Promise(function (resolve) {
+        __bb_get_contexts(JSON.stringify(filter || {}), function (resJSON) {
+          var r = parseJSON(resJSON);
+          resolve(Array.isArray(r) ? r : []);
+        });
+      });
+      if (typeof cb === 'function') { p.then(function (v) { cb(v); }); return undefined; }
+      return p;
+    },
+    get lastError() { return _bbLastError; }
   };
 
   // ---------------------------------------------------------------- assemble + expose
@@ -1861,23 +1895,42 @@
     MAX_HANDLER_BEHAVIOR_CHANGED_CALLS_PER_10_MINUTES: 20
   };
 
-  // ---------------------------------------------------------------- chrome.offscreen (unsupported)
-  // Offscreen documents need a hidden DOM host iOS/WebKit can't give a headless worker. Present the API
-  // so an extension that calls chrome.offscreen.createDocument doesn't crash on it being undefined;
-  // createDocument rejects (well-behaved callers fall back, as ScriptCat already does). hasDocument is
-  // false and closeDocument is a no-op.
+  // ---------------------------------------------------------------- chrome.offscreen
+  // A real offscreen document: the native side hosts the extension page in a hidden WKWebView (a true
+  // DOM), since an MV3 service worker has none. createDocument resolves once the document has loaded;
+  // the worker then talks to it via chrome.runtime messaging (background → page is wired). Chrome allows
+  // a SINGLE offscreen document per extension — a second createDocument rejects.
+  function __bbOffscreenCall(method, args) {
+    return new Promise(function (resolve, reject) {
+      __bb_offscreen(method, JSON.stringify(args || {}), function (resJSON) {
+        var r = parseJSON(resJSON) || {};
+        if (r && r.error) { reject(new Error(r.error)); } else { resolve(r); }
+      });
+    });
+  }
   var offscreen = {
     Reason: { AUDIO_PLAYBACK: 'AUDIO_PLAYBACK', BLOBS: 'BLOBS', CLIPBOARD: 'CLIPBOARD',
               DISPLAY_MEDIA: 'DISPLAY_MEDIA', DOM_PARSER: 'DOM_PARSER', DOM_SCRAPING: 'DOM_SCRAPING',
               GEOLOCATION: 'GEOLOCATION', IFRAME_SCRIPTING: 'IFRAME_SCRIPTING', LOCAL_STORAGE: 'LOCAL_STORAGE',
               MATCH_MEDIA: 'MATCH_MEDIA', TESTING: 'TESTING', USER_MEDIA: 'USER_MEDIA', WORKERS: 'WORKERS' },
-    createDocument: function (_opts, cb) {
-      var err = new Error('chrome.offscreen is not supported on this platform');
-      if (typeof cb === 'function') { cb(); return undefined; }
-      return Promise.reject(err);
+    createDocument: function (opts, cb) {
+      var o = opts || {};
+      var p = __bbOffscreenCall('createDocument', {
+        url: o.url || '', reasons: o.reasons || [], justification: o.justification || ''
+      }).then(function () { return undefined; });
+      if (typeof cb === 'function') { p.then(function () { cb(); }, function () { cb(); }); return undefined; }
+      return p;
     },
-    closeDocument: function (cb) { if (typeof cb === 'function') { cb(); return undefined; } return Promise.resolve(); },
-    hasDocument: function (cb) { if (typeof cb === 'function') { cb(false); return undefined; } return Promise.resolve(false); }
+    closeDocument: function (cb) {
+      var p = __bbOffscreenCall('closeDocument', {}).then(function () { return undefined; });
+      if (typeof cb === 'function') { p.then(function () { cb(); }, function () { cb(); }); return undefined; }
+      return p;
+    },
+    hasDocument: function (cb) {
+      var p = __bbOffscreenCall('hasDocument', {}).then(function (r) { return !!(r && r.hasDocument); });
+      if (typeof cb === 'function') { p.then(function (v) { cb(v); }, function () { cb(false); }); return undefined; }
+      return p;
+    }
   };
 
   // ---------------------------------------------------------------- chrome.scripting

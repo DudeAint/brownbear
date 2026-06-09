@@ -82,6 +82,12 @@ protocol WebExtensionBridgeHost: AnyObject {
     /// false if the extension is unknown or has no options page (so JS can populate lastError).
     @discardableResult
     func webExtOpenOptionsPage(extensionID: String) -> Bool
+
+    /// A view to parent a chrome.offscreen document's hidden WKWebView into, so its JS/timers keep
+    /// running (an off-window web view can be suspended by WebKit). The browser returns its root view;
+    /// the offscreen manager positions the web view off-screen behind all chrome. nil ⇒ no window yet,
+    /// in which case createDocument rejects.
+    func webExtOffscreenContainer() -> UIView?
 }
 
 /// The native side of `chrome.cookies` — the browser implements it over the shared WKHTTPCookieStore
