@@ -29,22 +29,29 @@
     if (typeof nativeAdd !== "function") { return; }
     W.__bbResilientEvents = 1;
 
-    // A stable guard for one window method. `state.value` holds the page's replacement (if it sets one).
-    // A call tries it; if it THROWS we fall back to the native. If it SUCCEEDS we mark it trusted so the
-    // getter then returns the page's function DIRECTLY — restoring its identity for working instrumentation
-    // that self-checks `window.addEventListener === theirWrapper`. So we only keep intercepting a wrapper
-    // that is actually broken (always throws — the blocked-analytics-agent case).
+    // Use `this` for the native call only when it's a real EventTarget — a broken wrapper commonly forwards
+    // a bogus `this` (its uninitialized internal), and the native then throws "Can only call addEventListener
+    // on instances of EventTarget". Default to the window (the owner of the methods we guard).
+    function realTarget(self, guard) {
+      try { if (self && self !== guard && self instanceof ET) { return self; } } catch (e) {}
+      return W;
+    }
+
+    // A stable guard for one window method. `state.value` is the page's override, if it set one. A call
+    // tries the override first (so WORKING instrumentation is preserved) and falls back to the native when
+    // the override throws OR when we'd re-enter it. The re-entrancy guard is essential: an instrumentation
+    // wrapper captures the "original" (which is THIS guard) and calls back into it — without the guard that
+    // recurses forever. On re-entry we go straight to the native, with a real-EventTarget `this`.
     function makeGuard(displayName, state, nativeFn) {
       var guard = function () {
         var page = state.value;
-        if (typeof page === "function" && page !== guard) {
-          try {
-            var result = page.apply(this, arguments);
-            state.trusted = true;   // the page's wrapper works — stop shadowing it
-            return result;
-          } catch (e) { /* the page's wrapper threw (e.g. a blocked analytics agent) — use the native */ }
+        if (typeof page === "function" && page !== guard && !state.inCall) {
+          state.inCall = true;
+          try { return page.apply(this, arguments); }
+          catch (e) { /* the override threw (e.g. a blocked analytics agent) — use the native */ }
+          finally { state.inCall = false; }
         }
-        return nativeFn.apply(this, arguments);
+        return nativeFn.apply(realTarget(this, guard), arguments);
       };
       try {
         var native = "function " + displayName + "() { [native code] }";
@@ -54,18 +61,13 @@
     }
 
     function install(name, nativeFn) {
-      var state = { value: null, trusted: false };
+      var state = { value: null, inCall: false };
       var guard = makeGuard(name, state, nativeFn);
       try {
         Object.defineProperty(W, name, {
           configurable: true,
-          get: function () {
-            return (state.trusted && typeof state.value === "function") ? state.value : guard;
-          },
-          set: function (v) {
-            state.value = (typeof v === "function" && v !== guard) ? v : null;
-            state.trusted = false;   // a fresh override must prove itself before we trust it
-          }
+          get: function () { return guard; },
+          set: function (v) { state.value = (typeof v === "function" && v !== guard) ? v : null; }
         });
       } catch (eIgnored) { /* a locked-down window; leave the native in place */ }
     }
