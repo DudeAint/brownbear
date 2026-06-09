@@ -13,6 +13,7 @@
 //
 
 import Foundation
+import UIKit
 
 // Not `final`: WebExtensionEventEmitterTests subclasses it (SpyRuntime) to capture the event fan-out
 // without booting a JSContext. dispatchEventToAll is likewise overridable.
@@ -94,8 +95,32 @@ class WebExtensionRuntime {
             forName: .brownBearExtensionNotificationEvent, object: nil, queue: .main) { [weak self] note in
             Task { @MainActor in self?.handleNotificationEvent(note) }
         })
+        // chrome.idle.onStateChanged: app foreground/background + device lock/unlock drive the idle state
+        // (iOS can't observe true user idle). Coalesced so only real transitions fire.
+        for name: NSNotification.Name in [UIApplication.didBecomeActiveNotification,
+                                          UIApplication.willResignActiveNotification,
+                                          UIApplication.didEnterBackgroundNotification,
+                                          UIApplication.protectedDataDidBecomeAvailableNotification,
+                                          UIApplication.protectedDataWillBecomeUnavailableNotification] {
+            observers.append(NotificationCenter.default.addObserver(
+                forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.pushIdleStateIfChanged() }
+            })
+        }
 
         Task { await reload() }
+    }
+
+    /// Whether the idle state changed since the last push; if so, deliver chrome.idle.onStateChanged to
+    /// every running worker. Coalesces the several app-lifecycle notifications into one event per real
+    /// transition. `protectedDataWillBecomeUnavailable` fires just before lock, where applicationState is
+    /// still .active, so treat that specific notification as the locked state directly.
+    private var lastIdleState: String?
+    private func pushIdleStateIfChanged() {
+        let state = WebExtensionBackgroundContext.currentIdleState()
+        guard state != lastIdleState else { return }
+        lastIdleState = state
+        for context in contexts.values { context.fireIdleStateChanged(state) }
     }
 
     // MARK: - Message bus

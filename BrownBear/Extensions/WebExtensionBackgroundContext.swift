@@ -40,7 +40,9 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
     /// authoritative webNavigation gate lives in WebExtensionRuntime.dispatchEventToAll). On `queue`.
     private var grantedPermissions: Set<String> = []
 
-    private let queue: DispatchQueue
+    // Internal (not private) so +Platform's fireIdleStateChanged can hop onto it. Serial; every JSContext
+    // touch happens here.
+    let queue: DispatchQueue
     /// Internal (not private) so +Crypto's importScripts shim can evaluate a loaded chunk in this
     /// worker's GLOBAL scope (shared lexical env), like importScripts in a real service worker.
     var context: JSContext?
@@ -289,6 +291,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
         installContextMenuNatives(into: context)
         installPortNatives(into: context)
         installOffscreenNatives(into: context)
+        installPlatformNatives(into: context)
 
         // chrome.tabs from the background worker. Hop to the main actor (TabManager is MainActor),
         // run the op, then call back onto this context's queue with the JSON result.
@@ -528,7 +531,9 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
 
     // MARK: - Helpers (on `queue`)
 
-    private func fire(method: String, arguments: [Any]) {
+    // Internal (not private) so +Platform's fireIdleStateChanged can dispatch onto the JSContext. Both
+    // MUST be used on `queue`.
+    func fire(method: String, arguments: [Any]) {
         guard isAlive, let context,
               let dispatcher = context.objectForKeyedSubscript("__bbBg"), !dispatcher.isUndefined else { return }
         dispatcher.invokeMethod(method, withArguments: arguments)

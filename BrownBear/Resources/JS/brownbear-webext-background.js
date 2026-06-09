@@ -1477,6 +1477,37 @@
     }
     return message;
   }
+  // The device UI language (BCP-47, e.g. "en-US"), from native. chrome.i18n.getUILanguage returns it;
+  // getAcceptLanguages derives a short ordered list (["en-US","en"]) from it.
+  function uiLanguage() {
+    return (typeof globalThis.__bbLanguage === 'string' && globalThis.__bbLanguage) ? globalThis.__bbLanguage : 'en-US';
+  }
+  function acceptLanguages() {
+    var lang = uiLanguage();
+    var base = lang.indexOf('-') >= 0 ? lang.split('-')[0] : null;
+    return base && base !== lang ? [lang, base] : [lang];
+  }
+  var i18n = {
+    getMessage: getMessage,
+    getUILanguage: function () { return uiLanguage(); },
+    getAcceptLanguages: function (cb) {
+      var langs = acceptLanguages();
+      if (typeof cb === 'function') { cb(langs); return undefined; }
+      return Promise.resolve(langs);   // MV3 Promise form
+    },
+    // chrome.i18n.detectLanguage — native NLLanguageRecognizer (returns the dominant languages of `text`
+    // with confidence percentages, matching Chrome's CLD shape).
+    detectLanguage: function (text, cb) {
+      var p = new Promise(function (resolve) {
+        __bb_i18n_detect(String(text == null ? '' : text), function (resJSON) {
+          var r = parseJSON(resJSON);
+          resolve(r && r.languages ? r : { isReliable: false, languages: [] });
+        });
+      });
+      if (typeof cb === 'function') { p.then(function (v) { cb(v); }); return undefined; }
+      return p;
+    }
+  };
 
   // ---------------------------------------------------------------- chrome.runtime
 
@@ -1620,6 +1651,33 @@
     getAll: function (cb) { if (typeof cb === 'function') { cb([]); } }
   };
 
+  // chrome.idle — iOS can't observe global user input, so queryState maps app/device state via native
+  // (locked when data-protected, active when the app is foreground-active, else idle). onStateChanged
+  // fires on app foreground/background (and lock/unlock) transitions, pushed from native.
+  var idleStateListeners = [];
+  var idle = {
+    IdleState: { ACTIVE: 'active', IDLE: 'idle', LOCKED: 'locked' },
+    queryState: function (detectionIntervalInSeconds, cb) {
+      var p = new Promise(function (resolve) {
+        __bb_idle('queryState', JSON.stringify({ interval: detectionIntervalInSeconds }), function (resJSON) {
+          var r = parseJSON(resJSON);
+          resolve(typeof r === 'string' ? r : 'active');
+        });
+      });
+      if (typeof cb === 'function') { p.then(function (v) { cb(v); }); return undefined; }
+      return p;
+    },
+    setDetectionInterval: function (intervalInSeconds, cb) {
+      __bb_idle('setDetectionInterval', JSON.stringify({ interval: intervalInSeconds }),
+        function () { if (typeof cb === 'function') { cb(); } });
+    },
+    getAutoLockDelay: function (cb) {
+      if (typeof cb === 'function') { cb(0); return undefined; }
+      return Promise.resolve(0);
+    },
+    onStateChanged: makeEvent(idleStateListeners)
+  };
+
   // ---------------------------------------------------------------- chrome.action / chrome.browserAction
   // Backed by native WebExtensionActionState via __bb_action; onClicked is delivered from the browser
   // (overflow-menu tap on an action with no popup) through __bbBg.dispatchActionClicked. setIcon
@@ -1671,6 +1729,22 @@
     getBadgeText: actionGetter('getBadgeText'),
     getTitle: actionGetter('getTitle'),
     getBadgeBackgroundColor: actionGetter('getBadgeBackgroundColor'),
+    onClicked: makeEvent(actionClickedListeners)
+  };
+
+  // chrome.pageAction (MV2): iOS has no per-tab page-action button, so show/hide/isShown are no-ops, but
+  // the title/icon/popup setters and onClicked alias chrome.action so an MV2 extension that drives a page
+  // action still configures its toolbar item and receives clicks (an extension uses pageAction OR action,
+  // not both, so sharing the click listeners is safe).
+  var pageAction = {
+    show: function (_tabId, cb) { if (typeof cb === 'function') { cb(); return undefined; } return Promise.resolve(); },
+    hide: function (_tabId, cb) { if (typeof cb === 'function') { cb(); return undefined; } return Promise.resolve(); },
+    isShown: function (_details, cb) { if (typeof cb === 'function') { cb(false); return undefined; } return Promise.resolve(false); },
+    setTitle: actionSetter('setTitle'),
+    getTitle: actionGetter('getTitle'),
+    setIcon: actionSetIcon,
+    setPopup: actionSetter('setPopup'),
+    getPopup: function (_details, cb) { if (typeof cb === 'function') { cb(''); return undefined; } return Promise.resolve(''); },
     onClicked: makeEvent(actionClickedListeners)
   };
 
@@ -2250,13 +2324,15 @@
     offscreen: offscreen,
     alarms: alarms,
     commands: commands,
+    idle: idle,
     contextMenus: contextMenus,
     menus: contextMenus,
     action: action,
     browserAction: action,
+    pageAction: pageAction,
     tabs: tabs,
     scripting: scripting,
-    i18n: { getMessage: getMessage, getUILanguage: function () { return 'en-US'; }, getAcceptLanguages: function (cb) { if (typeof cb === 'function') { cb(['en-US', 'en']); } } },
+    i18n: i18n,
     extension: { getURL: getURL }
   };
 
@@ -2372,6 +2448,13 @@
       for (var i = 0; i < contextMenuClickedListeners.length; i++) {
         try { contextMenuClickedListeners[i](info, tab); }
         catch (e) { __bb_log('error', 'contextMenus.onClicked listener threw: ' + (e && e.message ? e.message : e)); }
+      }
+    },
+
+    dispatchIdleStateChanged: function (state) {
+      for (var i = 0; i < idleStateListeners.length; i++) {
+        try { idleStateListeners[i](state); }
+        catch (e) { __bb_log('error', 'idle.onStateChanged listener threw: ' + (e && e.message ? e.message : e)); }
       }
     },
 
