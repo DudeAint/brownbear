@@ -48,17 +48,21 @@ final class WebExtensionMV2CanvasTests: XCTestCase {
           (async function () {
             var out = { threw: false };
             try {
-              // Violentmonkey loadIcon shape (icon.js):
+              // Violentmonkey loadIcon shape (icon.js). Use a data: icon so the native fetch passes it
+              // through without a network call — and toDataURL must return that REAL image (not a stub).
+              var ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
               var img = new Image();
               out.imageIsCtor = (typeof Image === 'function');
-              img.src = 'https://example.com/icon_38.png';
+              img.src = ICON;
               await new Promise(function (res) { img.onload = res; img.onerror = function () { res(); }; });
+              out.loaded = !!img.__bbDataUrl;
               var canvas = document.createElement('canvas');
               canvas.width = 38; canvas.height = 38;
               var ctx = canvas.getContext('2d');
               out.ctxOk = !!ctx && typeof ctx.drawImage === 'function';
               ctx.drawImage(img, 0, 0, 38, 38);
               out.dataUrl = canvas.toDataURL();
+              out.real = (out.dataUrl === ICON);   // real icon passed through, not the placeholder
               var data = ctx.getImageData(0, 0, 38, 38);
               out.imgDataLen = data.data.length;
               out.imgDataTyped = (data.data instanceof Uint8ClampedArray);
@@ -78,8 +82,10 @@ final class WebExtensionMV2CanvasTests: XCTestCase {
         XCTAssertEqual(r["threw"] as? Bool, false, "loadIcon's canvas/Image path must not throw: \(r["error"] ?? "")")
         XCTAssertEqual(r["imageIsCtor"] as? Bool, true, "Image must be a constructor in an MV2 background")
         XCTAssertEqual(r["ctxOk"] as? Bool, true, "getContext('2d') must return a usable 2D context")
-        XCTAssertEqual((r["dataUrl"] as? String)?.hasPrefix("data:image/png"), true,
-                       "toDataURL returns a valid PNG data-URI")
+        XCTAssertEqual(r["loaded"] as? Bool, true, "Image.src must resolve to the data: icon via __bb_fetch_image")
+        XCTAssertEqual(r["real"] as? Bool, true, "toDataURL returns the REAL drawn icon, not the placeholder")
+        XCTAssertEqual((r["dataUrl"] as? String)?.hasPrefix("data:image/"), true,
+                       "toDataURL returns a valid image data-URI")
         XCTAssertEqual(r["imgDataLen"] as? Int, 38 * 38 * 4, "getImageData has w*h*4 bytes")
         XCTAssertEqual(r["imgDataTyped"] as? Bool, true, "getImageData.data is a Uint8ClampedArray")
     }
