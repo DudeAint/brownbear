@@ -54,6 +54,43 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
         }
     }
 
+    // MARK: - chrome.bookmarks / history / sessions (read-only browsing data)
+
+    func webExtBookmarksTree() async -> [[String: Any]] {
+        let bookmarks = await BrownBearServices.shared.bookmarkStore.all()
+        return WebExtensionBrowserData.bookmarkTree(from: bookmarks)
+    }
+
+    func webExtBookmarksSearch(query: String) async -> [[String: Any]] {
+        let bookmarks = await BrownBearServices.shared.bookmarkStore.all()
+        return WebExtensionBrowserData.bookmarkSearch(query, in: bookmarks)
+    }
+
+    func webExtHistorySearch(text: String, maxResults: Int) async -> [[String: Any]] {
+        let limit = maxResults > 0 ? maxResults : 100   // Chrome's default maxResults is 100
+        let store = BrownBearServices.shared.historyStore
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A blank query means "most recent" in Chrome's history.search; otherwise full-text match.
+        let entries = trimmed.isEmpty ? await store.recent(limit: limit) : await store.search(trimmed, limit: limit)
+        return WebExtensionBrowserData.historyItems(from: entries)
+    }
+
+    func webExtSessionsRecentlyClosed(maxResults: Int) -> [[String: Any]] {
+        let limit = maxResults > 0 ? maxResults : 25
+        let closed = Array(tabManager.recentlyClosed.prefix(limit))
+        return WebExtensionBrowserData.sessionRecords(from: closed)
+    }
+
+    func webExtSessionsRestore(sessionId: String?) -> [String: Any]? {
+        let closed = tabManager.recentlyClosed
+        guard let index = WebExtensionBrowserData.restoreIndex(sessionId: sessionId, closedCount: closed.count) else {
+            return nil
+        }
+        let record = closed[index]
+        tabManager.createTab(loading: record.url)   // reopen (mirrors the tab grid's Recently Closed action)
+        return WebExtensionBrowserData.sessionRecords(from: [record]).first
+    }
+
     func webExtTabRecord(forWebView webView: WKWebView) -> [String: Any]? {
         // A content script's message arrives on the tab's own web view; a popup/options page's does not
         // map to any tab here, so the caller (the MessageSender builder) correctly omits `tab` for it.

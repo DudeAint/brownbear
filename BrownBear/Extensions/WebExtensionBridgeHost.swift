@@ -39,6 +39,22 @@ protocol WebExtensionBridgeHost: AnyObject {
     /// single-window); `extTabId` (when set, with CURRENT_TAB) targets that tab instead of the active one.
     func webExtSearchQuery(text: String, disposition: String?, extTabId: Int?)
 
+    // chrome.bookmarks / chrome.history / chrome.sessions — read-only views of the user's own browsing
+    // data, backed by BrownBear's BookmarkStore / HistoryStore / TabManager.recentlyClosed. The native
+    // bridge gates each on the matching manifest permission (bookmarks/history/sessions) before calling
+    // these, so an undeclared script reaches none of it (§5). bookmarks/history read actor stores (async).
+    /// chrome.bookmarks.getTree — the full bookmark tree (a synthetic root over BrownBear's flat list).
+    func webExtBookmarksTree() async -> [[String: Any]]
+    /// chrome.bookmarks.search — bookmarks whose title/URL contains `query` (blank = all).
+    func webExtBookmarksSearch(query: String) async -> [[String: Any]]
+    /// chrome.history.search — visited entries matching `text` (blank = most recent), capped at `maxResults`.
+    func webExtHistorySearch(text: String, maxResults: Int) async -> [[String: Any]]
+    /// chrome.sessions.getRecentlyClosed — the recently-closed tabs as Session records (newest first).
+    func webExtSessionsRecentlyClosed(maxResults: Int) -> [[String: Any]]
+    /// chrome.sessions.restore — reopen a recently-closed tab (`sessionId` nil/unknown = most recent).
+    /// Returns the restored Session, or nil if there was nothing to restore.
+    func webExtSessionsRestore(sessionId: String?) -> [String: Any]?
+
     /// chrome.scripting.executeScript / chrome.tabs.executeScript — run `code` in a tab (`nil` ext id =
     /// active) and return one `{result, frameId}` per frame. `world` is "MAIN" (page) or "ISOLATED"
     /// (the extension content world). Main frame only on iOS.
