@@ -798,42 +798,44 @@
     installPerfBridge("iso");
   }
 
-  // Install the page-world half once, by injecting the SAME shim (serialized) as a <script> so it runs in
-  // the page's MAIN world before any world:"MAIN" manager code.
+  // The page-world half of the cross-world bridge is installed lazily, PREPENDED to the first MAIN-world
+  // injection so it runs (with performance.dispatchEvent already patched) before any manager code in the
+  // same evaluation — guaranteeing order regardless of how many world:"MAIN" scripts follow.
   var __bbPageBridgeDone = false;
-  function ensurePagePerfBridge() {
-    if (__bbPageBridgeDone) { return; }
-    __bbPageBridgeDone = true;
-    try {
-      var src = "(" + installPerfBridge.toString() + ')("page");';
-      var s = document.createElement("script");
-      s.textContent = src;
-      var parent = document.head || document.documentElement || document.body;
-      if (parent) {
-        parent.appendChild(s);
-        if (s.parentNode) { s.parentNode.removeChild(s); }
-      }
-    } catch (e) {
-      if (_console.error) { _console.error("[BrownBear ext] page perf-bridge inject error:", e); }
+
+  // Run `code` in the page's REAL main world. Prefer a NATIVE page-world eval: an inline <script> element
+  // is blocked by a strict page CSP (script-src without 'unsafe-inline'), which silently kills MV3
+  // world:"MAIN" managers (ScriptCat's inject.js) AND this bridge on hardened sites (GitHub/X/Google). A
+  // native evaluateJavaScript in the page world is NOT subject to the page CSP. Fall back to a <script>
+  // element only when the native bridge is unavailable (e.g. a headless context with no message handler).
+  function injectPageWorldCode(code) {
+    if (handler) {
+      bridge("page.injectMainWorld", { code: code }, null).catch(function () {});
+      return true;
     }
+    try {
+      var s = document.createElement("script");
+      s.textContent = code;
+      var parent = document.head || document.documentElement || document.body;
+      if (!parent) { return false; }
+      parent.appendChild(s);
+      if (s.parentNode) { s.parentNode.removeChild(s); }
+      return true;
+    } catch (e) { return false; }
   }
 
   // Inject code into the page's REAL main world (MV3 `world:"MAIN"` userScripts). We're in an isolated
-  // world, which can't eval into the page world directly — but a <script> element appended to the page
-  // DOM runs in the page world (the same mechanism real managers use). No extension/chrome API is exposed
-  // to MAIN-world code, per the userScripts contract. At document_start `documentElement` already exists.
+  // world, which can't eval into the page world directly. No extension/chrome API is exposed to MAIN-world
+  // code, per the userScripts contract. The cross-world `performance` bridge shim is prepended to the first
+  // injection so a manager's eventFlag handshake can reach our isolated world.
   function injectIntoPage(code, extensionId) {
     try {
-      // Ensure the page-world half of the cross-world `performance` bridge is present before any
-      // world:"MAIN" manager code runs, so its eventFlag handshake can reach our isolated world.
-      ensurePagePerfBridge();
-      var script = document.createElement("script");
-      script.textContent = code + "\n//# sourceURL=chrome-extension://" + extensionId + "/userscript-main.js";
-      var parent = document.head || document.documentElement || document.body;
-      if (!parent) { return false; }
-      parent.appendChild(script);
-      if (script.parentNode) { script.parentNode.removeChild(script); }   // tidy the DOM; the code already ran
-      return true;
+      var payload = code + "\n//# sourceURL=chrome-extension://" + extensionId + "/userscript-main.js";
+      if (!__bbPageBridgeDone) {
+        __bbPageBridgeDone = true;
+        payload = "(" + installPerfBridge.toString() + ')("page");\n' + payload;
+      }
+      return injectPageWorldCode(payload);
     } catch (e) {
       if (_console.error) { _console.error("[BrownBear ext] MAIN-world inject error:", e); }
       return false;
