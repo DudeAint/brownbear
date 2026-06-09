@@ -762,6 +762,9 @@ extension WebExtensionBackgroundContext {
         case "setBadgeBackgroundColor":
             state.setBadgeColor(extensionID: extensionID, tabId: tabId, color: args["color"] as? String)
             return NSNull()
+        case "setBadgeTextColor":
+            state.setBadgeTextColor(extensionID: extensionID, tabId: tabId, color: args["color"] as? String)
+            return NSNull()
         case "setTitle":
             state.setTitle(extensionID: extensionID, tabId: tabId, title: args["title"] as? String)
             return NSNull()
@@ -784,6 +787,8 @@ extension WebExtensionBackgroundContext {
             return state.title(extensionID: extensionID, tabId: tabId)
         case "getBadgeBackgroundColor":
             return state.badgeColorBytes(extensionID: extensionID, tabId: tabId)
+        case "getBadgeTextColor":
+            return state.badgeTextColorBytes(extensionID: extensionID, tabId: tabId)
         default:
             return NSNull()
         }

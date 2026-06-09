@@ -59,6 +59,7 @@ struct MenuExtensionAction {
     let title: String
     let badgeText: String
     let badgeColor: UIColor
+    let badgeTextColor: UIColor
     let iconPath: String?   // resolved relative to the extension package; nil = generic glyph
     var hasPopup: Bool = false     // the action declares a default_popup
     var hasOptions: Bool = false   // the manifest declares an options page
@@ -534,7 +535,7 @@ final class BrowserMenuViewController: UIViewController {
         let showsMenuButton = action.hasPopup || action.hasOptions
         var arranged: [UIView] = action.badgeText.isEmpty
             ? [icon, name]
-            : [icon, name, makeBadgePill(text: action.badgeText, color: action.badgeColor)]
+            : [icon, name, makeBadgePill(text: action.badgeText, color: action.badgeColor, textColor: action.badgeTextColor)]
         if showsMenuButton {
             let spacer = UIView()
             spacer.widthAnchor.constraint(equalToConstant: 36).isActive = true
@@ -606,11 +607,11 @@ final class BrowserMenuViewController: UIViewController {
     }
 
     /// A small badge pill (chrome.action.setBadgeText/Color) shown trailing an extension row.
-    private func makeBadgePill(text: String, color: UIColor) -> UIView {
+    private func makeBadgePill(text: String, color: UIColor, textColor: UIColor) -> UIView {
         let label = PaddedLabel()
         label.text = text
         label.font = .systemFont(ofSize: 11, weight: .semibold)
-        label.textColor = .white
+        label.textColor = textColor
         label.backgroundColor = color
         label.layer.cornerRadius = 8
         label.layer.cornerCurve = .continuous

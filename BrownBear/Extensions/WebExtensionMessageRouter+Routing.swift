@@ -64,6 +64,9 @@ extension WebExtensionMessageRouter {
         case "action.setBadgeBackgroundColor":
             state.setBadgeColor(extensionID: extensionID, tabId: tabId, color: payload["color"] as? String)
             return NSNull()
+        case "action.setBadgeTextColor":
+            state.setBadgeTextColor(extensionID: extensionID, tabId: tabId, color: payload["color"] as? String)
+            return NSNull()
         case "action.setTitle":
             state.setTitle(extensionID: extensionID, tabId: tabId, title: payload["title"] as? String)
             return NSNull()
@@ -85,6 +88,8 @@ extension WebExtensionMessageRouter {
             return state.title(extensionID: extensionID, tabId: tabId)
         case "action.getBadgeBackgroundColor":
             return state.badgeColorBytes(extensionID: extensionID, tabId: tabId)
+        case "action.getBadgeTextColor":
+            return state.badgeTextColorBytes(extensionID: extensionID, tabId: tabId)
         default:
             return NSNull()
         }

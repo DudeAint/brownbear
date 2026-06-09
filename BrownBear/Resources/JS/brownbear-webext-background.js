@@ -1842,9 +1842,40 @@
     }
     return settleBg(actionCall('setIcon', payload).then(function () { return undefined; }), cb);
   }
+  // chrome.action methods iOS renders trivially: there's one non-per-tab toolbar item, so a distinct badge
+  // TEXT color, popup-open state, etc. aren't drawn. These resolve sensible Chrome-shaped defaults locally
+  // rather than round-trip to native — they exist so a manager (ScriptCat calls setBadgeTextColor on every
+  // badge update) doesn't hit "chrome.action.<x> is not a function" and abort. Overload-tolerant
+  // ((details?, cb?) / (cb)). White is Chrome's default badge text color.
+  function actionLocalResolve(value) {
+    return function (a1, cb) {
+      if (typeof a1 === 'function') { cb = a1; }
+      if (typeof cb === 'function') { cb(value); return undefined; }
+      return Promise.resolve(value);
+    };
+  }
+  // chrome.action color setters accept a CSS string OR a ColorArray [r,g,b,a]. Native stores a hex
+  // string, so normalize an array to "#rrggbbaa" here; the badge (rendered in the Quick Look menu) then
+  // honors both forms — managers like ScriptCat pass either.
+  function cssFromColor(c) {
+    if (typeof c === 'string') { return c; }
+    if (Array.isArray(c) && c.length === 4) {
+      var h = function (n) { var s = ((n | 0) & 255).toString(16); return s.length === 1 ? '0' + s : s; };
+      return '#' + h(c[0]) + h(c[1]) + h(c[2]) + h(c[3]);
+    }
+    return undefined;
+  }
+  function actionColorSetter(method) {
+    return function (details, cb) {
+      details = details || {};
+      return settleBg(actionCall(method, { tabId: details.tabId, color: cssFromColor(details.color) })
+        .then(function () { return undefined; }), cb);
+    };
+  }
   var action = {
     setBadgeText: actionSetter('setBadgeText'),
-    setBadgeBackgroundColor: actionSetter('setBadgeBackgroundColor'),
+    setBadgeBackgroundColor: actionColorSetter('setBadgeBackgroundColor'),
+    setBadgeTextColor: actionColorSetter('setBadgeTextColor'),
     setTitle: actionSetter('setTitle'),
     setPopup: actionSetter('setPopup'),
     setIcon: actionSetIcon,
@@ -1853,6 +1884,11 @@
     getBadgeText: actionGetter('getBadgeText'),
     getTitle: actionGetter('getTitle'),
     getBadgeBackgroundColor: actionGetter('getBadgeBackgroundColor'),
+    getBadgeTextColor: actionGetter('getBadgeTextColor'),
+    getPopup: actionLocalResolve(''),
+    isEnabled: actionLocalResolve(true),
+    getUserSettings: actionLocalResolve({ isOnToolbar: true }),
+    openPopup: actionLocalResolve(undefined),
     onClicked: makeEvent(actionClickedListeners)
   };
 
