@@ -66,20 +66,37 @@
   // document-start; a page tampering afterward only loses its own diagnostics.
   try {
     window.addEventListener("error", function (e) {
-      // A genuine message is anything other than the engine's cross-origin placeholder. When the message
-      // IS that placeholder AND no error object / filename came through, the engine muted the detail
-      // (cross-origin or opaque-origin script) — say so explicitly instead of a bare "script error", so the
-      // Logs make clear the detail was withheld rather than absent. (MAIN-world userscripts are tagged with
-      // a same-origin sourceURL in the runtime so their errors normally arrive UN-muted with full detail.)
+      // The capture-phase 'error' event fires for TWO different things: an uncaught JS error (target ===
+      // window) and a RESOURCE that failed to load (target === the <script>/<img>/<link>/<iframe> element).
+      // Report a resource failure as exactly that, with its URL, instead of a mysterious "script error".
+      var tgt = e && e.target;
+      if (tgt && tgt !== window && tgt.tagName) {
+        var res = tgt.src || tgt.href || tgt.currentSrc || (tgt.data) || "";
+        forward("error", ["[page] failed to load <" + String(tgt.tagName).toLowerCase() + ">"
+          + (res ? " " + res : "") + " — blocked by content blocking, offline, or 404"]);
+        return;
+      }
+      // An uncaught JS error. Prefer, in order: a genuine message; the Error object's own name+message
+      // (present even when e.message is the cross-origin placeholder for some injected scripts); else an
+      // explicit, actionable note that the engine withheld the detail — NOT a bare "script error". A truly
+      // cross-origin/opaque-origin throw gives no message, file, or stack; say what it is and what to do.
       var rawMsg = e && e.message;
       var placeholder = !rawMsg || rawMsg === "Script error." || rawMsg === "Script error";
-      var hasDetail = e && (e.error || (e.filename && e.filename.length));
-      var msg = placeholder
-        ? (hasDetail ? (rawMsg || "script error")
-                     : "uncaught error with no detail (cross-origin/muted by the engine)")
-        : rawMsg;
+      var err = e && e.error;
+      var msg;
+      if (!placeholder) {
+        msg = rawMsg;
+      } else if (err && (err.message || err.name)) {
+        msg = err.name ? (err.name + ": " + (err.message || "")) : err.message;
+      } else if (err) {
+        msg = "uncaught " + String(err);
+      } else {
+        msg = "uncaught error in a cross-origin or injected script — the engine withheld its message and "
+          + "stack (same-origin scripts report full detail). If this is a userscript, running it in the "
+          + "isolated world (e.g. ScriptCat @inject-into content) surfaces the real error.";
+      }
       if (e && e.filename) { msg += " (" + e.filename + ":" + (e.lineno || 0) + ":" + (e.colno || 0) + ")"; }
-      if (e && e.error && e.error.stack) { msg += "\n" + e.error.stack; }
+      if (err && err.stack) { msg += "\n" + err.stack; }
       forward("error", ["[page] " + msg]);
     }, true);
     window.addEventListener("unhandledrejection", function (e) {
