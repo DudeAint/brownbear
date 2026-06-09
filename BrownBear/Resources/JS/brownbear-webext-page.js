@@ -28,6 +28,35 @@
     catch (e) { return _Promise.reject(e); }
   }
 
+  // navigator.serviceWorker shim. WKWebView does NOT expose Service Workers for the custom
+  // chrome-extension:// scheme, so on a real extension page (e.g. an MV3 offscreen document) any access
+  // to `navigator.serviceWorker.*` throws "undefined is not an object" and aborts the whole bundle —
+  // ScriptCat's offscreen.js does exactly this at load. Provide a spec-shaped, inert surface so the page
+  // degrades gracefully (register() rejects; `ready` stays pending — there is genuinely no SW — and the
+  // event/controller surface no-ops) instead of crashing. Defined at document-start, before page scripts.
+  (function () {
+    try {
+      if ("serviceWorker" in W.navigator && W.navigator.serviceWorker) { return; }
+      var swListeners = {};
+      var sw = {
+        controller: null,
+        ready: new _Promise(function () {}),   // no active worker → never resolves (spec-correct)
+        register: function () { return _Promise.reject(new Error("Service workers are unavailable in this context")); },
+        getRegistration: function () { return _Promise.resolve(undefined); },
+        getRegistrations: function () { return _Promise.resolve([]); },
+        startMessages: function () {},
+        addEventListener: function (type, fn) { (swListeners[type] = swListeners[type] || []).push(fn); },
+        removeEventListener: function (type, fn) {
+          var list = swListeners[type]; if (!list) { return; }
+          var i = list.indexOf(fn); if (i >= 0) { list.splice(i, 1); }
+        },
+        dispatchEvent: function () { return false; },
+        oncontrollerchange: null, onmessage: null, onmessageerror: null
+      };
+      _Object.defineProperty(W.navigator, "serviceWorker", { value: sw, configurable: true, enumerable: false });
+    } catch (e) { /* navigator may be locked down; nothing we can do, but don't break the page */ }
+  })();
+
   // Cross-origin fetch from an extension page. Chrome lets an extension page fetch hosts in its
   // host_permissions WITHOUT CORS (the privileged extension-page network path); a WKWebView page enforces
   // CORS, so a manager's install page (e.g. ScriptCat fetching a .user.js from greasyfork) failed with
