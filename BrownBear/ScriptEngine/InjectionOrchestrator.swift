@@ -109,6 +109,17 @@ final class InjectionOrchestrator {
                                                       name: WebExtensionMessageRouter.handlerName)
         addBootstrap(resource: "brownbear-webext-runtime")
 
+        // Resilient event listeners — PAGE world, document-start, BEFORE any page script. Keeps
+        // window.addEventListener/removeEventListener working even if the page replaces them with a
+        // wrapper that throws (a blocked analytics agent like New Relic poisons the global this way and
+        // takes down the page's code AND any MAIN-world userscript). Pure page-side, no handler; a
+        // transparent pass-through to the native for the vast majority of pages that never override these.
+        let resilientEvents = WKUserScript(source: Self.bootstrapSource("brownbear-resilient-events"),
+                                           injectionTime: .atDocumentStart,
+                                           forMainFrameOnly: false,
+                                           in: .page)
+        userContentController.addUserScript(resilientEvents)
+
         // Page-console capture — registered in the PAGE world (not the isolated bridge world) with
         // its own handler, so the page's console.* can be surfaced in the Logs "Page" filter without
         // ever exposing the privileged BrownBear bridge to page scripts.
