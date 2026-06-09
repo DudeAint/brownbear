@@ -66,7 +66,18 @@
   // document-start; a page tampering afterward only loses its own diagnostics.
   try {
     window.addEventListener("error", function (e) {
-      var msg = (e && e.message) ? e.message : "script error";
+      // A genuine message is anything other than the engine's cross-origin placeholder. When the message
+      // IS that placeholder AND no error object / filename came through, the engine muted the detail
+      // (cross-origin or opaque-origin script) — say so explicitly instead of a bare "script error", so the
+      // Logs make clear the detail was withheld rather than absent. (MAIN-world userscripts are tagged with
+      // a same-origin sourceURL in the runtime so their errors normally arrive UN-muted with full detail.)
+      var rawMsg = e && e.message;
+      var placeholder = !rawMsg || rawMsg === "Script error." || rawMsg === "Script error";
+      var hasDetail = e && (e.error || (e.filename && e.filename.length));
+      var msg = placeholder
+        ? (hasDetail ? (rawMsg || "script error")
+                     : "uncaught error with no detail (cross-origin/muted by the engine)")
+        : rawMsg;
       if (e && e.filename) { msg += " (" + e.filename + ":" + (e.lineno || 0) + ":" + (e.colno || 0) + ")"; }
       if (e && e.error && e.error.stack) { msg += "\n" + e.error.stack; }
       forward("error", ["[page] " + msg]);
