@@ -100,28 +100,31 @@ class WebExtensionRuntime {
             Task { @MainActor in self?.handleNotificationEvent(note) }
         })
         // chrome.idle.onStateChanged: app foreground/background + device lock/unlock drive the idle state
-        // (iOS can't observe true user idle). Coalesced so only real transitions fire.
+        // (iOS can't observe true user idle). Coalesced so only real transitions fire. The lock
+        // notification fires just before lock while applicationState is still .active, so we force the
+        // "locked" state from the NOTIFICATION rather than recomputing (which would race the state change).
+        let lockName = UIApplication.protectedDataWillBecomeUnavailableNotification
         for name: NSNotification.Name in [UIApplication.didBecomeActiveNotification,
                                           UIApplication.willResignActiveNotification,
                                           UIApplication.didEnterBackgroundNotification,
                                           UIApplication.protectedDataDidBecomeAvailableNotification,
-                                          UIApplication.protectedDataWillBecomeUnavailableNotification] {
+                                          lockName] {
             observers.append(NotificationCenter.default.addObserver(
-                forName: name, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.pushIdleStateIfChanged() }
+                forName: name, object: nil, queue: .main) { [weak self] note in
+                let forced = note.name == lockName ? "locked" : nil
+                Task { @MainActor in self?.pushIdleStateIfChanged(forced: forced) }
             })
         }
 
         Task { await reload() }
     }
 
-    /// Whether the idle state changed since the last push; if so, deliver chrome.idle.onStateChanged to
-    /// every running worker. Coalesces the several app-lifecycle notifications into one event per real
-    /// transition. `protectedDataWillBecomeUnavailable` fires just before lock, where applicationState is
-    /// still .active, so treat that specific notification as the locked state directly.
+    /// Deliver chrome.idle.onStateChanged to every running worker when the state changes. `forced` pins
+    /// the state for a notification whose meaning is unambiguous (lock), avoiding a recompute that races
+    /// the underlying state transition; otherwise we recompute from app/device condition.
     private var lastIdleState: String?
-    private func pushIdleStateIfChanged() {
-        let state = WebExtensionBackgroundContext.currentIdleState()
+    private func pushIdleStateIfChanged(forced: String? = nil) {
+        let state = forced ?? WebExtensionBackgroundContext.currentIdleState()
         guard state != lastIdleState else { return }
         lastIdleState = state
         for context in contexts.values { context.fireIdleStateChanged(state) }

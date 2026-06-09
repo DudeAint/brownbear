@@ -53,4 +53,24 @@ final class WebExtensionDownloadsTests: XCTestCase {
                        "Content-Length is owned by URLSession")
         XCTAssertFalse(WebExtensionDownloadsManager.isSafeHeader(name: "", value: "v"))
     }
+
+    // MARK: - isBlockedHost (SSRF gate)
+
+    func testBlockedHostsRejected() {
+        for host in ["127.0.0.1", "10.0.0.5", "192.168.1.1", "172.16.0.1", "172.31.255.255",
+                     "169.254.169.254", "localhost", "foo.local", "evil.localhost",
+                     "::1", "[::1]", "fc00::1", "fd12::9", "fe80::1"] {
+            XCTAssertTrue(WebExtensionFetchSecurity.isBlockedHost(host), "should block \(host)")
+        }
+    }
+
+    func testPublicHostsAllowed() {
+        for host in ["example.com", "8.8.8.8", "172.15.0.1", "172.32.0.1", "203.0.113.5",
+                     "fcdn.example.com", "fdsa.io", "feature.dev", "2606:4700:4700::1111"] {
+            XCTAssertFalse(WebExtensionFetchSecurity.isBlockedHost(host),
+                           "should allow public host \(host)")
+        }
+        XCTAssertFalse(WebExtensionFetchSecurity.isBlockedHost(nil))
+        XCTAssertFalse(WebExtensionFetchSecurity.isBlockedHost(""))
+    }
 }

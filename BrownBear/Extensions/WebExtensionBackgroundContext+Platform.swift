@@ -47,10 +47,14 @@ extension WebExtensionBackgroundContext {
         }
         context.setObject(idle, forKeyedSubscript: "__bb_idle" as NSString)
 
-        // chrome.tabs.captureVisibleTab — snapshot the active tab. Gated like cookies: the extension needs
-        // "activeTab", host_permissions matching the active tab, or <all_urls> (page pixels are sensitive,
-        // CLAUDE.md §5). cookiePermissions/cookieHostMatcher are set once at boot, read-only thereafter, so
-        // reading them on the main actor is race-free (same pattern as cookiePermitted).
+        // chrome.tabs.captureVisibleTab — snapshot the active tab. Page pixels are sensitive (CLAUDE.md
+        // §5), so we require a host_permissions match for the captured tab (this covers <all_urls>). We do
+        // NOT honor bare "activeTab": Chrome only grants activeTab capture after a user gesture, which we
+        // don't track — so we fail closed and require a declared host match. The gate runs INSIDE the host
+        // capture (against the captured tab's URL) so a tab switch can't bypass it (TOCTOU). cookie*
+        // are set once at boot, read-only after — capturing them for the closure is race-free.
+        let permittedHosts = self.cookieHostMatcher
+        let allUrls = self.cookiePermissions.contains("<all_urls>")
         let capture: @convention(block) (String, JSValue) -> Void = { [weak self] argsJSON, callback in
             guard let self else { return }
             let args = ((try? JSONSerialization.jsonObject(with: Data(argsJSON.utf8))) as? [String: Any]) ?? [:]
@@ -58,20 +62,14 @@ extension WebExtensionBackgroundContext {
             let quality = (args["quality"] as? Int) ?? 92
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                let activeURL = self.host?.webExtActiveTabURLString()
-                let permitted = self.cookiePermissions.contains("activeTab")
-                    || self.cookiePermissions.contains("<all_urls>")
-                    || (activeURL.map { self.cookieHostMatcher($0) } ?? false)
-                guard permitted else {
-                    self.callBack(callback, with: self.jsonString(
-                        ["error": "captureVisibleTab requires the 'activeTab' or matching host permission"]))
-                    return
+                let dataURL = await self.host?.webExtCaptureVisibleTab(format: format, quality: quality) { url in
+                    allUrls || (url.map { permittedHosts($0) } ?? false)
                 }
-                let dataURL = await self.host?.webExtCaptureVisibleTab(format: format, quality: quality)
                 if let dataURL {
                     self.callBack(callback, with: self.jsonString(["dataUrl": dataURL]))
                 } else {
-                    self.callBack(callback, with: self.jsonString(["error": "no capturable tab"]))
+                    self.callBack(callback, with: self.jsonString(
+                        ["error": "captureVisibleTab needs a host permission matching the active tab"]))
                 }
             }
         }

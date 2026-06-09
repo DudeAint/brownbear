@@ -281,15 +281,13 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
         return tabManager.tab(for: uuid)
     }
 
-    func webExtActiveTabURLString() -> String? {
-        tabManager.activeTab?.webView.url?.absoluteString
-    }
-
-    /// chrome.tabs.captureVisibleTab — snapshot the active tab's web view to a `data:` URL. Permission is
-    /// already checked by the caller (the worker native); here we just render the visible pixels.
-    func webExtCaptureVisibleTab(format: String, quality: Int) async -> String? {
+    /// chrome.tabs.captureVisibleTab — snapshot the active tab's web view to a `data:` URL. The gate
+    /// (`permit`) is re-checked against THIS captured tab's current URL right before the snapshot, so a
+    /// tab switch between the worker's check and the capture can't leak an unauthorized tab's pixels.
+    func webExtCaptureVisibleTab(format: String, quality: Int, permit: (String?) -> Bool) async -> String? {
         guard let tab = tabManager.activeTab,
-              tab.webView.bounds.width > 0, tab.webView.bounds.height > 0 else { return nil }
+              tab.webView.bounds.width > 0, tab.webView.bounds.height > 0,
+              permit(tab.webView.url?.absoluteString) else { return nil }
         let config = WKSnapshotConfiguration()
         config.afterScreenUpdates = false
         let image: UIImage? = await withCheckedContinuation { continuation in

@@ -36,7 +36,7 @@ final class WebExtensionDownloadsManager {
         let startTime: Date
         var endTime: Date?
         var task: URLSessionDownloadTask?
-        var resumeData: Data?
+        var session: URLSession?               // per-download guarded session; invalidated on finish
         var progressObservation: NSKeyValueObservation?
 
         init(id: Int, uuid: UUID, extensionID: String, url: String, filename: String) {
@@ -49,7 +49,6 @@ final class WebExtensionDownloadsManager {
 
     private var records: [Int: Record] = [:]
     private var counter = 0
-    private let session = URLSession(configuration: .default)
 
     // MARK: - download
 
@@ -58,6 +57,11 @@ final class WebExtensionDownloadsManager {
         guard let urlString = options["url"] as? String, let url = URL(string: urlString),
               let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
             return ["error": "Invalid or unsupported download URL."]
+        }
+        // Fail closed on SSRF targets — a download must not reach loopback/private/link-local hosts
+        // (CLAUDE.md §5). The redirect guard below re-checks every 3xx target too.
+        guard !WebExtensionFetchSecurity.isBlockedHost(url.host) else {
+            return ["error": "Refusing to download from a private or loopback address."]
         }
         var request = URLRequest(url: url)
         request.httpMethod = (options["method"] as? String)?.uppercased() == "POST" ? "POST" : "GET"
@@ -85,16 +89,25 @@ final class WebExtensionDownloadsManager {
         DownloadManager.shared.insertExtensionDownload(
             DownloadItem(id: uuid, fileName: destination.lastPathComponent, localURL: destination))
 
+        let session = WebExtensionFetchSecurity.downloadGuardedSession()
+        record.session = session
         let task = session.downloadTask(with: request) { [weak self] temp, response, error in
-            // temp/response/error are value-or-Sendable; capture the path, hop to the main actor.
+            // temp/response/error are value-or-Sendable; capture the result, hop to the main actor.
             let movedOK: Bool
+            var finalPath = destination.path
             var failure: String?
             var mime = "application/octet-stream"
             if let temp, error == nil {
                 if let mt = response?.mimeType { mime = mt }
+                // Re-uniquify at completion (the path was only RESERVED at start; a concurrent same-name
+                // download may have landed there) — never blind-overwrite an existing file.
+                let target = FileManager.default.fileExists(atPath: destination.path)
+                    ? destination.deletingLastPathComponent().appendingPathComponent(
+                        "\(UUID().uuidString)-\(destination.lastPathComponent)")
+                    : destination
                 do {
-                    try? FileManager.default.removeItem(at: destination)
-                    try FileManager.default.moveItem(at: temp, to: destination)
+                    try FileManager.default.moveItem(at: temp, to: target)
+                    finalPath = target.path
                     movedOK = true
                 } catch { movedOK = false; failure = error.localizedDescription }
             } else {
@@ -102,8 +115,11 @@ final class WebExtensionDownloadsManager {
                 failure = error?.localizedDescription ?? "download failed"
             }
             let finalMime = mime
+            let pathResult = finalPath
+            let okResult = movedOK
+            let failResult = failure
             Task { @MainActor [weak self] in
-                self?.finish(id: id, succeeded: movedOK, error: failure, mime: finalMime)
+                self?.finish(id: id, succeeded: okResult, error: failResult, mime: finalMime, finalPath: pathResult)
             }
         }
         record.task = task
@@ -132,19 +148,26 @@ final class WebExtensionDownloadsManager {
                   payload: ["id": id, "bytesReceived": ["current": received]])
     }
 
-    private func finish(id: Int, succeeded: Bool, error: String?, mime: String) {
-        guard let record = records[id] else { return }
+    private func finish(id: Int, succeeded: Bool, error: String?, mime: String, finalPath: String? = nil) {
+        // Idempotent: only an in-progress download settles. cancel() calls this directly AND the task's
+        // cancellation later fires the completion handler → finish() again; the second is a no-op.
+        guard let record = records[id], record.state == "in_progress" else { return }
         record.progressObservation?.invalidate()
         record.progressObservation = nil
         record.task = nil
+        record.session?.finishTasksAndInvalidate()
+        record.session = nil
         record.endTime = Date()
         record.mime = mime
         let previous = record.state
         if succeeded {
             record.state = "complete"
+            if let finalPath { record.filename = finalPath }
             record.bytesReceived = record.totalBytes > 0 ? record.totalBytes : record.bytesReceived
+            let finalURL = URL(fileURLWithPath: record.filename)
             DownloadManager.shared.updateExtensionDownload(id: record.uuid) {
-                $0.state = .finished; $0.fractionCompleted = 1
+                $0.state = .finished; $0.fractionCompleted = 1; $0.localURL = finalURL
+                $0.fileName = finalURL.lastPathComponent
             }
         } else {
             record.state = "interrupted"
@@ -172,7 +195,8 @@ final class WebExtensionDownloadsManager {
         return limited.map { chromeItem($0) }
     }
 
-    /// chrome.downloads.cancel — abort an in-progress download.
+    /// chrome.downloads.cancel — abort an in-progress download. finish() is idempotent, so the task's
+    /// later cancellation callback is a no-op.
     func cancel(extensionID: String, id: Int) -> Bool {
         guard let record = records[id], record.extensionID == extensionID, record.state == "in_progress" else { return false }
         record.task?.cancel()
@@ -180,6 +204,8 @@ final class WebExtensionDownloadsManager {
         return true
     }
 
+    /// chrome.downloads.pause — suspend a live transfer. `canResume` is true only while paused (we don't
+    /// hold resumeData for a real interrupt — resume only un-pauses a still-suspended task).
     func pause(extensionID: String, id: Int) -> Bool {
         guard let record = records[id], record.extensionID == extensionID,
               record.state == "in_progress", !record.paused else { return false }
@@ -192,19 +218,28 @@ final class WebExtensionDownloadsManager {
     }
 
     func resume(extensionID: String, id: Int) -> Bool {
-        guard let record = records[id], record.extensionID == extensionID, record.paused else { return false }
+        guard let record = records[id], record.extensionID == extensionID,
+              record.paused, record.state == "in_progress" else { return false }
         record.paused = false
+        record.canResume = false
         record.task?.resume()
         fireEvent(extensionID: extensionID, kind: "onChanged",
                   payload: ["id": id, "paused": ["previous": true, "current": false]])
         return true
     }
 
-    /// chrome.downloads.erase — remove matching records (does NOT delete files); returns erased ids.
+    /// chrome.downloads.erase — remove matching records (does NOT delete files); returns erased ids. An
+    /// in-flight download being erased has its task cancelled and its Downloads-UI row dropped so it
+    /// doesn't linger at "downloading…" forever.
     func erase(extensionID: String, query: [String: Any]) -> [Int] {
         let toErase = search(extensionID: extensionID, query: query).compactMap { $0["id"] as? Int }
         for id in toErase {
-            records[id]?.progressObservation?.invalidate()
+            if let record = records[id] {
+                record.task?.cancel()
+                record.progressObservation?.invalidate()
+                record.session?.finishTasksAndInvalidate()
+                if record.state == "in_progress" { DownloadManager.shared.remove(id: record.uuid) }
+            }
             records.removeValue(forKey: id)
             fireEvent(extensionID: extensionID, kind: "onErased", payload: id)
         }
@@ -219,11 +254,18 @@ final class WebExtensionDownloadsManager {
         return true
     }
 
-    /// Drop an extension's downloads when it's unloaded (cancel in-flight tasks).
+    /// Drop an extension's downloads when it's unloaded: cancel in-flight tasks and settle their
+    /// Downloads-UI rows to failed (so they don't sit at "downloading…" forever).
     func close(extensionID: String) {
         for record in records.values where record.extensionID == extensionID {
-            record.task?.cancel()
-            record.progressObservation?.invalidate()
+            if record.state == "in_progress" {
+                record.task?.cancel()
+                record.progressObservation?.invalidate()
+                record.session?.finishTasksAndInvalidate()
+                DownloadManager.shared.updateExtensionDownload(id: record.uuid) {
+                    $0.state = .failed("interrupted")
+                }
+            }
             records.removeValue(forKey: record.id)
         }
     }
