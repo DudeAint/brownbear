@@ -149,6 +149,21 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
         if api == "getContentScripts" {
             return try await handleGetContentScripts(payload: payload, webView: webView, frameInfo: frameInfo)
         }
+        // MV3 world:"MAIN" injection (ScriptCat's inject.js + the cross-world bridge shim) evaluated in the
+        // page's REAL main world via native evaluateJavaScript — which, unlike an inline <script> element,
+        // is NOT subject to the page's CSP, so managers run on hardened sites too. No grant needed: this
+        // handler is registered ONLY in our isolated content world, so a page script can't reach it; the
+        // sending web view/frame is the trust anchor. Targets the requesting frame's page world.
+        if api == "page.injectMainWorld" {
+            if let webView, let code = payload["code"] as? String, !code.isEmpty {
+                if let frameInfo {
+                    BBEvaluateJavaScriptInFrame(webView, code, frameInfo, .page)
+                } else {
+                    BBEvaluateJavaScript(webView, code, .page)
+                }
+            }
+            return NSNull()
+        }
         // A content script answering a pushed message. No grant needed — it only resumes a continuation
         // the runtime itself parked, keyed by an unguessable id, and is a no-op for an unknown id.
         if api == "runtime.messageResponse" {
@@ -609,7 +624,11 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
         BrownBearServices.shared.webExtensionRuntime.portHub.disconnectClientPorts(tokens: staleSet)
     }
 
-    // MARK: - getContentScripts
+}
+
+// MARK: - getContentScripts (split into an extension to keep the class body under type_body_length)
+
+extension WebExtensionMessageRouter {
 
     private func handleGetContentScripts(payload: [String: Any],
                                          webView: WKWebView?,
