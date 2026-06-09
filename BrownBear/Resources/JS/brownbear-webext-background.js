@@ -2542,7 +2542,21 @@
     tabs: tabs,
     scripting: scripting,
     i18n: i18n,
-    extension: { getURL: getURL }
+    // chrome.extension is mostly legacy aliases of chrome.runtime, but real extensions still read it at
+    // load (e.g. ScriptCat's checkUserScriptsAvailable reads inIncognitoContext). Provide the full shape
+    // so a property access never returns undefined-then-throws. iOS has no private browsing for
+    // extensions and no extension views, so the booleans are false and the view getters return empty.
+    extension: {
+      getURL: getURL,
+      inIncognitoContext: false,
+      getViews: function () { return []; },
+      getBackgroundPage: function () { return globalThis; },
+      isAllowedIncognitoAccess: function (cb) { if (typeof cb === 'function') { cb(false); return undefined; } return Promise.resolve(false); },
+      isAllowedFileSchemeAccess: function (cb) { if (typeof cb === 'function') { cb(false); return undefined; } return Promise.resolve(false); },
+      sendMessage: runtime.sendMessage,
+      onMessage: runtime.onMessage,
+      onRequest: runtime.onMessage
+    }
   };
 
   globalThis.chrome = chrome;
