@@ -877,7 +877,21 @@
   // injection so a manager's eventFlag handshake can reach our isolated world.
   function injectIntoPage(code, extensionId) {
     try {
-      var payload = code + "\n//# sourceURL=chrome-extension://" + extensionId + "/userscript-main.js";
+      // SAME-ORIGIN sourceURL — critical for error visibility. WebKit attributes a natively-evaluated
+      // MAIN-world script's errors to its `//# sourceURL` ORIGIN. A `chrome-extension://<id>` sourceURL is
+      // cross-origin to the page, so any uncaught throw — including an ASYNC userscript callback (a `load`
+      // or timer handler) that escapes the manager's own try/catch — reaches the page's window 'error'
+      // listener SANITIZED to a bare "Script error." with no message, file, or stack (the undebuggable
+      // "[page] script error" Logs line). Tagging the code with the PAGE's own origin keeps the real
+      // message + stack + line:col, while a distinctive filename still marks it as injected. Pure
+      // attribution metadata — it does not change what runs. Omit it on an opaque-origin page (origin "null").
+      var srcURL = "";
+      try {
+        var org = (typeof location !== "undefined" && location.origin && location.origin !== "null")
+          ? location.origin : "";
+        if (org) { srcURL = "\n//# sourceURL=" + org + "/brownbear-userscript-" + (extensionId || "main") + ".js"; }
+      } catch (e) { srcURL = ""; }
+      var payload = code + srcURL;
       if (!__bbPageBridgeDone) {
         __bbPageBridgeDone = true;
         payload = "(" + installPerfBridge.toString() + ')("page");\n' + payload;
