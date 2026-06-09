@@ -113,6 +113,11 @@ final class BrownBearBrowserViewController: UIViewController {
     /// the +Navigation companion file that records/consumes it.
     var pendingNavTargets: [ObjectIdentifier: String] = [:]
 
+    /// Consecutive declarativeNetRequest main-frame redirects per web view, to break a redirect loop
+    /// (e.g. two rules that bounce A→B→A). Bumped each time the nav delegate diverts a navigation; reset
+    /// to 0 once a page actually commits. Internal for the +Navigation companion file.
+    var extensionRedirectDepth: [ObjectIdentifier: Int] = [:]
+
     // MARK: - Lifecycle
 
     override func viewDidLoad() {
