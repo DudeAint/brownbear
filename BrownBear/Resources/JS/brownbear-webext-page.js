@@ -379,6 +379,9 @@
     "webNavigation.onDOMContentLoaded": [], "webNavigation.onCompleted": [],
     "webNavigation.onHistoryStateUpdated": [], "webNavigation.onErrorOccurred": []
   };
+  // chrome.permissions.onAdded/onRemoved — Chrome fires these in extension PAGES too (not just the
+  // worker) when a runtime permission grant/revoke happens; native dispatchExtEvent routes them here.
+  var permissionsEventLists = { "permissions.onAdded": [], "permissions.onRemoved": [] };
 
   // --- chrome.cookies (live onChanged via the native push surface below) -----------------------
   var cookieChangedListeners = [];
@@ -527,7 +530,8 @@
       contains: function (p, cb) { return settle(bridge("permissions.contains", perms(p)), cb); },
       request: function (p, cb) { return settle(bridge("permissions.request", perms(p)), cb); },
       remove: function (p, cb) { return settle(bridge("permissions.remove", perms(p)), cb); },
-      onAdded: noopEvent, onRemoved: noopEvent
+      onAdded: makeEvent(permissionsEventLists["permissions.onAdded"]),
+      onRemoved: makeEvent(permissionsEventLists["permissions.onRemoved"])
     };
   }
 
@@ -772,7 +776,7 @@
       var args;
       try { args = _JSON.parse(argsJSON); } catch (e) { args = []; }
       if (!_Array.isArray(args)) { args = []; }
-      var list = tabEventLists[name] || webNavLists[name];
+      var list = tabEventLists[name] || webNavLists[name] || permissionsEventLists[name];
       if (!list) { return; }
       for (var i = 0; i < list.length; i++) {
         try { list[i].apply(null, args); } catch (e) {}

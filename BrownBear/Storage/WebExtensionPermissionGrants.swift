@@ -54,23 +54,53 @@ actor WebExtensionPermissionGrants {
 
     // MARK: - Mutations
 
-    /// Record a newly-granted permission set (union with anything already granted).
+    /// Record a newly-granted permission set (union with anything already granted). Announces the
+    /// actually-new delta so chrome.permissions.onAdded fires (Chrome parity).
     func grant(extensionID: String, _ set: WebExtensionManagementInfo.PermissionSet) {
         guard !set.isEmpty else { return }
         loadIfNeeded()
         var current = grants[extensionID] ?? WebExtensionManagementInfo.PermissionSet()
+        // Only the parts not already held are "added" — re-granting a held permission fires nothing.
+        let added = WebExtensionManagementInfo.PermissionSet(
+            permissions: Array(set.permissions.subtracting(current.permissions)),
+            origins: Array(set.origins.subtracting(current.origins)))
         current.permissions.formUnion(set.permissions)
         current.origins.formUnion(set.origins)
         grants[extensionID] = current
         persist()
+        broadcastChange(extensionID: extensionID, added: added,
+                        removed: WebExtensionManagementInfo.PermissionSet())
     }
 
     /// Replace the granted set for an extension (used by chrome.permissions.remove, which computes
-    /// the remaining set). An empty result prunes the entry.
+    /// the remaining set). An empty result prunes the entry. Announces the old-vs-new delta so
+    /// chrome.permissions.onRemoved (and onAdded, should the set ever grow here) fires.
     func setGranted(extensionID: String, _ set: WebExtensionManagementInfo.PermissionSet) {
         loadIfNeeded()
+        let old = grants[extensionID] ?? WebExtensionManagementInfo.PermissionSet()
         if set.isEmpty { grants[extensionID] = nil } else { grants[extensionID] = set }
         persist()
+        let removed = WebExtensionManagementInfo.PermissionSet(
+            permissions: Array(old.permissions.subtracting(set.permissions)),
+            origins: Array(old.origins.subtracting(set.origins)))
+        let added = WebExtensionManagementInfo.PermissionSet(
+            permissions: Array(set.permissions.subtracting(old.permissions)),
+            origins: Array(set.origins.subtracting(old.origins)))
+        broadcastChange(extensionID: extensionID, added: added, removed: removed)
+    }
+
+    /// Announce a permission-grant change so chrome.permissions.onAdded/onRemoved fire in the
+    /// extension's worker + open pages. Posting from the actor is fine — NotificationCenter is
+    /// thread-safe and the runtime's observer hops to the main actor (mirrors WebExtensionStorage).
+    /// A purely-empty change is not posted.
+    private func broadcastChange(extensionID: String,
+                                 added: WebExtensionManagementInfo.PermissionSet,
+                                 removed: WebExtensionManagementInfo.PermissionSet) {
+        guard !added.isEmpty || !removed.isEmpty else { return }
+        NotificationCenter.default.post(
+            name: .brownBearExtensionPermissionsDidChange,
+            object: nil,
+            userInfo: ["extensionID": extensionID, "added": added.dictionary, "removed": removed.dictionary])
     }
 
     /// Register (or clear, with an empty string) the uninstall URL for an extension.

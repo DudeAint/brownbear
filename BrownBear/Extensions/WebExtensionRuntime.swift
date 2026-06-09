@@ -99,6 +99,10 @@ class WebExtensionRuntime {
             forName: .brownBearExtensionNotificationEvent, object: nil, queue: .main) { [weak self] note in
             Task { @MainActor in self?.handleNotificationEvent(note) }
         })
+        observers.append(NotificationCenter.default.addObserver(
+            forName: .brownBearExtensionPermissionsDidChange, object: nil, queue: .main) { [weak self] note in
+            Task { @MainActor in self?.handlePermissionsChange(note) }
+        })
         // chrome.idle.onStateChanged: app foreground/background + device lock/unlock drive the idle state
         // (iOS can't observe true user idle). Coalesced so only real transitions fire. The lock
         // notification fires just before lock while applicationState is still .active, so we force the
@@ -497,6 +501,35 @@ class WebExtensionRuntime {
     private func handleCookieChange(_ note: Notification) {
         guard let change = note.userInfo?["change"] as? [String: Any] else { return }
         for context in contexts.values { context.dispatchCookieChanged(change: change) }
+    }
+
+    /// Fire chrome.permissions.onAdded / onRemoved into an extension's background worker AND its open
+    /// pages after a runtime grant/revoke, matching Chrome's per-extension event fan-out. The `added`
+    /// and `removed` deltas are the `{permissions, origins}` objects the grants actor diffed; an empty
+    /// delta fires nothing.
+    private func handlePermissionsChange(_ note: Notification) {
+        guard let info = note.userInfo, let extensionID = info["extensionID"] as? String else { return }
+        if let added = info["added"] as? [String: Any] {
+            firePermissionEvent(extensionID: extensionID, name: "permissions.onAdded", delta: added)
+        }
+        if let removed = info["removed"] as? [String: Any] {
+            firePermissionEvent(extensionID: extensionID, name: "permissions.onRemoved", delta: removed)
+        }
+    }
+
+    /// Dispatch one chrome.permissions.on{Added,Removed} to the extension's worker + its open pages.
+    /// Scoped to the one extension whose permissions changed (a grant is never broadcast cross-extension).
+    private func firePermissionEvent(extensionID: String, name: String, delta: [String: Any]) {
+        let permissions = (delta["permissions"] as? [String]) ?? []
+        let origins = (delta["origins"] as? [String]) ?? []
+        guard !permissions.isEmpty || !origins.isEmpty,
+              let data = try? JSONSerialization.data(withJSONObject: [delta]),
+              let argsJSON = String(data: data, encoding: .utf8) else { return }
+        contexts[extensionID]?.dispatchExtEvent(name: name, argsJSON: argsJSON)
+        for box in eventReceivers.values {
+            guard let receiver = box.value, receiver.receiverExtensionID == extensionID else { continue }
+            receiver.dispatchExtEvent(name: name, argsJSON: argsJSON)
+        }
     }
 
     /// Deliver a chrome.notifications event to the originating extension's background worker.
