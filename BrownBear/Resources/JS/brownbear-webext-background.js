@@ -1842,9 +1842,22 @@
     }
     return settleBg(actionCall('setIcon', payload).then(function () { return undefined; }), cb);
   }
+  // chrome.action methods iOS renders trivially: there's one non-per-tab toolbar item, so a distinct badge
+  // TEXT color, popup-open state, etc. aren't drawn. These resolve sensible Chrome-shaped defaults locally
+  // rather than round-trip to native — they exist so a manager (ScriptCat calls setBadgeTextColor on every
+  // badge update) doesn't hit "chrome.action.<x> is not a function" and abort. Overload-tolerant
+  // ((details?, cb?) / (cb)). White is Chrome's default badge text color.
+  function actionLocalResolve(value) {
+    return function (a1, cb) {
+      if (typeof a1 === 'function') { cb = a1; }
+      if (typeof cb === 'function') { cb(value); return undefined; }
+      return Promise.resolve(value);
+    };
+  }
   var action = {
     setBadgeText: actionSetter('setBadgeText'),
     setBadgeBackgroundColor: actionSetter('setBadgeBackgroundColor'),
+    setBadgeTextColor: actionLocalResolve(undefined),
     setTitle: actionSetter('setTitle'),
     setPopup: actionSetter('setPopup'),
     setIcon: actionSetIcon,
@@ -1853,6 +1866,11 @@
     getBadgeText: actionGetter('getBadgeText'),
     getTitle: actionGetter('getTitle'),
     getBadgeBackgroundColor: actionGetter('getBadgeBackgroundColor'),
+    getBadgeTextColor: actionLocalResolve([255, 255, 255, 255]),
+    getPopup: actionLocalResolve(''),
+    isEnabled: actionLocalResolve(true),
+    getUserSettings: actionLocalResolve({ isOnToolbar: true }),
+    openPopup: actionLocalResolve(undefined),
     onClicked: makeEvent(actionClickedListeners)
   };
 
