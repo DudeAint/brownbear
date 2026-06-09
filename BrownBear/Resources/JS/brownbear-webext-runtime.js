@@ -857,7 +857,22 @@
     }
     var chrome = buildChrome(data);
     var sourceURL = "//# sourceURL=chrome-extension://" + data.extensionId + "/content.js";
+    // Webpack-bundled content scripts (Violentmonkey's injected.js, ScriptCat's scripting/content
+    // brokers) read `chrome`/`browser` off the GLOBAL at module load — `const { chrome } = global` then
+    // a top-level `chrome.runtime.getURL('')` — not from our eval params. Our isolated world's window had
+    // no `chrome`, so that ran `undefined.runtime` → TypeError before the bundle's init() ever fired, and
+    // NEITHER manager injected (the page runtime already sets these — that's why VM's popup/options work).
+    // Set this script's chrome on the world for the SYNCHRONOUS eval (when the bundle captures it), then
+    // restore — the world is shared across extensions and across a bundle's concatenated files, so leaving
+    // it would leak one extension's chrome (and its per-script token/lastError) into another. Both
+    // `chrome` AND `browser` are required: VM only builds its response-unwrapping proxy when
+    // `browser.runtime` is absent, and our background returns RAW (un-proxied) responses — giving it a
+    // `browser` that already has `.runtime` keeps the content side un-proxied and symmetric.
+    var prevC = W.chrome, prevB = W.browser;
+    var hadC = ("chrome" in W), hadB = ("browser" in W);
     try {
+      W.chrome = chrome;
+      W.browser = chrome;
       var fn = _Function("chrome", "browser", "window", "self", "globalThis", data.js + "\n" + sourceURL);
       fn.call(W, chrome, chrome, W, W, W);
     } catch (e) {
@@ -866,6 +881,9 @@
       // UNCAUGHT window errors. Surface it on the Logs tab so a broker that dies before it can message the
       // worker is diagnosable, not silently dead.
       reportContentError(e, data.token);
+    } finally {
+      if (hadC) { W.chrome = prevC; } else { try { delete W.chrome; } catch (x) { W.chrome = undefined; } }
+      if (hadB) { W.browser = prevB; } else { try { delete W.browser; } catch (x2) { W.browser = undefined; } }
     }
   }
 
