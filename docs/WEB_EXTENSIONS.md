@@ -56,11 +56,12 @@ partial or unsupported below.
 | **`chrome.contextMenus`** | `create`/`update`/`remove`/`removeAll` + `onClicked`, surfaced in the page/long-press menu. |
 | **`chrome.identity`** | `getRedirectURL`, `launchWebAuthFlow` (ASWebAuthenticationSession), `getAuthToken`, `onSignInChanged`. |
 | **`chrome.permissions`** | `contains`/`getAll`/`request`/`remove` over declared + optional permissions. |
-| **Background ↔ content messaging + ports** | `tabs.sendMessage` (background→content), and long-lived `runtime.connect`/`onConnect` ports in **both** directions via a token-bound port hub (`onDisconnect` fires on teardown). |
+| **Background ↔ content messaging + ports** | `tabs.sendMessage` (background→content), `runtime.sendMessage` from the worker → its pages (popup/options/offscreen, with the reply `await`-able), and long-lived `runtime.connect`/`onConnect` ports in **both** directions via a token-bound port hub (`onDisconnect` fires on teardown). |
 | **`chrome.action`** | `setIcon`/`setBadgeText`/`setBadgeBackgroundColor`/`setTitle`/`setPopup` + getters + `onClicked` (fires when the action has no popup). |
 | **`chrome.userScripts`** (MV3) | `register`/`getScripts`/`update`/`unregister`/`configureWorld`/`resetWorldConfiguration` — the MV3 userScripts world API. |
 | **Web-platform APIs in the worker** | JavaScriptCore ships none of these; we provide `fetch` + `Headers`/`Request`/`Response` (+ `.blob()`/`.json()`/`.arrayBuffer()`), `AbortController`/`AbortSignal`, `FormData`, `Blob`/`File`/`FileReader`, `XMLHttpRequest` (network via the gated fetch; `blob:` synchronously), `URL`/`URLSearchParams`, `TextEncoder`/`TextDecoder`, `btoa`/`atob`, `structuredClone`, `Event`/`EventTarget`/`CustomEvent`, `performance`, `queueMicrotask`, `crypto.getRandomValues`/`randomUUID` + `crypto.subtle` (digest/HMAC/AES-GCM/AES-CBC/PBKDF2/ECDSA + JWK), and `navigator`/`location`. All network egress is host-permission-gated (CORS-free, like Chrome). |
-| **MV2 background-page environment** | An MV2 `background.scripts` bundle is a background *page* in Chrome, so for MV2 only we expose `window` (= the global) and a minimal non-rendering `document` (createElement, `<a>` URL parsing, fragments, event no-ops). MV3 service workers get neither. |
+| **MV2 background-page environment** | An MV2 `background.scripts` bundle is a background *page* in Chrome, so for MV2 only we expose `window` (= the global) and a minimal non-rendering `document` (createElement, `<a>` URL parsing, fragments, event no-ops). An MV3 service worker has no DOM and uses `chrome.offscreen` (below) for real-DOM work instead. |
+| **`chrome.offscreen`** (MV3) | `createDocument`/`hasDocument`/`closeDocument`. A DOM-less service worker gets a **real** offscreen document hosted in a hidden `WKWebView` (same engine as popup/options: per-extension scheme handler + page bridge), positioned off-screen so its JS/timers stay live. One document per extension (Chrome's rule); the document URL is sanitized to the extension's own package (no traversal / cross-extension / foreign scheme); torn down on disable/uninstall. The worker drives it over `chrome.runtime` messaging — `chrome.runtime.sendMessage` from the worker now fans out to its pages (popup/options/offscreen) and `await`s the reply. |
 | **Userscript-manager extensions** | A `.user.js` navigation can be handed off to an installed manager that claims it via a `declarativeNetRequest` redirect rule (e.g. **ScriptCat** → its `install.html?url=…`), evaluated in the navigation delegate since WebKit can't redirect a main-frame request. BrownBear's own native userscript installer remains available; the user chooses. |
 
 ## Known gaps (honest no-ops)
@@ -68,8 +69,8 @@ partial or unsupported below.
 All build phases shipped — install/manage, content scripts, `declarativeNetRequest` blocking,
 classic **and** ES-module background service workers, two-way messaging + ports, `tabs`/`windows`/
 `webNavigation`/`scripting`/`cookies`/`notifications`/`contextMenus`/`identity`/`alarms`/`storage`
-(+ events), the web-platform/IndexedDB worker surface, popup/options UI, and Chrome Web Store / Edge /
-Firefox install. The gaps below are **not "todo"** — they're the hard edges of running an extension
+(+ events), the web-platform/IndexedDB worker surface, popup/options UI, `chrome.offscreen` real-DOM
+documents, and Chrome Web Store / Edge / Firefox install. The gaps below are **not "todo"** — they're the hard edges of running an extension
 model inside WebKit (no extension process, no privileged synchronous network layer) on iOS. We
 degrade honestly; an unimplemented `chrome.*` method gets a rejected/no-op call rather than a crash.
 
@@ -80,7 +81,6 @@ degrade honestly; an unimplemented `chrome.*` method gets a rejected/no-op call 
 | `chrome.commands` dispatch | Parsed, and `chrome.commands`/`chrome.action.onClicked` exist, but there's no keyboard-shortcut/toolbar source on iOS to fire them. |
 | `chrome.alarms` while the app is **suspended/closed** | Timers are foreground-lifetime; durable wake-ups would ride the BGTask path (Module 4) and aren't guaranteed by iOS. |
 | `storage.onChanged` in **content scripts** | Fires in background workers and extension pages; content scripts have no per-tab push channel in the shared content world. |
-| `chrome.offscreen` documents | `createDocument` rejects (no hidden-DOM host for a headless worker); well-behaved callers fall back. |
 | Native messaging, devtools pages, `chrome.proxy`, `chrome.privacy`, etc. | No host/native counterpart on iOS. |
 
 ### In progress (real-extension hardening)
@@ -135,7 +135,10 @@ that would block more than the author intended.
 - `WebExtensionBridgeHost` — the browser-VC-implemented bridge backing `chrome.tabs`/`windows`/
   `cookies`/`notifications` for content scripts, pages, **and** background workers.
 - `WebExtensionPageSession` — builds the WKWebView configuration (scheme handler + page bridge + live
-  storage/cookie/notification push) for a popup/options/install page opened in a real tab.
+  storage/cookie/notification push) for a popup/options/install/**offscreen** page; host-agnostic, so
+  the same engine drives a sheet, a real tab, or a hidden offscreen document.
+- `WebExtensionOffscreenManager` — hosts an MV3 `chrome.offscreen` document in a hidden, off-screen
+  WKWebView (one per extension); sanitizes the document URL to the extension's own package.
 - `BrownBearIDBStore` — per-namespace snapshot persistence for the headless IndexedDB engine.
 - `UserScriptInstallRouter` — pure matcher that resolves an extension's `declarativeNetRequest`
   `redirect` rule for a `.user.js` URL (regexFilter + `regexSubstitution`), so the navigation delegate

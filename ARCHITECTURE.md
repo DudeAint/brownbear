@@ -176,6 +176,11 @@ content-script injection in the isolated world, and `chrome.storage`/`runtime`/`
   (`WebExtensionBackgroundContext` + `WebExtensionRuntime` + `brownbear-webext-background.js`) with
   `chrome.runtime`/`storage`/`alarms`/`i18n`, `console.*`, `setTimeout`/`setInterval`, web globals
   (`fetch`/`URL`/`navigator`/`location`/Web Crypto), and **IndexedDB**.
+- **`chrome.offscreen` (MV3 real-DOM documents)**: a service worker has no DOM, so DOM work runs in an
+  offscreen document — hosted faithfully in a hidden, off-screen `WKWebView` (a `JSContext` can't *be*
+  a DOM) reusing the popup/options engine (`WebExtensionOffscreenManager` + `WebExtensionPageSession`).
+  One per extension; the document URL is package-contained; the worker drives it over `chrome.runtime`
+  messaging (worker→page `sendMessage` is wired, reply `await`-able).
 - **ES-module service workers** (`"background": { "type": "module" }`, e.g. uBlock Origin Lite):
   JavaScriptCore on iOS has no native ES-module loader, and its private loader SPI (`JSScript`,
   `moduleLoaderDelegate`) is absent from the public SDK, so we link the module graph in pure JS.
