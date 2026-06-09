@@ -1757,6 +1757,25 @@
     reset: function (name, cb) { if (typeof cb === 'function') { cb(); return undefined; } return Promise.resolve(); }
   };
 
+  // chrome.search.query — run a web search via the user's default search engine. Native opens the
+  // results tab (honoring disposition CURRENT_TAB/NEW_TAB; NEW_WINDOW → NEW_TAB on single-window iOS).
+  // No permission required (matches Chrome). Resolves once the tab op is dispatched.
+  var search = {
+    query: function (queryInfo, cb) {
+      var info = queryInfo || {};
+      var payload = {
+        text: typeof info.text === 'string' ? info.text : '',
+        disposition: typeof info.disposition === 'string' ? info.disposition : null,
+        tabId: typeof info.tabId === 'number' ? info.tabId : null
+      };
+      var p = new Promise(function (resolve) {
+        __bb_search(JSON.stringify(payload), function () { resolve(); });
+      });
+      if (typeof cb === 'function') { p.then(function () { cb(); }); return undefined; }
+      return p;
+    }
+  };
+
   // chrome.idle — iOS can't observe global user input, so queryState maps app/device state via native
   // (locked when data-protected, active when the app is foreground-active, else idle). onStateChanged
   // fires on app foreground/background (and lock/unlock) transitions, pushed from native.
@@ -2561,6 +2580,7 @@
     offscreen: offscreen,
     alarms: alarms,
     commands: commands,
+    search: search,
     idle: idle,
     downloads: downloads,
     contextMenus: contextMenus,

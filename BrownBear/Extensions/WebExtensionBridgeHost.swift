@@ -34,6 +34,11 @@ protocol WebExtensionBridgeHost: AnyObject {
     /// chrome.tabs.reload — reload a tab (`nil` ext id = the active tab).
     func webExtReloadTab(extTabId: Int?, bypassCache: Bool)
 
+    /// chrome.search.query — run a web search for `text` using the user's default search engine.
+    /// `disposition` is "CURRENT_TAB" (default), "NEW_TAB", or "NEW_WINDOW" (treated as NEW_TAB — iOS is
+    /// single-window); `extTabId` (when set, with CURRENT_TAB) targets that tab instead of the active one.
+    func webExtSearchQuery(text: String, disposition: String?, extTabId: Int?)
+
     /// chrome.scripting.executeScript / chrome.tabs.executeScript — run `code` in a tab (`nil` ext id =
     /// active) and return one `{result, frameId}` per frame. `world` is "MAIN" (page) or "ISOLATED"
     /// (the extension content world). Main frame only on iOS.
