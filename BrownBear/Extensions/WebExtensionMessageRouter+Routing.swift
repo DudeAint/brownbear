@@ -264,6 +264,12 @@ extension WebExtensionMessageRouter {
             await BrownBearServices.shared.webExtensionUserScriptStore.configureWorld(extensionID: extensionID, config: config)
             return NSNull()
 
+        case "userScripts.resetWorldConfiguration":
+            try await requireUserScriptsPermission(extensionID)
+            await BrownBearServices.shared.webExtensionUserScriptStore.resetWorldConfiguration(
+                extensionID: extensionID, worldId: payload["worldId"] as? String)
+            return NSNull()
+
         default:
             throw BrownBearError.bridgeRejected("unsupported api '\(api)'")
         }

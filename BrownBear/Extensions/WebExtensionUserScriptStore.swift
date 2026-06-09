@@ -132,6 +132,17 @@ actor WebExtensionUserScriptStore {
         return worlds[extensionID] ?? []
     }
 
+    /// chrome.userScripts.resetWorldConfiguration — drop the config for `worldId` (nil = default world),
+    /// so it reverts to defaults (e.g. messaging:false). Without this, a configureWorld({messaging:true})
+    /// stays persisted and the userScript messaging channel stays on after a reset.
+    func resetWorldConfiguration(extensionID: String, worldId: String?) {
+        hydrate(extensionID)
+        guard var list = worlds[extensionID], list.contains(where: { $0.worldId == worldId }) else { return }
+        list.removeAll { $0.worldId == worldId }
+        worlds[extensionID] = list
+        persistWorlds(extensionID)
+    }
+
     // MARK: - Cleanup
 
     func clearAll(extensionID: String) {
