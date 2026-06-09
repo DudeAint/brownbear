@@ -147,8 +147,11 @@
     }
 
     /** Transform module source into a registry-executable Function. Throws on parse failure or an
-     *  unsupported construct (top-level await), so a bad module fails closed. */
-    function transform(src, path, sourceURL) {
+     *  unsupported construct (top-level await — UNLESS `opts.allowTopLevelAwait`, used by the page
+     *  bundler: page module scripts legally support TLA, so it compiles the body as an AsyncFunction
+     *  and marks `fn.__bbAsync`; the service-worker path passes no opts and keeps rejecting TLA). */
+    function transform(src, path, sourceURL, opts) {
+        var allowAsync = !!(opts && opts.allowTopLevelAwait);
         var ast;
         try {
             ast = acorn.parse(src, { ecmaVersion: 'latest', sourceType: 'module', allowHashBang: true });
@@ -159,6 +162,7 @@
         var edits = [];          // { start, end, text }
         var tmpCount = 0;
         function tmp() { return '__bb_m' + (tmpCount++); }
+        var deps = [];           // static + string-literal-dynamic import specifiers (for page bundling)
 
         // Top-level import/export declarations (only valid at Program.body level).
         var body = ast.body;
@@ -166,15 +170,18 @@
             var node = body[b];
             switch (node.type) {
                 case 'ImportDeclaration':
+                    if (node.source) { deps.push(node.source.value); }
                     edits.push({ start: node.start, end: node.end, text: rewriteImport(node, tmp()) });
                     break;
                 case 'ExportNamedDeclaration':
+                    if (node.source) { deps.push(node.source.value); }
                     rewriteExportNamed(node, edits, tmp);
                     break;
                 case 'ExportDefaultDeclaration':
                     rewriteExportDefault(node, src, edits);
                     break;
                 case 'ExportAllDeclaration':
+                    if (node.source) { deps.push(node.source.value); }
                     rewriteExportAll(node, edits, tmp());
                     break;
             }
@@ -188,6 +195,11 @@
                 // Replace just the `import` keyword (6 chars) so `import( ... )` becomes the call
                 // `__import( ... )`, preserving the argument list and any whitespace verbatim.
                 edits.push({ start: n.start, end: n.start + 6, text: '__import' });
+                // A string-literal dynamic import is statically resolvable, so the page bundler can
+                // include it; a computed import() can't be pre-bundled (left to fail closed if reached).
+                if (n.source && n.source.type === 'Literal' && typeof n.source.value === 'string') {
+                    deps.push(n.source.value);
+                }
             } else if (n.type === 'MetaProperty' && n.meta && n.meta.name === 'import'
                        && n.property && n.property.name === 'meta') {
                 edits.push({ start: n.start, end: n.end, text: '__meta' });
@@ -196,16 +208,34 @@
 
         var rewritten = applyEdits(src, edits, path);
         var fnSource = '"use strict";' + rewritten + '\n//# sourceURL=' + sourceURL;
+        var fn, isAsync = false;
         try {
             // eslint-disable-next-line no-new-func
-            return new Function('__exports', '__require', '__import', '__meta', '__export', fnSource);
+            fn = new Function('__exports', '__require', '__import', '__meta', '__export', fnSource);
         } catch (e) {
             var msg = e && e.message ? e.message : String(e);
-            if (/await/i.test(msg)) {
+            if (/await/i.test(msg) && allowAsync) {
+                // Page module scripts legally use top-level await; compile the body as an AsyncFunction
+                // so it validates, and flag it so the bundler emits an async wrapper + awaits it.
+                try {
+                    var AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+                    fn = new AsyncFunction('__exports', '__require', '__import', '__meta', '__export', fnSource);
+                    isAsync = true;
+                } catch (e2) {
+                    throw new Error('codegen error in ' + path + ': ' + (e2 && e2.message ? e2.message : e2));
+                }
+            } else if (/await/i.test(msg)) {
                 throw new Error('top-level await is not supported in module service workers (' + path + ')');
+            } else {
+                throw new Error('codegen error in ' + path + ': ' + msg);
             }
-            throw new Error('codegen error in ' + path + ': ' + msg);
         }
+        // Stash the rewritten body + static deps so the page bundler (which can't execute modules —
+        // they need the page's DOM/window) can emit a self-contained classic bundle. Inert for the SW.
+        fn.__bbSource = fnSource;
+        fn.__bbDeps = deps;
+        fn.__bbAsync = isAsync;
+        return fn;
     }
 
     function rewriteExportNamed(node, edits, tmp) {
@@ -297,14 +327,14 @@
 
     var registry = Object.create(null);
 
-    function load(path) {
+    function load(path, opts) {
         var rec = registry[path];
         if (rec) return rec;
         var src = global.__bbModuleSource(path);
         if (src == null) throw new Error('module not found: ' + path);
         var baseURL = global.__bbBgBaseURL || '';
         rec = { path: path, exports: {}, evaluated: false, evaluating: false, fn: null };
-        rec.fn = transform(String(src), path, baseURL + path);
+        rec.fn = transform(String(src), path, baseURL + path, opts);
         registry[path] = rec;
         return rec;
     }
@@ -353,6 +383,12 @@
         evaluate(normalize(String(entryPath).charAt(0) === '/'
             ? String(entryPath).slice(1) : String(entryPath)));
     };
+
+    // Expose the pure transform/resolve helpers so the PAGE bundler (brownbear-esm-page-bundler.js) can
+    // reuse them to emit a classic bundle for extension popup/options pages — WKWebView won't load
+    // `<script type="module">` over our custom scheme, so we pre-link page module graphs the same way we
+    // link module service workers. Additive; the SW path is unaffected.
+    global.__bbEsm = { transform: transform, resolve: resolve, normalize: normalize, dirname: dirname, load: load };
 
     // Test seam: expose pure functions when running under a CommonJS harness (Node tests). Has no
     // effect inside JSC, which has no `module`.

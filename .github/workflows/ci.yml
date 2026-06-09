@@ -80,6 +80,12 @@ jobs:
           files=(BrownBear/Resources/JS/*.js)
           if [ ${#files[@]} -eq 0 ]; then echo "No JS runtime files yet — skipping."; exit 0; fi
           for f in "${files[@]}"; do echo "Checking $f"; node --check "$f"; done
+      - name: Run JS runtime functional tests
+        run: |
+          shopt -s nullglob
+          tests=(Tests/JS/*.test.js)
+          if [ ${#tests[@]} -eq 0 ]; then echo "No JS functional tests — skipping."; exit 0; fi
+          for t in "${tests[@]}"; do echo "Running $t"; node "$t"; done
 
   build:
     name: Build & Test (iOS Simulator)
