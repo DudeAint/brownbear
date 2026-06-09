@@ -38,6 +38,10 @@ class WebExtensionRuntime {
     /// messages to every page — an offscreen document is just another message-receiving page.
     let offscreenManager = WebExtensionOffscreenManager()
 
+    /// chrome.downloads state (per-extension download records + URLSession tasks). Owned here so it can
+    /// fan onCreated/onChanged/onErased into the owning worker and be torn down on unload.
+    let downloadsManager = WebExtensionDownloadsManager()
+
     /// Live extension PAGES (popups/options) that want browser-pushed chrome.tabs/webNavigation
     /// events, held weakly so a dismissed page is skipped (and cleaned up) on the next fan-out.
     private final class WeakEventReceiver { weak var value: WebExtensionEventReceiver?; init(_ v: WebExtensionEventReceiver) { value = v } }
@@ -204,6 +208,35 @@ class WebExtensionRuntime {
         offscreenManager.closeDocument(extensionID: extensionID)
     }
 
+    // MARK: - chrome.downloads
+
+    func downloadsDownload(extensionID: String, options: [String: Any]) -> [String: Any] {
+        downloadsManager.download(extensionID: extensionID, options: options)
+    }
+    func downloadsSearch(extensionID: String, query: [String: Any]) -> [[String: Any]] {
+        downloadsManager.search(extensionID: extensionID, query: query)
+    }
+    func downloadsCancel(extensionID: String, id: Int) -> Bool {
+        downloadsManager.cancel(extensionID: extensionID, id: id)
+    }
+    func downloadsPause(extensionID: String, id: Int) -> Bool {
+        downloadsManager.pause(extensionID: extensionID, id: id)
+    }
+    func downloadsResume(extensionID: String, id: Int) -> Bool {
+        downloadsManager.resume(extensionID: extensionID, id: id)
+    }
+    func downloadsErase(extensionID: String, query: [String: Any]) -> [Int] {
+        downloadsManager.erase(extensionID: extensionID, query: query)
+    }
+    func downloadsRemoveFile(extensionID: String, id: Int) -> Bool {
+        downloadsManager.removeFile(extensionID: extensionID, id: id)
+    }
+
+    /// Deliver a chrome.downloads.onCreated/onChanged/onErased event to the owning extension's worker.
+    func fireDownloadEvent(extensionID: String, kind: String, payload: Any) {
+        contexts[extensionID]?.fireDownloadEvent(kind: kind, payload: JSONSanitize.string(payload))
+    }
+
     /// chrome.runtime.getContexts — the extension's live contexts: its background worker plus every open
     /// page (popup / options / offscreen document, all of which are registered event receivers).
     /// `filter` honors `contextTypes` and `documentUrls` (the common cases; e.g. an extension checks
@@ -310,6 +343,8 @@ class WebExtensionRuntime {
             BrownBearServices.shared.webExtensionContextMenuStore.forgetExtension(id)
             // Close any offscreen document — its worker is gone, so the hidden web view must not linger.
             offscreenManager.close(extensionID: id)
+            // Cancel any in-flight downloads the gone worker started.
+            downloadsManager.close(extensionID: id)
         }
 
         // Spin up newly enabled extensions.

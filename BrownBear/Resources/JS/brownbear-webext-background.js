@@ -1678,6 +1678,48 @@
     onStateChanged: makeEvent(idleStateListeners)
   };
 
+  // chrome.downloads — native runs the transfer (URLSession) into the app's Downloads folder and fires
+  // onCreated/onChanged/onErased back here. The "downloads" permission gate is enforced natively.
+  var downloadCreatedListeners = [], downloadChangedListeners = [], downloadErasedListeners = [];
+  function downloadsCall(method, args) {
+    return new Promise(function (resolve, reject) {
+      __bb_downloads(method, JSON.stringify(args || {}), function (resJSON) {
+        var r = parseJSON(resJSON) || {};
+        if (r.error) { var e = new Error(r.error); e.__bbLastError = true; reject(e); } else { resolve(r); }
+      });
+    });
+  }
+  function settleDownloads(promise, cb, pick) {
+    var p = promise.then(pick);
+    if (typeof cb === 'function') {
+      p.then(function (v) { cb(v); }, function (e) {
+        if (e && e.__bbLastError) { _bbLastError = { message: e.message }; }
+        try { cb(undefined); } finally { _bbLastError = null; }
+      });
+      return undefined;
+    }
+    return p;
+  }
+  var downloads = {
+    download: function (options, cb) {
+      return settleDownloads(downloadsCall('download', options || {}), cb, function (r) { return r.downloadId; });
+    },
+    search: function (query, cb) {
+      return settleDownloads(downloadsCall('search', query || {}), cb, function (r) { return r.items || []; });
+    },
+    cancel: function (id, cb) { return settleDownloads(downloadsCall('cancel', { id: id }), cb, function () { return undefined; }); },
+    pause: function (id, cb) { return settleDownloads(downloadsCall('pause', { id: id }), cb, function () { return undefined; }); },
+    resume: function (id, cb) { return settleDownloads(downloadsCall('resume', { id: id }), cb, function () { return undefined; }); },
+    erase: function (query, cb) { return settleDownloads(downloadsCall('erase', query || {}), cb, function (r) { return r.erased || []; }); },
+    removeFile: function (id, cb) { return settleDownloads(downloadsCall('removeFile', { id: id }), cb, function () { return undefined; }); },
+    // No iOS file-manager surface to drive these — accept and no-op so callers don't throw.
+    open: function () {}, show: function () {}, showDefaultFolder: function () {}, setShelfEnabled: function () {},
+    acceptDanger: function (id, cb) { if (typeof cb === 'function') { cb(); return undefined; } return Promise.resolve(); },
+    onCreated: makeEvent(downloadCreatedListeners),
+    onChanged: makeEvent(downloadChangedListeners),
+    onErased: makeEvent(downloadErasedListeners)
+  };
+
   // ---------------------------------------------------------------- chrome.action / chrome.browserAction
   // Backed by native WebExtensionActionState via __bb_action; onClicked is delivered from the browser
   // (overflow-menu tap on an action with no popup) through __bbBg.dispatchActionClicked. setIcon
@@ -2351,6 +2393,7 @@
     alarms: alarms,
     commands: commands,
     idle: idle,
+    downloads: downloads,
     contextMenus: contextMenus,
     menus: contextMenus,
     action: action,
@@ -2481,6 +2524,18 @@
       for (var i = 0; i < idleStateListeners.length; i++) {
         try { idleStateListeners[i](state); }
         catch (e) { __bb_log('error', 'idle.onStateChanged listener threw: ' + (e && e.message ? e.message : e)); }
+      }
+    },
+
+    dispatchDownloadEvent: function (kind, payloadJSON) {
+      var payload = parseJSON(payloadJSON);
+      var list = kind === 'onCreated' ? downloadCreatedListeners
+        : kind === 'onChanged' ? downloadChangedListeners
+        : kind === 'onErased' ? downloadErasedListeners : null;
+      if (!list) { return; }
+      for (var i = 0; i < list.length; i++) {
+        try { list[i](payload); }
+        catch (e) { __bb_log('error', 'downloads.' + kind + ' listener threw: ' + (e && e.message ? e.message : e)); }
       }
     },
 
