@@ -65,44 +65,53 @@ final class SiteShieldsContentBlockerTests: XCTestCase {
 
     // MARK: - Unbreak exceptions (let a page-breaking telemetry script load, block its data endpoint)
 
-    func testUnbreakAppendsAllowAndBlockRules() {
-        // Upstream list blocks the New Relic AGENT (which breaks pages). After unbreak: the agent gets an
-        // ignore-previous-rules (un-blocked), and its data endpoint gets an explicit third-party block.
+    func testUnbreakStripsAgentBlock() {
+        // A block whose url-filter matches the New Relic agent URL is REMOVED outright (order/trigger-proof).
         let json = #"[{"trigger":{"url-filter":"^https?://js-agent\\.newrelic\\.com"},"action":{"type":"block"}}]"#
-        let out = rules(WebExtensionContentBlocker.appendUnbreakRules(to: json))
-        XCTAssertEqual(out.count, 3, "original block + appended endpoint-block + appended ignore")
-        // The LAST rule must be the ignore for the agent (so it overrides the earlier block in-list).
-        let last = out.last
-        XCTAssertEqual((last?["action"] as? [String: Any])?["type"] as? String, "ignore-previous-rules")
-        XCTAssertEqual((last?["trigger"] as? [String: Any])?["url-filter"] as? String,
-                       #"^https?://([^/]+\.)?js-agent\.newrelic\.com[:/]"#)
-        // An appended rule blocks the nr-data.net data endpoint, third-party only.
-        let endpointBlock = out.first { r in
-            ((r["trigger"] as? [String: Any])?["url-filter"] as? String)?.contains("nr-data") == true
-        }
-        XCTAssertEqual((endpointBlock?["action"] as? [String: Any])?["type"] as? String, "block")
-        XCTAssertEqual((endpointBlock?["trigger"] as? [String: Any])?["load-type"] as? [String], ["third-party"])
+        let out = rules(WebExtensionContentBlocker.applyUnbreak(to: json, includeEndpointBlocks: false))
+        XCTAssertTrue(out.isEmpty, "the New Relic agent block is stripped")
     }
 
-    func testUnbreakIgnoreComesAfterTheBlockItOverrides() {
-        // WebKit applies ignore-previous-rules only to rules EARLIER in the same list, so the agent's
-        // upstream block must precede the appended ignore for the un-block to take effect.
-        let json = #"[{"trigger":{"url-filter":"^https?://js-agent\\.newrelic\\.com"},"action":{"type":"block"}}]"#
-        let out = rules(WebExtensionContentBlocker.appendUnbreakRules(to: json))
-        let agentBlockIndex = out.firstIndex { r in
-            ((r["action"] as? [String: Any])?["type"] as? String) == "block"
-                && ((r["trigger"] as? [String: Any])?["url-filter"] as? String)?.contains("js-agent") == true
-        }
-        let ignoreIndex = out.firstIndex { r in
-            ((r["action"] as? [String: Any])?["type"] as? String) == "ignore-previous-rules"
-        }
-        XCTAssertNotNil(agentBlockIndex)
-        XCTAssertNotNil(ignoreIndex)
-        XCTAssertLessThan(agentBlockIndex!, ignoreIndex!, "ignore must come after the block it cancels")
+    func testUnbreakStripsBroadNewRelicBlockThatWouldCatchTheAgent() {
+        // EasyPrivacy may block via a broad host pattern; it still matches the agent URL, so it's stripped.
+        let json = #"[{"trigger":{"url-filter":"newrelic\\.com"},"action":{"type":"block"}}]"#
+        let out = rules(WebExtensionContentBlocker.applyUnbreak(to: json, includeEndpointBlocks: false))
+        XCTAssertTrue(out.isEmpty, "a broad newrelic.com block that would catch the agent is stripped")
+    }
+
+    func testUnbreakKeepsTelemetryBlockAndAppendsEndpoint() {
+        // nr-data.net is not an agent host, so an existing block of it survives; and the built-in path
+        // (includeEndpointBlocks) appends an explicit third-party nr-data block so telemetry stays blocked.
+        let json = #"[{"trigger":{"url-filter":"^https?://bam\\.nr-data\\.net"},"action":{"type":"block"}}]"#
+        let out = rules(WebExtensionContentBlocker.applyUnbreak(to: json, includeEndpointBlocks: true))
+        let nrData = out.filter { (($0["trigger"] as? [String: Any])?["url-filter"] as? String)?.contains("nr-data") == true }
+        XCTAssertGreaterThanOrEqual(nrData.count, 1, "the telemetry endpoint stays blocked")
+        let appended = out.first { (($0["trigger"] as? [String: Any])?["url-filter"] as? String) == #"^https?://([^/]+\.)?nr-data\.net[:/]"# }
+        XCTAssertEqual((appended?["action"] as? [String: Any])?["type"] as? String, "block")
+        XCTAssertEqual((appended?["trigger"] as? [String: Any])?["load-type"] as? [String], ["third-party"])
+    }
+
+    func testUnbreakExtensionPathStripsWithoutAppending() {
+        // includeEndpointBlocks:false (the per-extension path) strips the agent block but appends nothing —
+        // the built-in list already carries the endpoint block.
+        let json = #"[{"trigger":{"url-filter":"js-agent\\.newrelic\\.com"},"action":{"type":"block"}},"# +
+                   #"{"trigger":{"url-filter":"^https?://([^/]+\\.)?example\\.com"},"action":{"type":"block"}}]"#
+        let out = rules(WebExtensionContentBlocker.applyUnbreak(to: json, includeEndpointBlocks: false))
+        XCTAssertEqual(out.count, 1, "agent block stripped, unrelated block kept")
+        XCTAssertNil(out.first { (($0["trigger"] as? [String: Any])?["url-filter"] as? String)?.contains("nr-data") == true },
+                     "no endpoint block is appended on the extension path")
+    }
+
+    func testUnbreakLeavesUnrelatedAndNonBlockRules() {
+        // A block for an unrelated host AND a non-block (ignore) rule for the agent host are both untouched.
+        let json = #"[{"trigger":{"url-filter":"^https?://([^/]+\\.)?example\\.com"},"action":{"type":"block"}},"# +
+                   #"{"trigger":{"url-filter":"js-agent\\.newrelic\\.com"},"action":{"type":"ignore-previous-rules"}}]"#
+        let out = rules(WebExtensionContentBlocker.applyUnbreak(to: json, includeEndpointBlocks: false))
+        XCTAssertEqual(out.count, 2, "only matching BLOCK rules are stripped; unrelated + non-block rules stay")
     }
 
     func testUnbreakMalformedJSONIsReturnedUnchanged() {
         let junk = "not json at all"
-        XCTAssertEqual(WebExtensionContentBlocker.appendUnbreakRules(to: junk), junk)
+        XCTAssertEqual(WebExtensionContentBlocker.applyUnbreak(to: junk, includeEndpointBlocks: true), junk)
     }
 }
