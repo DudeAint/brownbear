@@ -1948,7 +1948,22 @@
     executeScript: function (id, details, cb) {
       if (id !== null && typeof id === 'object') { cb = details; details = id; id = undefined; }
       details = details || {};
-      return settleBg(scriptingCall('executeScript', { tabId: id, code: details.code, files: details.file ? [details.file] : undefined, world: details.world }), cb);
+      // MV2 tabs.executeScript resolves to an array of RAW per-frame result values ([1]) — NOT the
+      // MV3 [{ result, frameId }] shape that scripting.executeScript returns. Unwrap so MV2 managers
+      // work: Violentmonkey's isInjectable() probe injects `code:'1'` and treats the page as runnable
+      // only when the result array is [1]. A denied page yields [] here, which correctly reads as
+      // not-injectable. (scripting.executeScript above keeps the MV3 shape — different code path.)
+      var p = scriptingCall('executeScript', {
+        tabId: id, code: details.code,
+        files: details.file ? [details.file] : undefined,
+        world: details.world
+      }).then(function (r) {
+        if (!Array.isArray(r)) { return r; }
+        return r.map(function (x) {
+          return (x && typeof x === 'object' && 'result' in x) ? x.result : x;
+        });
+      });
+      return settleBg(p, cb);
     },
     insertCSS: function (id, details, cb) {
       if (id !== null && typeof id === 'object') { cb = details; details = id; id = undefined; }
