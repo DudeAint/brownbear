@@ -17,6 +17,20 @@ import UIKit
 extension WebExtensionBackgroundContext {
 
     func installPlatformNatives(into context: JSContext) {
+        // `new Image(); img.src = url` in the MV2 background → fetch the bytes natively and return a
+        // `data:` URL (the JSContext can't decode pixels). Powers real script icons (Violentmonkey draws
+        // the icon onto a canvas and toDataURL()s it, all in the background). SSRF-gated; off the queue.
+        let fetchImage: @convention(block) (String, JSValue) -> Void = { [weak self] urlString, callback in
+            guard let self else { return }
+            let extID = self.extensionID
+            Task.detached(priority: .utility) { [weak self] in
+                let result = await WebExtensionImageBridge.fetchImageDataURL(urlString: urlString, extensionID: extID)
+                guard let self else { return }
+                self.callBack(callback, with: self.jsonString(result))
+            }
+        }
+        context.setObject(fetchImage, forKeyedSubscript: "__bb_fetch_image" as NSString)
+
         // chrome.i18n.detectLanguage — NLLanguageRecognizer. CPU-bound and pure, so run it off the
         // worker's serial queue (Task.detached) and call back onto the queue with the result.
         let detect: @convention(block) (String, JSValue) -> Void = { [weak self] text, callback in

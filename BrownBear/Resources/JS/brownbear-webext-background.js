@@ -386,7 +386,8 @@
           node.width = 300; node.height = 150;
           var __bbCtx2d = {
             canvas: node,
-            drawImage: function () {}, clearRect: function () {}, fillRect: function () {}, strokeRect: function () {},
+            drawImage: function (img) { if (img && img.__bbDataUrl) { node.__bbDrawn = img.__bbDataUrl; } },
+            clearRect: function () {}, fillRect: function () {}, strokeRect: function () {},
             beginPath: function () {}, closePath: function () {}, moveTo: function () {}, lineTo: function () {},
             arc: function () {}, arcTo: function () {}, rect: function () {}, ellipse: function () {},
             fill: function () {}, stroke: function () {}, clip: function () {},
@@ -408,7 +409,11 @@
             setLineDash: function () {}, getLineDash: function () { return []; }
           };
           node.getContext = function (t) { return (t === '2d') ? __bbCtx2d : null; };
-          node.toDataURL = function () { return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='; };
+          // The image drawn onto this canvas (fetched natively via Image.src) IS the real icon — return
+          // it. Fallback: a valid 1×1 transparent PNG so callers never get a broken data-URI.
+          node.toDataURL = function () {
+            return node.__bbDrawn || 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+          };
           node.toBlob = function (cb) { if (typeof cb === 'function') { cb(null); } };
         }
         return node;
@@ -451,16 +456,24 @@
         globalThis.Image = function (w, h) {
           this.width = w || 0; this.height = h || 0; this.naturalWidth = 0; this.naturalHeight = 0;
           this.complete = false; this.onload = null; this.onerror = null; this.crossOrigin = null;
+          this.naturalWidth = 0; this.naturalHeight = 0; this.__bbDataUrl = null;
           var self = this, _src = '';
           Object.defineProperty(this, 'src', {
             configurable: true, enumerable: true,
             get: function () { return _src; },
             set: function (v) {
-              _src = String(v);
-              globalThis.setTimeout(function () {
+              _src = String(v); self.complete = false; self.__bbDataUrl = null;
+              // Fetch the bytes natively → a data: URL the canvas stub returns from toDataURL (real icon).
+              __bb_fetch_image(_src, function (resJSON) {
+                var r = parseJSON(resJSON) || {};
                 self.complete = true;
-                if (typeof self.onerror === 'function') { try { self.onerror({ type: 'error' }); } catch (e) {} }
-              }, 0);
+                if (r.dataUrl) {
+                  self.__bbDataUrl = r.dataUrl; self.naturalWidth = r.width || 0; self.naturalHeight = r.height || 0;
+                  if (typeof self.onload === 'function') { try { self.onload({ type: 'load' }); } catch (e) {} }
+                } else if (typeof self.onerror === 'function') {
+                  try { self.onerror({ type: 'error' }); } catch (e) {}
+                }
+              });
             }
           });
           this.addEventListener = function (t, fn) { if (t === 'load') { self.onload = fn; } else if (t === 'error') { self.onerror = fn; } };
