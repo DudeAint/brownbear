@@ -79,6 +79,12 @@
       return promise;   // promise form: a tagged rejection propagates (Chrome rejects the promise)
     }
 
+    // Per-area change listeners (chrome.storage.<area>.onChanged, the StorageArea.onChanged added in
+    // Chrome 73). Distinct from the global chrome.storage.onChanged: a manager like ScriptCat registers
+    // chrome.storage.local.onChanged.addListener(...) at init, so the area MUST expose onChanged or that
+    // access throws `undefined.addListener` and the whole content script dies. Keyed by area name; the
+    // native storage push (onStorageChanged) fans each change to the matching area's listeners.
+    var storageAreaListeners = { local: [], sync: [], session: [], managed: [] };
     function storageArea(area) {
       function get(keys, callback) {
         if (typeof keys === "function") { callback = keys; keys = null; }
@@ -127,7 +133,8 @@
         return _Promise.resolve();
       }
       return { get: get, set: set, remove: remove, clear: clear,
-               getBytesInUse: getBytesInUse, setAccessLevel: setAccessLevel };
+               getBytesInUse: getBytesInUse, setAccessLevel: setAccessLevel,
+               onChanged: makeEvent(storageAreaListeners[area] || (storageAreaListeners[area] = [])) };
     }
 
     function getURL(path) {
@@ -660,6 +667,14 @@
           try { storageListeners[i](changes, areaName); }
           catch (e) { if (_console.error) { _console.error("[BrownBear ext] onChanged listener:", e); } }
         }
+        // chrome.storage.<area>.onChanged listeners get just the changes (the area is implicit).
+        var areaList = storageAreaListeners[areaName];
+        if (areaList) {
+          for (var a = 0; a < areaList.length; a++) {
+            try { areaList[a](changes); }
+            catch (e2) { if (_console.error) { _console.error("[BrownBear ext] area onChanged listener:", e2); } }
+          }
+        }
       },
       // Port pushes from native (the worker's side of a port this endpoint opened). For a port opened
       // TOWARD this endpoint (responder path — present for symmetry), onPortConnect builds the port and
@@ -890,7 +905,10 @@
   // Forward a caught content-world error to the Logs tab (the page console isn't captured for the isolated
   // world). Best-effort: needs the native bridge + a token to attribute the line to the extension.
   function reportContentError(e, token) {
-    var msg = (e && e.stack) ? e.stack : ((e && e.message) ? e.message : String(e));
+    // JSC error.stack is JUST the call stack (no message), so lead with name+message — otherwise the
+    // Logs show a bare stack and the actual fault ("X is undefined") is lost.
+    var head = (e && e.name ? e.name + ": " : "") + ((e && e.message) ? e.message : String(e));
+    var msg = head + ((e && e.stack) ? "\n" + e.stack : "");
     if (_console.error) { _console.error("[BrownBear ext] content script error:", e); }
     var tok = token || __bbLogToken;
     if (handler && tok) {
