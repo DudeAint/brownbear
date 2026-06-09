@@ -48,5 +48,19 @@ extension WebExtensionBackgroundContext {
             }
         }
         context.setObject(offscreen, forKeyedSubscript: "__bb_offscreen" as NSString)
+
+        // chrome.runtime.getContexts — the offscreen companion. Lists the worker + its live pages so an
+        // extension can check `getContexts({contextTypes:['OFFSCREEN_DOCUMENT']})` before createDocument.
+        let getContexts: @convention(block) (String, JSValue) -> Void = { [weak self] filterJSON, callback in
+            guard let self else { return }
+            let filter = ((try? JSONSerialization.jsonObject(with: Data(filterJSON.utf8))) as? [String: Any]) ?? [:]
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let list = BrownBearServices.shared.webExtensionRuntime.getContexts(
+                    extensionID: extID, filter: filter)
+                self.callBack(callback, with: self.jsonString(list))
+            }
+        }
+        context.setObject(getContexts, forKeyedSubscript: "__bb_get_contexts" as NSString)
     }
 }

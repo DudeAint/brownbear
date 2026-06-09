@@ -35,10 +35,13 @@ extension WebExtensionBackgroundContext {
                 guard let self else { return }
                 let response = await BrownBearServices.shared.webExtensionRuntime.sendRuntimeMessage(
                     message, sender: ["id": extID], to: extID, senderIsBackground: true)
-                // A real responder replies `{value:…}`; nil (declined) or `{__bbNoReceiver}` → null, so the
-                // worker's sendMessage resolves undefined (Chrome's no-answer behavior).
+                // Three outcomes, mirroring Chrome: a real responder replies `{value:…}`; NO context had
+                // a listener → pass `{__bbNoReceiver}` through so the JS sets lastError / rejects the
+                // Promise; nil (received but declined/no answer) → null → resolves undefined, no error.
                 if let response, response["__bbNoReceiver"] == nil {
                     self.callBack(callback, with: self.jsonString(response))
+                } else if response?["__bbNoReceiver"] != nil {
+                    self.callBack(callback, with: self.jsonString(["__bbNoReceiver": true]))
                 } else {
                     self.callBack(callback, with: "null")
                 }

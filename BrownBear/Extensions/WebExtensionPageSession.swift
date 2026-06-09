@@ -258,6 +258,10 @@ extension WebExtensionPageSession: WebExtensionEventReceiver {
 
     /// Deliver a browser-pushed chrome.tabs/webNavigation event into this page's chrome.* surface.
     func dispatchExtEvent(name: String, argsJSON: String) {
+        // An offscreen document has no chrome.tabs/webNavigation surface in Chrome — it must still be a
+        // registered event receiver (that's how it gets runtime.sendMessage via deliverRuntimeMessage),
+        // but browser-pushed tab/navigation events are not delivered to it.
+        if kind == .offscreen { return }
         guard let webView else { return }
         let js = "window.__brownbearExtPage && window.__brownbearExtPage.dispatchExtEvent("
             + "\(Self.jsonString(name)), \(Self.jsonString(argsJSON)));"
@@ -269,5 +273,29 @@ extension WebExtensionPageSession: WebExtensionEventReceiver {
     func deliverRuntimeMessage(message: Any, sender: [String: Any], senderToken: String?) async -> [String: Any]? {
         guard let pageToken, senderToken != pageToken, webView != nil else { return nil }
         return await router.deliverRuntimeMessageToPage(token: pageToken, message: message, sender: sender)
+    }
+
+    /// This page's chrome.runtime.getContexts record (popup → POPUP, options → TAB, offscreen →
+    /// OFFSCREEN_DOCUMENT). Only listed while the web view is live. The offscreen document is reported
+    /// here too — it's a registered event receiver — so getContexts needs no separate offscreen lookup.
+    func contextRecord() -> [String: Any]? {
+        guard webView != nil, let pageToken else { return nil }
+        let contextType: String
+        switch kind {
+        case .popup: contextType = "POPUP"
+        case .options: contextType = "TAB"
+        case .offscreen: contextType = "OFFSCREEN_DOCUMENT"
+        }
+        return [
+            "contextId": pageToken,
+            "contextType": contextType,
+            "documentId": pageToken,
+            "documentUrl": pageURL?.absoluteString ?? NSNull(),
+            "documentOrigin": "\(WebExtensionSchemeHandler.scheme)://\(ext.id)",
+            "frameId": 0,
+            "tabId": -1,
+            "windowId": BrownBearBrowserViewController.webExtWindowID,
+            "incognito": false
+        ]
     }
 }

@@ -176,6 +176,31 @@ class WebExtensionRuntime {
         offscreenManager.closeDocument(extensionID: extensionID)
     }
 
+    /// chrome.runtime.getContexts — the extension's live contexts: its background worker plus every open
+    /// page (popup / options / offscreen document, all of which are registered event receivers).
+    /// `filter` honors `contextTypes` and `documentUrls` (the common cases; e.g. an extension checks
+    /// `getContexts({contextTypes:['OFFSCREEN_DOCUMENT']})` before creating one).
+    func getContexts(extensionID: String, filter: [String: Any]) -> [[String: Any]] {
+        var out: [[String: Any]] = []
+        if contexts[extensionID] != nil {
+            out.append(["contextId": "background", "contextType": "BACKGROUND",
+                        "documentUrl": NSNull(), "documentOrigin": NSNull(),
+                        "frameId": -1, "tabId": -1, "windowId": -1, "incognito": false])
+        }
+        for box in eventReceivers.values {
+            guard let receiver = box.value, receiver.receiverExtensionID == extensionID,
+                  let record = receiver.contextRecord() else { continue }
+            out.append(record)
+        }
+        if let types = filter["contextTypes"] as? [String], !types.isEmpty {
+            out = out.filter { types.contains(($0["contextType"] as? String) ?? "") }
+        }
+        if let urls = filter["documentUrls"] as? [String], !urls.isEmpty {
+            out = out.filter { ($0["documentUrl"] as? String).map(urls.contains) ?? false }
+        }
+        return out
+    }
+
     /// The ids of running workers that CLAIM this `.user.js` via a webRequest.onBeforeRequest filter
     /// (detection only — does not invoke the listener). For listing install targets in the picker.
     func userScriptWebRequestManagerIDs(url: URL) async -> [String] {

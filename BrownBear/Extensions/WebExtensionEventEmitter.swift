@@ -192,6 +192,9 @@ protocol WebExtensionEventReceiver: AnyObject {
     /// sendResponse. `senderToken` is the sending page's token (when the sender is itself a page) so a
     /// page never receives its own broadcast. Returns `["value": ...]` for an answer, nil otherwise.
     func deliverRuntimeMessage(message: Any, sender: [String: Any], senderToken: String?) async -> [String: Any]?
+    /// A chrome.runtime ExtensionContext record for this live page (chrome.runtime.getContexts), or nil
+    /// if it shouldn't be listed. Default nil.
+    func contextRecord() -> [String: Any]?
 }
 
 extension WebExtensionEventReceiver {
@@ -199,4 +202,6 @@ extension WebExtensionEventReceiver {
     func deliverRuntimeMessage(message: Any, sender: [String: Any], senderToken: String?) async -> [String: Any]? {
         nil
     }
+    /// Default: not surfaced in getContexts.
+    func contextRecord() -> [String: Any]? { nil }
 }

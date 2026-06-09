@@ -58,6 +58,10 @@ final class WebExtensionOffscreenManager {
             return await withCheckedContinuation { continuation = $0 }
         }
 
+        /// Resolve the wait as failed from a NON-delegate source (the load timeout). Idempotent — if a
+        /// real terminal callback already fired, this is a no-op.
+        func fail(_ message: String) { finish(message) }
+
         private var loadError: String?
         private func finish(_ error: String?) {
             guard !finished else { return }   // first terminal callback wins (resume the continuation once)
@@ -76,12 +80,27 @@ final class WebExtensionOffscreenManager {
                      withError error: Error) {
             finish(error.localizedDescription)
         }
+        /// The web content process crashed/was jetsammed mid-load. WebKit may deliver NO didFinish/didFail
+        /// in this case, so without this the load would hang forever (the offscreen web view is an
+        /// off-screen, backgrounded page — a prime jetsam target). Resolve it as a failure.
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            finish("the offscreen document's web content process terminated")
+        }
     }
 
     private var documents: [String: Document] = [:]
-    /// Extensions mid-creation, so two overlapping createDocument calls can't both pass the single-doc
-    /// guard during the `await` window before the document lands in `documents`.
-    private var creating: Set<String> = []
+    /// The generation of the in-flight create for an extension (absent if none is building). Each
+    /// createDocument bumps it; closeDocument bumps it to CANCEL an in-flight build. A builder that
+    /// finds the generation changed out from under it (a newer create, or a close) bails and tears down.
+    /// This is finer than a bare "is creating" flag: it distinguishes "MY build is still current" from
+    /// "a different build owns the slot now", so a close→create interleave during the load `await` can't
+    /// let a stale builder commit a document the user already closed.
+    private var inFlight: [String: Int] = [:]
+    private var generationCounter = 0
+    /// Bounds a single offscreen load so a wedged/never-terminating navigation can't hang createDocument
+    /// (and the worker's Promise) forever. The renderer-crash callback covers the common case; this is
+    /// the catch-all for any load that neither finishes nor fails.
+    private static let loadTimeout: UInt64 = 20_000_000_000   // 20s in nanoseconds
 
     /// Whether `ext` currently has an offscreen document (chrome.offscreen.hasDocument).
     func hasDocument(extensionID: String) -> Bool { documents[extensionID] != nil }
@@ -99,7 +118,8 @@ final class WebExtensionOffscreenManager {
         guard !justification.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return ["error": "Creating an offscreen document requires a justification."]
         }
-        guard documents[ext.id] == nil, !creating.contains(ext.id) else {
+        // Chrome's single-document rule: reject if one is committed OR another create is in flight.
+        guard documents[ext.id] == nil, inFlight[ext.id] == nil else {
             return ["error": "Only a single offscreen document may be created."]
         }
         guard let container else {
@@ -108,9 +128,13 @@ final class WebExtensionOffscreenManager {
         guard let cleanPath = Self.sanitizedPath(extID: ext.id, rawPath: path) else {
             return ["error": "Invalid offscreen document URL."]
         }
-        // Reserve the slot for the duration of the async build (cleared on every return).
-        creating.insert(ext.id)
-        defer { creating.remove(ext.id) }
+        // Claim the slot with a unique generation BEFORE the first await. A later create or a close
+        // changes inFlight[ext.id], which this builder detects after the await. Cleared on return only
+        // if it's still ours (a superseding create must keep its own claim).
+        generationCounter += 1
+        let generation = generationCounter
+        inFlight[ext.id] = generation
+        defer { if inFlight[ext.id] == generation { inFlight.removeValue(forKey: ext.id) } }
 
         let session = WebExtensionPageSession(ext: ext, kind: .offscreen, path: cleanPath)
         guard let url = session.pageURL else { return ["error": "Invalid offscreen document URL."] }
@@ -128,17 +152,28 @@ final class WebExtensionOffscreenManager {
         session.bind(to: webView)
         webView.load(URLRequest(url: url))
 
-        if let loadError = await observer.wait() {
+        // Race the load against a deadline; whichever resolves the observer first wins (idempotent).
+        let timeoutTask = Task { @MainActor [weak observer] in
+            try? await Task.sleep(nanoseconds: Self.loadTimeout)
+            observer?.fail("offscreen document load timed out")
+        }
+        let loadError = await observer.wait()
+        timeoutTask.cancel()
+
+        let tearDown = {
             session.invalidate()
             webView.navigationDelegate = nil
+            webView.stopLoading()
             webView.removeFromSuperview()
+        }
+        if let loadError {
+            tearDown()
             return ["error": "Failed to load offscreen document: \(loadError)"]
         }
-        // A close() could have raced in during the load await; honor it.
-        guard creating.contains(ext.id) else {
-            session.invalidate()
-            webView.navigationDelegate = nil
-            webView.removeFromSuperview()
+        // A close() (or a superseding create) could have changed the slot during the load await; if this
+        // build is no longer the current generation, it was cancelled — discard it.
+        guard inFlight[ext.id] == generation, documents[ext.id] == nil else {
+            tearDown()
             return ["error": "Offscreen document was closed before it finished loading."]
         }
         documents[ext.id] = Document(session: session, webView: webView, url: url,
@@ -146,12 +181,14 @@ final class WebExtensionOffscreenManager {
         return [:]
     }
 
-    /// Close `ext`'s offscreen document (chrome.offscreen.closeDocument). Returns false if there was
-    /// none. Tears the page session down so its ports disconnect and it stops receiving pushed events.
+    /// Close `ext`'s offscreen document (chrome.offscreen.closeDocument). Returns true if it closed a
+    /// committed document OR cancelled an in-flight create; false only if there was genuinely nothing.
+    /// Tears the page session down so its ports disconnect and it stops receiving pushed events.
     @discardableResult
     func closeDocument(extensionID: String) -> Bool {
-        creating.remove(extensionID)   // cancel an in-flight create (the awaiting builder will bail)
-        guard let doc = documents.removeValue(forKey: extensionID) else { return false }
+        // Cancel any in-flight create (bump the generation so the awaiting builder bails and tears down).
+        let cancelledCreate = inFlight.removeValue(forKey: extensionID) != nil
+        guard let doc = documents.removeValue(forKey: extensionID) else { return cancelledCreate }
         doc.session.invalidate()
         doc.webView.navigationDelegate = nil
         doc.webView.stopLoading()
@@ -181,9 +218,22 @@ final class WebExtensionOffscreenManager {
         if let cut = path.firstIndex(where: { $0 == "?" || $0 == "#" }) { path = String(path[..<cut]) }
         while path.hasPrefix("/") { path.removeFirst() }
         guard !path.isEmpty else { return nil }
-        // No `..` segment may escape the package.
-        let segments = path.split(separator: "/", omittingEmptySubsequences: false)
-        if segments.contains("..") { return nil }
+        // Reject control characters / NUL (a `\0` truncates at the C-string boundary; controls have no
+        // place in a packaged path).
+        if path.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }) { return nil }
+        // The traversal check must see THROUGH percent-encoding: WebExtensionSchemeHandler reads
+        // `url.path`, which Foundation percent-DECODES, so `%2e%2e/x` / `a%2f..%2fb` / `a%5c..%5cb` would
+        // otherwise reach the store as `../`. Decode (repeatedly, to defeat double-encoding), split on
+        // BOTH `/` and `\`, and reject any `.`/`..` segment. We still return the ORIGINAL path (legit
+        // encoded filenames like `my%20file.html` stay intact); only the check runs on the decoded form.
+        var decoded = path
+        for _ in 0..<3 {
+            guard let once = decoded.removingPercentEncoding, once != decoded else { break }
+            decoded = once
+        }
+        if decoded.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }) { return nil }
+        let segments = decoded.split(whereSeparator: { $0 == "/" || $0 == "\\" })
+        if segments.contains("..") || segments.contains(".") { return nil }
         return path
     }
 }

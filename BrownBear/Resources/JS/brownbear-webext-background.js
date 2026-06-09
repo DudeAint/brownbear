@@ -1525,6 +1525,10 @@
     return baseURL + (path.charAt(0) === '/' ? path.slice(1) : path);
   }
 
+  // chrome.runtime.lastError slot for the worker. Settable so the messaging path can populate it before
+  // invoking a callback (Chrome calls the callback with lastError set, then clears it), mirroring the
+  // page/content runtimes. The Promise form rejects instead.
+  var _bbLastError = null;
   var runtime = {
     id: extId,
     // Chrome exposes these enums on chrome.runtime; extensions read them directly (e.g. an onInstalled
@@ -1551,13 +1555,27 @@
       var args = Array.prototype.slice.call(arguments);
       var cb = (args.length && typeof args[args.length - 1] === 'function') ? args.pop() : null;
       var message = (typeof args[0] === 'string' && args.length > 1) ? args[1] : args[0];
-      var p = new Promise(function (resolve) {
+      var p = new Promise(function (resolve, reject) {
         __bb_send_message(JSON.stringify({ message: (message === undefined ? null : message) }), function (resJSON) {
           var r = parseJSON(resJSON);
-          resolve(r ? r.value : undefined);
+          if (r && r.__bbNoReceiver) {
+            // No context of this extension had an onMessage listener — Chrome rejects the Promise (and
+            // sets lastError for the callback form). Tagged so the callback branch can surface it.
+            var err = new Error('Could not establish connection. Receiving end does not exist.');
+            err.__bbLastError = true;
+            reject(err);
+          } else {
+            resolve(r ? r.value : undefined);
+          }
         });
       });
-      if (typeof cb === 'function') { p.then(function (v) { cb(v); }); return undefined; }
+      if (typeof cb === 'function') {
+        p.then(function (v) { cb(v); }, function (e) {
+          if (e && e.__bbLastError) { _bbLastError = { message: e.message }; }
+          try { cb(undefined); } finally { _bbLastError = null; }
+        });
+        return undefined;
+      }
       return p;
     },
     connect: function (connectInfo) {
@@ -1581,7 +1599,17 @@
       if (typeof cb === 'function') { cb(info); return undefined; }
       return Promise.resolve(info);
     },
-    get lastError() { return undefined; }
+    getContexts: function (filter, cb) {
+      var p = new Promise(function (resolve) {
+        __bb_get_contexts(JSON.stringify(filter || {}), function (resJSON) {
+          var r = parseJSON(resJSON);
+          resolve(Array.isArray(r) ? r : []);
+        });
+      });
+      if (typeof cb === 'function') { p.then(function (v) { cb(v); }); return undefined; }
+      return p;
+    },
+    get lastError() { return _bbLastError; }
   };
 
   // ---------------------------------------------------------------- assemble + expose

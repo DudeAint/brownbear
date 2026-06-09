@@ -53,6 +53,37 @@ final class WebExtensionOffscreenManagerTests: XCTestCase {
         XCTAssertNil(WebExtensionOffscreenManager.sanitizedPath(extID: extID, rawPath: "../secret.html"))
         XCTAssertNil(WebExtensionOffscreenManager.sanitizedPath(extID: extID, rawPath: "a/../../b.html"))
         XCTAssertNil(WebExtensionOffscreenManager.sanitizedPath(extID: extID, rawPath: "../../../etc/passwd"))
+        XCTAssertNil(WebExtensionOffscreenManager.sanitizedPath(extID: extID, rawPath: "a/./b.html"),
+                     "a lone `.` segment is rejected")
+    }
+
+    func testPercentEncodedTraversalRejected() {
+        // WebExtensionSchemeHandler reads url.path (percent-DECODED), so an encoded `..`/`/`/`\` would
+        // reach the store as a traversal. The sanitizer must decode before scanning.
+        for raw in ["%2e%2e/secret.html", "%2E%2E%2Fsecret.html", "..%2fsecret.html",
+                    "a%2f..%2fb.html", "a%5c..%5cb.html", "%2e%2e%2f%2e%2e%2fetc%2fpasswd",
+                    "%252e%252e/x.html"] {   // double-encoded
+            XCTAssertNil(WebExtensionOffscreenManager.sanitizedPath(extID: extID, rawPath: raw),
+                         "percent-encoded traversal must be rejected: \(raw)")
+        }
+    }
+
+    func testBackslashTraversalRejected() {
+        XCTAssertNil(WebExtensionOffscreenManager.sanitizedPath(extID: extID, rawPath: "..\\secret.html"))
+        XCTAssertNil(WebExtensionOffscreenManager.sanitizedPath(extID: extID, rawPath: "a\\..\\b.html"))
+    }
+
+    func testControlCharsRejected() {
+        XCTAssertNil(WebExtensionOffscreenManager.sanitizedPath(extID: extID, rawPath: "off\u{0}.html"),
+                     "embedded NUL truncates at the C-string boundary — reject")
+        XCTAssertNil(WebExtensionOffscreenManager.sanitizedPath(extID: extID, rawPath: "a%00b.html"),
+                     "percent-encoded NUL must be rejected too")
+    }
+
+    func testLegitEncodedFilenameAccepted() {
+        // A real packaged filename with an encoded space must survive (only traversal is rejected).
+        XCTAssertEqual(WebExtensionOffscreenManager.sanitizedPath(extID: extID, rawPath: "my%20file.html"),
+                       "my%20file.html")
     }
 
     func testTraversalHiddenAfterQueryStillRejected() {
