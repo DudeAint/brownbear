@@ -1987,6 +1987,41 @@
       e.__bbLastError = true;
       return Promise.reject(e);
     },
+    // chrome.runtime.connectNative — native messaging port; not available on iOS (no native messaging
+    // hosts). Returns a stub port whose onDisconnect fires synchronously with lastError set, matching
+    // Chrome's behaviour when the native host is not installed. Extensions (Chrome Remote Desktop) that
+    // call connectNative get a non-null port and can add onDisconnect listeners without crashing; they
+    // will receive the disconnect event and handle the "not available" condition gracefully.
+    connectNative: function (application) {
+      var disconnectListeners = [];
+      var messageListeners = [];
+      var port = {
+        name: String(application || ''),
+        onMessage: {
+          addListener: function (fn) { if (typeof fn === 'function') messageListeners.push(fn); },
+          removeListener: function (fn) { var i = messageListeners.indexOf(fn); if (i >= 0) messageListeners.splice(i, 1); },
+          hasListener: function (fn) { return messageListeners.indexOf(fn) >= 0; }
+        },
+        onDisconnect: {
+          addListener: function (fn) { if (typeof fn === 'function') disconnectListeners.push(fn); },
+          removeListener: function (fn) { var i = disconnectListeners.indexOf(fn); if (i >= 0) disconnectListeners.splice(i, 1); },
+          hasListener: function (fn) { return disconnectListeners.indexOf(fn) >= 0; }
+        },
+        postMessage: function () {},
+        disconnect: function () {}
+      };
+      // Fire onDisconnect asynchronously (next tick) with lastError set — Chrome fires this when
+      // the native host is absent. Use a 0ms timer so the caller's addListener runs first.
+      __bb_set_timeout(function () {
+        _bbLastError = { message: 'native messaging is not supported on iOS' };
+        try {
+          for (var i = 0; i < disconnectListeners.length; i++) {
+            try { disconnectListeners[i](port); } catch (_) {}
+          }
+        } finally { _bbLastError = null; }
+      }, 0, false);
+      return port;
+    },
     // chrome.runtime.getBrowserInfo — Firefox-originated API that some extensions probe. On Chrome it
     // does not exist; we return a Chrome-shaped no-op so extensions that guard with
     // `chrome.runtime.getBrowserInfo?.()` don't throw "not a function" on a direct call.
@@ -2434,6 +2469,12 @@
       if (id !== null && typeof id === 'object') { cb = details; details = id; id = undefined; }
       details = details || {};
       return settleBg(scriptingCall('insertCSS', { tabId: id, css: details.code, files: details.file ? [details.file] : undefined }).then(function () { return undefined; }), cb);
+    },
+    // chrome.tabs.highlight — focuses a window and selects specified tabs. iOS has a single window
+    // with no multi-tab selection concept, so we resolve as a graceful no-op (Chrome Remote Desktop
+    // uses this to focus the CRD tab after connecting). Returns the window info shape.
+    highlight: function (highlightInfo, cb) {
+      return settleBg(Promise.resolve({ id: 1, focused: true, type: 'normal', tabs: [] }), cb);
     },
     // Tab groups don't exist on iOS (single, ungrouped tab list). These resolve as graceful no-ops
     // (group → TAB_GROUP_ID_NONE = "not grouped") rather than being absent — Surfingkeys/Vimium C call
