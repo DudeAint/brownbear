@@ -117,6 +117,13 @@
              "message:String((e&&e.message)||e),stack:String((e&&e.stack)||\"\")});" +
              "if(typeof console!==\"undefined\"){console.error(\"[bb page bundle] \"+entry,e);}}");
 
+    // Import-binding fixups (mirrors the SW registry): each import registers a re-snapshot closure,
+    // drained once the outermost evaluation settles, so a binding snapshotted mid-cycle (undefined)
+    // lands on its real value — uBO Lite's dashboard links the same cyclic modules as its worker.
+    out.push("var __fixq=[],__fdepth=0;");
+    out.push("function __fix(f){__fixq.push(f);}");
+    out.push("function __drainFix(){var q=__fixq;__fixq=[];for(var i=0;i<q.length;i++){try{q[i]();}catch(e){}}}");
+
     if (!anyAsync) {
       out.push(
         "function __eval(path){var rec=__cache[path];if(rec)return rec.exports;" +
@@ -126,7 +133,10 @@
         "var dyn=function(s){try{return Promise.resolve(__eval(resolve(s,here)));}catch(e){return Promise.reject(e);}};" +
         "var meta={url:__base+here};" +
         "var exp=function(n,g){Object.defineProperty(rec.exports,n,{get:g,enumerable:true,configurable:true});};" +
-        "fn(rec.exports,require,dyn,meta,exp);return rec.exports;}"
+        "__fdepth++;" +
+        "try{fn(rec.exports,require,dyn,meta,exp,__fix);}" +
+        "finally{__fdepth--;if(__fdepth===0){__drainFix();}}" +
+        "return rec.exports;}"
       );
     } else {
       out.push("var __deps=Object.create(null);");
@@ -148,7 +158,7 @@
         // Skip deps already started/done — an in-progress dep is an import cycle (its exports object exists
         // with live getters), so awaiting it would deadlock; a done dep is ready. Only fresh deps are awaited.
         "if(__cache[dp])return;return __eval(dp);});})(deps[i]);}" +
-        "rec.promise=p.then(function(){return fn(rec.exports,require,dyn,meta,exp);})" +
+        "rec.promise=p.then(function(){return fn(rec.exports,require,dyn,meta,exp,__fix);})" +
         ".then(function(){rec.done=true;return rec.exports;});return rec.promise;}"
       );
       // Per-module resolved static deps, so the runtime can pre-evaluate them before each body runs.
@@ -158,11 +168,11 @@
     }
 
     for (var pth in modules) {
-      // The rewritten body already opens with "use strict"; and references the 5 params below — the same
+      // The rewritten body already opens with "use strict"; and references the 6 params below — the same
       // signature the linker's transform compiles against. A TLA module is wrapped in an async function.
       var kw = modules[pth].isAsync ? "async function" : "function";
       out.push(
-        "__reg[" + JSON.stringify(pth) + "]=" + kw + "(__exports,__require,__import,__meta,__export){\n" +
+        "__reg[" + JSON.stringify(pth) + "]=" + kw + "(__exports,__require,__import,__meta,__export,__fixup){\n" +
         modules[pth].src + "\n};"
       );
     }
@@ -181,10 +191,12 @@
     } else {
       // Run entries sequentially, each fully awaited — matching deferred module-script ordering where a
       // TLA entry blocks the next. A failed entry is recorded (and console.error'd), not swallowed.
+      // Fixups drain after EACH entry settles (the async runtime has no synchronous outermost frame),
+      // so cycle bindings are corrected before the next entry — and before any user interaction.
       out.push("(async function(){");
       for (var m = 0; m < entryPaths.length; m++) {
         var em = JSON.stringify(entryPaths[m]);
-        out.push("try{await __eval(" + em + ");__bbrep.ran++;}catch(__e){__bbrec(" + em + ",__e);}");
+        out.push("try{await __eval(" + em + ");__bbrep.ran++;}catch(__e){__bbrec(" + em + ",__e);}finally{__drainFix();}");
       }
       out.push("})();");
     }
