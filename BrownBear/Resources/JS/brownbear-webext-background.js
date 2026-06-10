@@ -71,6 +71,49 @@
     globalThis.clearInterval = function (id) { __bb_clear_timer(id || 0); };
     globalThis.queueMicrotask = globalThis.queueMicrotask || function (fn) { Promise.resolve().then(fn); };
 
+    // ---------------------------------------------------------------- background-worker watchdog (diagnostic)
+    // A headless service worker that never finishes booting hangs EVERY popup/dashboard message: an
+    // extension's onMessage commonly does `await isFullyInitialized` (= its start()), and if start()
+    // awaits a native bridge call that never calls back, that await never settles — the page sits on
+    // "waiting on the background worker" with NO error (the extension's own logs are usually muted on
+    // store installs). This instruments the request/response natives so any call left outstanding past a
+    // threshold is NAMED in the Background log, pinning the stuck API instead of a silent hang. Pure
+    // passthrough: it only wraps the callback so the pending entry clears when the native replies.
+    (function installNativeWatchdog() {
+      if (typeof __bb_log !== 'function') { return; }
+      var TRACKED = ['__bb_storage_get', '__bb_storage_set', '__bb_storage_remove', '__bb_storage_clear',
+        '__bb_dnr', '__bb_scripting', '__bb_userscripts', '__bb_permissions', '__bb_management', '__bb_fetch',
+        '__bb_send_message', '__bb_tabs_send_message', '__bb_tabs', '__bb_action', '__bb_cookies', '__bb_idle',
+        '__bb_get_contexts', '__bb_offscreen', '__bb_windows', '__bb_browser_data', '__bb_notifications',
+        '__bb_downloads', '__bb_context_menus', '__bb_search', '__bb_capture_visible_tab'];
+      var pending = Object.create(null), seq = 1, warned = Object.create(null);
+      function nowMs() { try { return Date.now(); } catch (e) { return 0; } }
+      TRACKED.forEach(function (name) {
+        var orig = globalThis[name];
+        if (typeof orig !== 'function') { return; }
+        globalThis[name] = function () {
+          var args = Array.prototype.slice.call(arguments), cbIdx = -1;
+          for (var i = args.length - 1; i >= 0; i--) { if (typeof args[i] === 'function') { cbIdx = i; break; } }
+          if (cbIdx < 0) { return orig.apply(this, args); }   // a synchronous native — nothing to track
+          var id = seq++;
+          pending[id] = { label: name + (typeof args[0] === 'string' ? '(' + args[0] + ')' : ''), t: nowMs() };
+          var userCb = args[cbIdx];
+          args[cbIdx] = function () { delete pending[id]; return userCb.apply(this, arguments); };
+          return orig.apply(this, args);
+        };
+      });
+      function sweep() {
+        var now = nowMs(), stuck = [];
+        for (var id in pending) {
+          var age = now - pending[id].t;
+          if (age > 6000 && !warned[id]) { warned[id] = 1; stuck.push(pending[id].label + ' [' + Math.round(age / 1000) + 's, no reply]'); }
+        }
+        if (stuck.length) { __bb_log('error', '[BrownBear] background worker boot stalled — native bridge call(s) not returning: ' + stuck.join('; ')); }
+        try { setTimeout(sweep, 4000); } catch (e) { /* timer gone — stop */ }
+      }
+      try { setTimeout(sweep, 4000); } catch (e) { /* no timer yet */ }
+    })();
+
     // ---------------------------------------------------------------- Web Crypto + importScripts
     // JavaScriptCore ships neither. ScriptCat-derived service workers and any crypto-using extension
     // throw "Can't find variable: crypto" / "Can't find variable: importScripts" without these. We
