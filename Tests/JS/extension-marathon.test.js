@@ -1050,6 +1050,16 @@ function runExtensionSpecificTests(ctx, name) {
         });
     }
 
+    if (name === "adblock") {
+        // AdBlock (BetaFish) is built on the Adblock Plus core, so its 3MB MV3 service worker drives the
+        // same chrome 120+ static-ruleset API. Guards that the fix generalizes beyond adblock-plus.
+        test("adblock: chrome.declarativeNetRequest static-rule methods are functions", function() {
+            assertFunction(c.declarativeNetRequest.updateStaticRules, "declarativeNetRequest.updateStaticRules");
+            assertFunction(c.declarativeNetRequest.getDisabledRuleIds, "declarativeNetRequest.getDisabledRuleIds");
+            assertFunction(c.declarativeNetRequest.getAvailableStaticRuleCount, "declarativeNetRequest.getAvailableStaticRuleCount");
+        });
+    }
+
     if (name === "browsec") {
         test("browsec: chrome.proxy.settings.get/set/clear/onChange exist", function() {
             assertFunction(c.proxy.settings.get, "proxy.settings.get");
@@ -1128,6 +1138,7 @@ const EXTENSIONS_TO_TEST = [
     "keepa",
     // Wave 4
     "adblock-plus",
+    "adblock",
 ];
 
 console.log("BrownBear Extension Marathon Harness");
