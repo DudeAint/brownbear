@@ -87,6 +87,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
     /// `nonisolated fileSync`), safe to call on this context's serial queue.
     func boot(runtimeJS: String, backgroundSource: String,
               manifestJSON: String, baseURL: String, messages: [String: String],
+              placeholders: [String: [String: String]] = [:],
               installReason: String? = nil, previousVersion: String? = nil,
               moduleEntry: String? = nil, esmRuntimeJS: String? = nil,
               moduleSource: (@Sendable (String) -> Data?)? = nil) {
@@ -130,6 +131,9 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
             context.setObject(baseURL, forKeyedSubscript: "__bbBgBaseURL" as NSString)
             let messagesJSON = jsonString(messages)
             context.setObject(messagesJSON, forKeyedSubscript: "__bbBgMessages" as NSString)
+            // Named-placeholder map for chrome.i18n.getMessage (messageKey → {name: content}); the flat
+            // message map above drops it, leaking literal `$version$` tokens without this.
+            context.setObject(jsonString(placeholders), forKeyedSubscript: "__bbBgPlaceholders" as NSString)
             // Device-derived inputs for the navigator polyfill (JSC has no DOM; see HeadlessEnvironment).
             context.setObject(HeadlessEnvironment.userAgent, forKeyedSubscript: "__bbUserAgent" as NSString)
             context.setObject(HeadlessEnvironment.language, forKeyedSubscript: "__bbLanguage" as NSString)

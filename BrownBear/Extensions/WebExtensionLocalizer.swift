@@ -40,6 +40,30 @@ enum WebExtensionLocalizer {
         cache.removeObject(forKey: extensionID as NSString)
     }
 
+    /// Extract the NAMED-placeholder map from a parsed `messages.json`: messageKey (verbatim) →
+    /// (placeholderName.lowercased → content). A Chrome i18n message may declare named placeholders —
+    /// e.g. `"message": "$NAME$ $VERSION$ is available"` + `"placeholders": {"name": {"content": "$1"},
+    /// "version": {"content": "$2"}}`. `getMessage` substitutes `$name$`/`$version$` with their content
+    /// (which is then positional `$1..$9`). The flattened {key:string} message map the shims get for
+    /// `__MSG_*__` manifest resolution DROPS these, so without this parallel map the page leaks the
+    /// literal `$version$`. Keys are kept verbatim so a shim's `getMessage(key)` lookup matches the
+    /// extension's exact key (placeholder NAMES are matched case-insensitively, per Chrome).
+    static func extractPlaceholders(fromMessagesJSON json: [String: Any]) -> [String: [String: String]] {
+        var out: [String: [String: String]] = [:]
+        for (key, value) in json {
+            guard let entry = value as? [String: Any],
+                  let placeholders = entry["placeholders"] as? [String: Any] else { continue }
+            var map: [String: String] = [:]
+            for (name, raw) in placeholders {
+                if let dict = raw as? [String: Any], let content = dict["content"] as? String {
+                    map[name.lowercased()] = content
+                }
+            }
+            if !map.isEmpty { out[key] = map }
+        }
+        return out
+    }
+
     // MARK: - Substitution
 
     /// Pure placeholder substitution against an explicit message map (keys lowercased). Exposed at
