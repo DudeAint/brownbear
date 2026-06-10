@@ -1190,6 +1190,16 @@ function runExtensionSpecificTests(ctx, name) {
         });
     }
 
+    if (name === "pinterest") {
+        // Pinterest Save button (MV3, type:module SW bundled with no top-level ESM syntax, so it runs as
+        // classic JS) drives declarativeNetRequest session rules + cookies for its save flow.
+        test("pinterest: declarativeNetRequest.updateSessionRules + cookies.getAll exist", function() {
+            assertFunction(c.declarativeNetRequest.updateSessionRules, "declarativeNetRequest.updateSessionRules");
+            assertFunction(c.declarativeNetRequest.getSessionRules, "declarativeNetRequest.getSessionRules");
+            assertFunction(c.cookies.getAll, "cookies.getAll");
+        });
+    }
+
     if (name === "browsec") {
         test("browsec: chrome.proxy.settings.get/set/clear/onChange exist", function() {
             assertFunction(c.proxy.settings.get, "proxy.settings.get");
@@ -1278,6 +1288,7 @@ const EXTENSIONS_TO_TEST = [
     "chrome-remote-desktop",
     // Wave 7
     "evernote",
+    "pinterest",
 ];
 
 console.log("BrownBear Extension Marathon Harness");
