@@ -1079,6 +1079,41 @@ function runExtensionSpecificTests(ctx, name) {
         });
     }
 
+    if (name === "loom") {
+        // Loom (MV3 screen recorder) reads chrome.system.cpu.getInfo and drives tabCapture/desktopCapture.
+        // The namespaces were absent → "chrome.system is undefined" the moment recording runs. system.*
+        // returns plausible info; capture is a hard WKWebView limit and fails closed (never crashes boot).
+        test("loom: chrome.system.{cpu,memory,display}.getInfo are functions", function() {
+            assertFunction(c.system.cpu.getInfo, "system.cpu.getInfo");
+            assertFunction(c.system.memory.getInfo, "system.memory.getInfo");
+            assertFunction(c.system.display.getInfo, "system.display.getInfo");
+        });
+        test("loom: system.cpu.getInfo returns a thenable without throwing (async, Chrome-shaped)", function() {
+            // settleBg resolves on a microtask (Chrome's system.* callbacks are async too); the marathon
+            // runner can't await, so assert the no-callback Promise form rather than a sync callback value.
+            var p = c.system.cpu.getInfo();
+            assert.strictEqual(typeof p.then, "function", "system.cpu.getInfo should return a Promise");
+            p.then(function() {}, function() {});
+        });
+        test("loom: chrome.tabCapture surface exists and fails closed (no WKWebView capture)", function() {
+            assertFunction(c.tabCapture.capture, "tabCapture.capture");
+            assertFunction(c.tabCapture.getMediaStreamId, "tabCapture.getMediaStreamId");
+            assertEvent(c.tabCapture.onStatusChanged, "tabCapture.onStatusChanged");
+            // capture(...) calls back with null rather than throwing.
+            var got = "unset";
+            c.tabCapture.capture({ audio: true, video: true }, function(stream) { got = stream; });
+            assert.strictEqual(got, null, "tabCapture.capture should yield null (unavailable)");
+        });
+        test("loom: chrome.desktopCapture.chooseDesktopMedia returns a request id + cancels with ''", function() {
+            assertFunction(c.desktopCapture.chooseDesktopMedia, "desktopCapture.chooseDesktopMedia");
+            assertFunction(c.desktopCapture.cancelChooseDesktopMedia, "desktopCapture.cancelChooseDesktopMedia");
+            var streamId = "unset";
+            var reqId = c.desktopCapture.chooseDesktopMedia(["screen", "window"], function(id) { streamId = id; });
+            assert.strictEqual(typeof reqId, "number", "chooseDesktopMedia returns a numeric request id");
+            assert.strictEqual(streamId, "", "callback streamId is '' (cancelled/unavailable)");
+        });
+    }
+
     if (name === "browsec") {
         test("browsec: chrome.proxy.settings.get/set/clear/onChange exist", function() {
             assertFunction(c.proxy.settings.get, "proxy.settings.get");
@@ -1159,6 +1194,7 @@ const EXTENSIONS_TO_TEST = [
     "adblock-plus",
     "adblock",
     "dashlane",
+    "loom",
 ];
 
 console.log("BrownBear Extension Marathon Harness");

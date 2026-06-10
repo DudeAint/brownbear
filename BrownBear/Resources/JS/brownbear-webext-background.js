@@ -3233,6 +3233,84 @@
     onSignInChanged: makeEvent([])
   };
 
+  // chrome.system.{cpu,memory,display,storage} — system-info APIs. Screen recorders / monitors (Loom
+  // reads system.cpu.getInfo) call these; an undefined namespace throws "chrome.system is undefined" the
+  // moment the feature runs. A JSContext can't read true device CPU/RAM, so report PLAUSIBLE, spec-shaped
+  // values (processor count from navigator.hardwareConcurrency; screen size when a screen is present) so
+  // consumers proceed instead of crashing. This is information-only — no capability is granted or faked.
+  var systemNS = {
+    cpu: {
+      getInfo: function (cb) {
+        var n = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
+        var info = { numOfProcessors: n, archName: 'arm64', modelName: 'Apple silicon', features: [], processors: [] };
+        for (var i = 0; i < n; i++) { info.processors.push({ usage: { user: 0, kernel: 0, idle: 0, total: 0 } }); }
+        return settleBg(Promise.resolve(info), cb);
+      }
+    },
+    memory: {
+      getInfo: function (cb) {
+        // Device RAM is unreadable from a JSContext; report a plausible capacity (consumers gate on it).
+        return settleBg(Promise.resolve({ capacity: 4 * 1024 * 1024 * 1024, availableCapacity: 2 * 1024 * 1024 * 1024 }), cb);
+      }
+    },
+    display: {
+      getInfo: function (options, cb) {
+        if (typeof options === 'function') { cb = options; options = null; }
+        var w = (typeof screen !== 'undefined' && screen.width) || 390;
+        var h = (typeof screen !== 'undefined' && screen.height) || 844;
+        var bounds = { left: 0, top: 0, width: w, height: h };
+        var d = { id: '0', name: 'BrownBear Display', isPrimary: true, isEnabled: true, isInternal: true,
+                  bounds: bounds, workArea: bounds, dpiX: 96, dpiY: 96, rotation: 0,
+                  overscan: { left: 0, top: 0, right: 0, bottom: 0 } };
+        return settleBg(Promise.resolve([d]), cb);
+      },
+      getDisplayLayout: function (cb) { return settleBg(Promise.resolve([]), cb); },
+      onDisplayChanged: makeEvent([])
+    },
+    storage: {
+      getInfo: function (cb) { return settleBg(Promise.resolve([]), cb); },
+      onAttached: makeEvent([]), onDetached: makeEvent([])
+    }
+  };
+
+  // Warn ONCE when an extension attempts tab/desktop capture — WKWebView exposes NO media-capture path
+  // to extensions (no tabCapture stream, no getDisplayMedia for chrome-extension://). The surface must
+  // exist (Loom registers it at boot) but capture genuinely can't happen on iOS — fail closed, not crash.
+  var __bbWarnedCaptureUnavailable = false;
+  function __bbNoteCaptureUnavailable(which) {
+    if (__bbWarnedCaptureUnavailable) { return; }
+    __bbWarnedCaptureUnavailable = true;
+    __bb_log('warn', 'chrome.' + which + ' — tab/desktop media capture is unavailable on WKWebView (iOS): ' +
+      'the extension API exists but no capture stream can be produced, so this fails closed. Screen/tab ' +
+      'recording features will not function.');
+  }
+  // chrome.tabCapture — capture a tab's MediaStream. No WKWebView equivalent for extensions.
+  var tabCaptureNS = {
+    capture: function (options, cb) {
+      __bbNoteCaptureUnavailable('tabCapture.capture');
+      if (typeof cb === 'function') { cb(null); return undefined; }   // Chrome hands back null + lastError on failure
+      return undefined;
+    },
+    getCapturedTabs: function (cb) { return settleBg(Promise.resolve([]), cb); },
+    getMediaStreamId: function (options, cb) {
+      if (typeof options === 'function') { cb = options; options = null; }
+      __bbNoteCaptureUnavailable('tabCapture.getMediaStreamId');
+      return settleBg(Promise.reject(new Error('Tab capture is not supported on this platform')), cb);
+    },
+    onStatusChanged: makeEvent([])
+  };
+  // chrome.desktopCapture — pick a screen/window to capture. No WKWebView equivalent.
+  var desktopCaptureNS = {
+    chooseDesktopMedia: function (sources, targetTabOrCb, cb) {
+      var callback = (typeof targetTabOrCb === 'function') ? targetTabOrCb : cb;
+      __bbNoteCaptureUnavailable('desktopCapture.chooseDesktopMedia');
+      // streamId '' = cancelled/unavailable; Chrome's callback shape is (streamId, options).
+      if (typeof callback === 'function') { callback('', { canRequestAudioTrack: false }); }
+      return 0;   // a request id; cancelChooseDesktopMedia(id) is a no-op here
+    },
+    cancelChooseDesktopMedia: function (id) { /* nothing in flight to cancel */ }
+  };
+
   var chrome = {
     runtime: runtime,
     identity: identity,
@@ -3256,6 +3334,9 @@
     history: history,
     sessions: sessions,
     idle: idle,
+    system: systemNS,
+    tabCapture: tabCaptureNS,
+    desktopCapture: desktopCaptureNS,
     downloads: downloads,
     contextMenus: contextMenus,
     menus: contextMenus,
