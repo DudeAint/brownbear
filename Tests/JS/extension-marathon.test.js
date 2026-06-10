@@ -1361,6 +1361,7 @@ const EXTENSIONS_TO_TEST = [
     "save-to-google-drive",
     "checker-plus-gmail",
     "postman-interceptor",
+    "tampermonkey-mv2",
 ];
 
 console.log("BrownBear Extension Marathon Harness");
@@ -1416,6 +1417,23 @@ for (var i = 0; i < EXTENSIONS_TO_TEST.length; i++) {
                 for (var si = 0; si < manifest.background.scripts.length; si++) {
                     var sPath = path.join(extInfo.extDir, manifest.background.scripts[si]);
                     if (fs.existsSync(sPath)) { bgScripts.push(sPath); }
+                }
+            } else if (manifest.background.page) {
+                // MV2 background PAGE (Firefox Tampermonkey's background.html): the native side extracts the
+                // page's <script src> tags and runs them in order in the background context (WebExtension-
+                // Runtime.scriptTags). Mirror that here — read the page HTML, pull classic <script src>,
+                // resolve against the page's directory, run in document order. Inline/module scripts skipped.
+                var pagePath = path.join(extInfo.extDir, manifest.background.page);
+                if (fs.existsSync(pagePath)) {
+                    var pageHtml = fs.readFileSync(pagePath, "utf8");
+                    var pageDir = path.dirname(manifest.background.page);
+                    var re = /<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*>/gi, mm;
+                    while ((mm = re.exec(pageHtml)) !== null) {
+                        if (/type\s*=\s*["']module["']/i.test(mm[0])) { continue; }   // module scripts need the linker
+                        var rel = mm[1].replace(/^\//, "");
+                        var resolved = path.join(extInfo.extDir, pageDir === "." ? rel : path.join(pageDir, rel));
+                        if (fs.existsSync(resolved)) { bgScripts.push(resolved); }
+                    }
                 }
             }
         }
