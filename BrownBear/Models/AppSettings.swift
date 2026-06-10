@@ -157,10 +157,14 @@ enum AppSettings {
 
     /// Keep <video> playing inline by neutralizing scripted/auto fullscreen (the Focus/Player-style
     /// "player" behavior — handy for automation that needs the page visible while a video plays). Default
-    /// OFF. Read at injection setup; takes effect on the next app launch (the page-world shim is installed
-    /// on the shared content controller at boot).
+    /// ON; the Settings toggle uses @AppStorage on the same key, so `object(forKey:) == nil` means "unset"
+    /// → treat as true. Read at injection setup; takes effect on the next app launch (the page-world shim
+    /// is installed on the shared content controller at boot).
     static var keepVideosInline: Bool {
-        get { UserDefaults.standard.bool(forKey: Key.keepVideosInline) }
+        get {
+            UserDefaults.standard.object(forKey: Key.keepVideosInline) == nil
+                ? true : UserDefaults.standard.bool(forKey: Key.keepVideosInline)
+        }
         set { UserDefaults.standard.set(newValue, forKey: Key.keepVideosInline) }
     }
 
