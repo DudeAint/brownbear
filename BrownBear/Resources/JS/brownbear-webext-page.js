@@ -738,6 +738,58 @@
     permissions: permissionsApi(),
     declarativeNetRequest: declarativeNetRequest,
     userScripts: userScripts,
+    // chrome.webRequest — exists on every Chrome extension page even though WKWebView can't intercept
+    // requests (so the events are inert here, as in the background). The namespace + enums MUST exist:
+    // Tampermonkey's popup reads chrome.webRequest.<...> UNGUARDED at boot (incl. a Firefox feature-detect
+    // on filterResponseData), and an undefined namespace threw "undefined is not an object" → blank popup.
+    // We deliberately OMIT filterResponseData (it is Firefox-only; its absence is the correct "not Firefox"
+    // signal in Chrome) — providing it would make managers take the Firefox code path.
+    webRequest: {
+      ResourceType: { MAIN_FRAME: "main_frame", SUB_FRAME: "sub_frame", STYLESHEET: "stylesheet", SCRIPT: "script", IMAGE: "image", FONT: "font", OBJECT: "object", XMLHTTPREQUEST: "xmlhttprequest", PING: "ping", CSP_REPORT: "csp_report", MEDIA: "media", WEBSOCKET: "websocket", WEBTRANSPORT: "webtransport", WEBBUNDLE: "webbundle", OTHER: "other" },
+      OnBeforeSendHeadersOptions: { REQUEST_HEADERS: "requestHeaders", BLOCKING: "blocking", EXTRA_HEADERS: "extraHeaders" },
+      OnSendHeadersOptions: { REQUEST_HEADERS: "requestHeaders", EXTRA_HEADERS: "extraHeaders" },
+      OnHeadersReceivedOptions: { RESPONSE_HEADERS: "responseHeaders", BLOCKING: "blocking", EXTRA_HEADERS: "extraHeaders" },
+      OnAuthRequiredOptions: { RESPONSE_HEADERS: "responseHeaders", BLOCKING: "blocking", ASYNC_BLOCKING: "asyncBlocking", EXTRA_HEADERS: "extraHeaders" },
+      OnResponseStartedOptions: { RESPONSE_HEADERS: "responseHeaders", EXTRA_HEADERS: "extraHeaders" },
+      OnBeforeRedirectOptions: { RESPONSE_HEADERS: "responseHeaders", EXTRA_HEADERS: "extraHeaders" },
+      OnCompletedOptions: { RESPONSE_HEADERS: "responseHeaders", EXTRA_HEADERS: "extraHeaders" },
+      MAX_HANDLER_BEHAVIOR_CHANGED_CALLS_PER_10_MINUTES: 20,
+      onBeforeRequest: makeEvent([]), onBeforeSendHeaders: makeEvent([]), onSendHeaders: makeEvent([]),
+      onHeadersReceived: makeEvent([]), onAuthRequired: makeEvent([]), onResponseStarted: makeEvent([]),
+      onBeforeRedirect: makeEvent([]), onCompleted: makeEvent([]), onErrorOccurred: makeEvent([]),
+      onActionIgnored: makeEvent([]),
+      handlerBehaviorChanged: function (cb) { if (typeof cb === "function") { cb(); return undefined; } return _Promise.resolve(); }
+    },
+    // chrome.alarms on a page — page-created alarms aren't scheduled in the popup's short-lived context,
+    // so create/clear resolve and reads report none; onAlarm exists (inert). Must be present: Tampermonkey
+    // and others read chrome.alarms at boot.
+    alarms: {
+      create: function () {},
+      get: function (name, cb) { if (typeof name === "function") { cb = name; } if (typeof cb === "function") { cb(null); return undefined; } return _Promise.resolve(null); },
+      getAll: function (cb) { if (typeof cb === "function") { cb([]); return undefined; } return _Promise.resolve([]); },
+      clear: function (name, cb) { if (typeof name === "function") { cb = name; } if (typeof cb === "function") { cb(true); return undefined; } return _Promise.resolve(true); },
+      clearAll: function (cb) { if (typeof cb === "function") { cb(true); return undefined; } return _Promise.resolve(true); },
+      onAlarm: makeEvent([])
+    },
+    // chrome.commands — keyboard-shortcut registry; a page reads getAll to show shortcuts. No bound
+    // commands surface on iOS yet, so getAll reports none; the events exist (inert).
+    commands: {
+      getAll: function (cb) { if (typeof cb === "function") { cb([]); return undefined; } return _Promise.resolve([]); },
+      onCommand: makeEvent([]), onChanged: makeEvent([])
+    },
+    // chrome.declarativeContent — page-state action rules. iOS has no action-rule engine, so the rules are
+    // inert (addRules resolves, getRules reports none); the constructors are no-op stubs. Must exist:
+    // Tampermonkey's popup references chrome.declarativeContent.{onPageChanged,PageStateMatcher,...}.
+    declarativeContent: {
+      onPageChanged: {
+        addListener: function () {}, removeListener: function () {}, hasListener: function () { return false; },
+        addRules: function (rules, cb) { if (typeof cb === "function") { cb(rules || []); } },
+        removeRules: function (ids, cb) { var c = (typeof ids === "function") ? ids : cb; if (typeof c === "function") { c(); } },
+        getRules: function (ids, cb) { var c = (typeof ids === "function") ? ids : cb; if (typeof c === "function") { c([]); } }
+      },
+      PageStateMatcher: function () {}, RequestContentScript: function () {}, ShowAction: function () {},
+      ShowPageAction: function () {}, SetIcon: function () {}
+    },
     webNavigation: {
       onBeforeNavigate: makeEvent(webNavLists["webNavigation.onBeforeNavigate"]),
       onCommitted: makeEvent(webNavLists["webNavigation.onCommitted"]),
