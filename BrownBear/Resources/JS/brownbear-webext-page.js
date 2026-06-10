@@ -191,6 +191,33 @@
     };
   }
 
+  // chrome.privacy ChromeSetting — same {get,set,clear,onChange} shape the background shim exposes. A
+  // popup PAGE has chrome.privacy too, and VeePN's popup reads chrome.privacy.network.webRTCIPHandlingPolicy
+  // in a class FIELD INITIALIZER at module-eval; with chrome.privacy missing, that read threw and JSC
+  // reported it at the enclosing `super()` ("undefined is not an object (evaluating 'super()')") -> the
+  // pre-linked popup bundle aborted. Page-local value (reads report controllable, writes store locally);
+  // onChange exists so an extension wrapping a setting in a class can addListener at init without throwing.
+  function makePrivacySetting() {
+    var _value;
+    return {
+      get: function (details, cb) { var r = { value: _value, levelOfControl: "controllable_by_this_extension" }; if (typeof cb === "function") { cb(r); return undefined; } return _Promise.resolve(r); },
+      set: function (details, cb) { if (details && "value" in details) { _value = details.value; } if (typeof cb === "function") { cb(); return undefined; } return _Promise.resolve(); },
+      clear: function (details, cb) { _value = undefined; if (typeof cb === "function") { cb(); return undefined; } return _Promise.resolve(); },
+      onChange: makeEvent([])
+    };
+  }
+  var privacyApi = {
+    network: { networkPredictionEnabled: makePrivacySetting(), webRTCIPHandlingPolicy: makePrivacySetting() },
+    websites: { hyperlinkAuditingEnabled: makePrivacySetting() },
+    services: { autofillAddressEnabled: makePrivacySetting(), autofillCreditCardEnabled: makePrivacySetting(), passwordSavingEnabled: makePrivacySetting() }
+  };
+  // chrome.proxy.settings — a ChromeSetting, same shape as privacy.*. A popup PAGE has chrome.proxy too;
+  // VeePN (a VPN) reads chrome.proxy.settings in a class field initializer at module-eval (the next crash
+  // after privacy, manifesting as the same JSC `super()` error). The actual per-dataStore proxy control
+  // runs in the service worker (chrome.proxy there routes to native iOS 17+ proxyConfigurations); the
+  // page surface is the Chrome-correct ChromeSetting so the popup reads/writes without throwing.
+  var proxyApi = { settings: makePrivacySetting(), onProxyError: makeEvent([]) };
+
   // chrome.runtime.connect / onConnect long-lived ports (popup/options page = CONNECTOR). Mirrors the
   // content runtime, adapted to the page's 2-arg bridge(api, payload). A synchronous Port buffers
   // postMessage() until the async native id-mint resolves, then flushes; native pushes the worker's
@@ -738,6 +765,8 @@
     permissions: permissionsApi(),
     declarativeNetRequest: declarativeNetRequest,
     userScripts: userScripts,
+    privacy: privacyApi,
+    proxy: proxyApi,
     // chrome.webRequest — exists on every Chrome extension page even though WKWebView can't intercept
     // requests (so the events are inert here, as in the background). The namespace + enums MUST exist:
     // Tampermonkey's popup reads chrome.webRequest.<...> UNGUARDED at boot (incl. a Firefox feature-detect
