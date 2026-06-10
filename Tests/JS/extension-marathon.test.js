@@ -1060,6 +1060,25 @@ function runExtensionSpecificTests(ctx, name) {
         });
     }
 
+    if (name === "dashlane") {
+        // Dashlane (MV3 password manager) registers webRequest.onAuthRequired across its SW, content
+        // scripts, and popup for HTTP basic/digest-auth autofill (the webRequestAuthProvider permission).
+        // WKWebView can't intercept requests, so this event is inert — but it MUST exist or every Dashlane
+        // surface throws "undefined is not an object" at the addListener call. It also drives DNR + privacy.
+        test("dashlane: chrome.webRequest.onAuthRequired/onErrorOccurred are events (auth autofill, inert)", function() {
+            assertEvent(c.webRequest.onAuthRequired, "webRequest.onAuthRequired");
+            assertEvent(c.webRequest.onErrorOccurred, "webRequest.onErrorOccurred");
+            // Inert by design: registering a listener must not throw, and it simply never fires on iOS.
+            assert.doesNotThrow(function () { c.webRequest.onAuthRequired.addListener(function () {}, { urls: ["<all_urls>"] }, ["blocking"]); },
+                "onAuthRequired.addListener must not throw");
+        });
+        test("dashlane: chrome.privacy + cookies + idle surfaces exist (SW boot dependencies)", function() {
+            assertObject(c.privacy.network, "privacy.network");
+            assertFunction(c.cookies.getAll, "cookies.getAll");
+            assertFunction(c.idle.queryState, "idle.queryState");
+        });
+    }
+
     if (name === "browsec") {
         test("browsec: chrome.proxy.settings.get/set/clear/onChange exist", function() {
             assertFunction(c.proxy.settings.get, "proxy.settings.get");
@@ -1139,6 +1158,7 @@ const EXTENSIONS_TO_TEST = [
     // Wave 4
     "adblock-plus",
     "adblock",
+    "dashlane",
 ];
 
 console.log("BrownBear Extension Marathon Harness");
