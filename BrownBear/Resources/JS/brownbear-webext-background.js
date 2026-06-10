@@ -507,6 +507,11 @@
         location: globalThis.location, URL: (globalThis.location && globalThis.location.href) || baseURL || '',
         documentURI: (globalThis.location && globalThis.location.href) || baseURL || '',
         defaultView: globalThis,
+        // document.currentScript — a classic background-page script reads its own URL from here at eval
+        // time (uBO's lz4-block-codec-any.js does `document.currentScript.src` to locate its wasm
+        // sibling). A script-element-shaped stub whose src points into the package; a wasm fetch derived
+        // from it simply 404s and such loaders fall back to their pure-JS path.
+        currentScript: { src: (baseURL || '') + 'background-prelude.js', type: 'text/javascript', async: false, defer: false },
         createElement: function (t) { return __bbMakeNode(t); },
         createElementNS: function (ns, t) { return __bbMakeNode(t); },
         createTextNode: function (txt) { return { nodeType: 3, nodeName: '#text', textContent: String(txt), nodeValue: String(txt), parentNode: null }; },
@@ -1509,6 +1514,62 @@
         javaEnabled: function () { return false; }
       };
     }
+
+    // CSS.supports — uBO's vapi-common.js:179 calls CSS.supports('selector(a:has(b))') to detect
+    // native :has() support at background startup. JSC's headless global has no CSS object, so a
+    // bare `CSS.supports(...)` throws "Can't find variable: CSS" and aborts the entire module graph.
+    // Returning false is correct: headless JSC has no CSS engine, so no native :has() support.
+    if (typeof globalThis.CSS === 'undefined') {
+      globalThis.CSS = {
+        supports: function () { return false; },
+        escape: function (v) { return String(v == null ? '' : v).replace(/[ ]/g, '�').replace(/[^a-zA-Z0-9_-￿]/g, function (c) { var code = c.charCodeAt(0); if (code === 0) { return '�'; } return '\\' + c; }); }
+      };
+    }
+
+    // requestAnimationFrame / cancelAnimationFrame — vapi-common.js uses these in vAPI.defer.Client
+    // (.onvsync, .offon with zero delay). JSC has no animation loop; stub as setTimeout(fn,16) so a
+    // caller gets a real callback on a later tick without blocking (matches the 60fps intent closely
+    // enough for extension background logic, which doesn't actually animate).
+    if (typeof globalThis.requestAnimationFrame !== 'function') {
+      globalThis.requestAnimationFrame = function (fn) { return setTimeout(function () { if (typeof fn === 'function') { fn(Date.now()); } }, 16); };
+      globalThis.cancelAnimationFrame = function (id) { clearTimeout(id); };
+    }
+
+    // requestIdleCallback / cancelIdleCallback — vapi-common.js uses these in vAPI.defer.Client.onidle.
+    // JSC has no idle-period scheduler; stub as a deferred setTimeout that delivers a synthetic
+    // IdleDeadline (50ms budget, didTimeout based on elapsed vs options.timeout) so the callback
+    // always fires and the deadline object is spec-shaped.
+    if (typeof globalThis.requestIdleCallback !== 'function') {
+      globalThis.requestIdleCallback = function (fn, opts) {
+        var timeout = (opts && typeof opts.timeout === 'number') ? opts.timeout : 50;
+        var start = Date.now();
+        return setTimeout(function () {
+          if (typeof fn !== 'function') { return; }
+          var elapsed = Date.now() - start;
+          fn({ timeRemaining: function () { return Math.max(0, 50 - elapsed); }, didTimeout: elapsed >= timeout });
+        }, timeout);
+      };
+      globalThis.cancelIdleCallback = function (id) { clearTimeout(id); };
+    }
+
+    // HTMLDocument / XMLDocument / Element — vapi.js (the MV2 classic prelude loaded before the ESM
+    // graph) checks `document instanceof HTMLDocument` to determine whether it is running in a content
+    // page context. In Chrome's real background page, document IS an HTMLDocument, so the check
+    // passes and vAPI = { uBO: true } is initialized — which vapi-common.js then requires on its
+    // first line (`vAPI.T0 = Date.now()`). In JSC, document is our stub and these DOM constructors
+    // don't exist, so the instanceof check returns false (if it doesn't throw first) and vAPI stays
+    // undefined, causing "Cannot set properties of undefined" in vapi-common.js. Providing the
+    // constructors (even as empty functions) lets the check succeed and vAPI be initialized.
+    if (typeof globalThis.HTMLDocument !== 'function') { globalThis.HTMLDocument = function HTMLDocument() {}; }
+    if (typeof globalThis.XMLDocument !== 'function') { globalThis.XMLDocument = function XMLDocument() {}; }
+    if (typeof globalThis.Element !== 'function') { globalThis.Element = function Element() {}; }
+    if (typeof globalThis.HTMLDivElement !== 'function') { globalThis.HTMLDivElement = function HTMLDivElement() {}; }
+    // Set our stub document's prototype so `document instanceof HTMLDocument` returns true,
+    // matching Chrome's background page semantics and allowing vAPI to initialize.
+    if (globalThis.document && globalThis.HTMLDocument &&
+        !(globalThis.document instanceof globalThis.HTMLDocument)) {
+      try { Object.setPrototypeOf(globalThis.document, globalThis.HTMLDocument.prototype); } catch (e) {}
+    }
   })();
 
   function makeEvent(list) {
@@ -2280,8 +2341,40 @@
     onCompleted: makeEvent(webNavLists['webNavigation.onCompleted']),
     onHistoryStateUpdated: makeEvent(webNavLists['webNavigation.onHistoryStateUpdated']),
     onErrorOccurred: makeEvent(webNavLists['webNavigation.onErrorOccurred']),
+    // onCreatedNavigationTarget — fired when a navigation creates a new window/tab (target=_blank etc.).
+    // BrownBear can't intercept the target selection on WKWebView, so this event never fires; the
+    // listener object must exist or vAPI.Tabs constructor (vapi-background.js:282) throws.
+    onCreatedNavigationTarget: makeEvent([]),
     getFrame: function (details, cb) { if (typeof cb === 'function') { cb(null); } return Promise.resolve(null); },
     getAllFrames: function (details, cb) { if (typeof cb === 'function') { cb([]); } return Promise.resolve([]); }
+  };
+
+  // ---------------------------------------------------------------- chrome.privacy
+  // browser.privacy.network / browser.privacy.websites — accessed by uBO's webext.js to build
+  // the webext.privacy entries that vAPI.browserSettings uses to control prefetching, WebRTC IP
+  // handling, and hyperlink auditing. webext.js iterates a settings list and reads
+  // `chrome.privacy[category][setting]` at module-eval time (before any try/catch). Without this
+  // the module fails immediately with "Cannot read properties of undefined".
+  //
+  // On iOS, WKWebView already disables prefetching and doesn't expose WebRTC IP control — so these
+  // "set" calls are benign no-ops. The get/set/clear shape is preserved so webext.js and
+  // vAPI.browserSettings don't crash when they call them.
+  function makePrivacySetting() {
+    var _value;
+    return {
+      get: function (details, cb) { var r = { value: _value, levelOfControl: 'controllable_by_this_extension' }; if (typeof cb === 'function') { cb(r); return undefined; } return Promise.resolve(r); },
+      set: function (details, cb) { if (details && 'value' in details) { _value = details.value; } if (typeof cb === 'function') { cb(); return undefined; } return Promise.resolve(); },
+      clear: function (details, cb) { _value = undefined; if (typeof cb === 'function') { cb(); return undefined; } return Promise.resolve(); }
+    };
+  }
+  var privacy = {
+    network: {
+      networkPredictionEnabled: makePrivacySetting(),
+      webRTCIPHandlingPolicy: makePrivacySetting()
+    },
+    websites: {
+      hyperlinkAuditingEnabled: makePrivacySetting()
+    }
   };
 
   // ---------------------------------------------------------------- chrome.webRequest (observe-only no-op)
@@ -2426,6 +2519,17 @@
     onHeadersReceived: makeEvent([]), onBeforeRedirect: makeEvent([]), onAuthRequired: makeEvent([]),
     onResponseStarted: makeEvent([]), onCompleted: makeEvent([]), onErrorOccurred: makeEvent([]),
     onActionIgnored: makeEvent([]),
+    // Chrome exposes ResourceType on chrome.webRequest — MV2 extensions (notably uBlock Origin)
+    // read `browser.webRequest.ResourceType instanceof Object` and `.ResourceType.WEBSOCKET` at
+    // module-eval time (vapi-background.js:35-36) to determine vAPI.cantWebsocket. Without this
+    // object the check throws and vAPI.Net is constructed incorrectly. Same shape as
+    // declarativeNetRequest.ResourceType but on the webRequest namespace as Chrome ships it.
+    ResourceType: {
+      MAIN_FRAME: 'main_frame', SUB_FRAME: 'sub_frame', STYLESHEET: 'stylesheet', SCRIPT: 'script',
+      IMAGE: 'image', FONT: 'font', OBJECT: 'object', XMLHTTPREQUEST: 'xmlhttprequest', PING: 'ping',
+      CSP_REPORT: 'csp_report', MEDIA: 'media', WEBSOCKET: 'websocket', WEBTRANSPORT: 'webtransport',
+      WEBBUNDLE: 'webbundle', OTHER: 'other'
+    },
     // Chrome exposes the addListener `extraInfoSpec` enums on chrome.webRequest. Extensions read them
     // at top level — Violentmonkey's background does `webRequest.OnBeforeSendHeadersOptions.EXTRA_HEADERS`
     // and `OnHeadersReceivedOptions.EXTRA_HEADERS` during init, so the enum objects MUST exist or that
@@ -2803,6 +2907,7 @@
     windows: windows,
     management: management,
     permissions: permissions,
+    privacy: privacy,
     declarativeNetRequest: declarativeNetRequest,
     userScripts: userScripts,
     webNavigation: webNavigation,
