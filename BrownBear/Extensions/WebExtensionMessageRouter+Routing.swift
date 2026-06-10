@@ -289,9 +289,16 @@ extension WebExtensionMessageRouter {
     }
 
     private func requireUserScriptsPermission(_ extensionID: String) async throws {
-        let perms = await store.ext(for: extensionID)?.manifest?.permissions ?? []
+        // Tampermonkey declares "userScripts" in its MV3 permissions yet hit "permission not granted" on
+        // device — meaning at register-time the lookup yields no manifest, or its permissions don't carry
+        // the entry. Name the actual state so the next device run pins lookup-miss vs MV-misdetect vs a
+        // genuinely-absent permission, instead of the opaque message.
+        let ext = await store.ext(for: extensionID)
+        let perms = ext?.manifest?.permissions ?? []
         guard perms.contains("userScripts") else {
-            throw BrownBearError.bridgeRejected("userScripts permission not granted")
+            throw BrownBearError.bridgeRejected(
+                "userScripts permission not granted (extLoaded=\(ext != nil) "
+                + "mv=\(ext?.manifest?.manifestVersion ?? 0) perms=[\(perms.sorted().joined(separator: ","))])")
         }
     }
 
