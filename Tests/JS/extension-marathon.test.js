@@ -1018,6 +1018,102 @@ function runExtensionSpecificTests(ctx, name) {
         });
     }
 
+    if (name === "adblock-plus") {
+        // Adblock Plus / AdBlock (MV3) manage per-filter allowlisting through the chrome 120+
+        // static-ruleset methods. They were absent from the shim, so the first call threw
+        // "...is not a function" inside the SW's async init and broke ruleset configuration.
+        test("adblock-plus: chrome.declarativeNetRequest static-rule methods are functions", function() {
+            assertFunction(c.declarativeNetRequest.updateStaticRules, "declarativeNetRequest.updateStaticRules");
+            assertFunction(c.declarativeNetRequest.getDisabledRuleIds, "declarativeNetRequest.getDisabledRuleIds");
+            assertFunction(c.declarativeNetRequest.getAvailableStaticRuleCount, "declarativeNetRequest.getAvailableStaticRuleCount");
+        });
+        test("adblock-plus: GUARANTEED_MINIMUM_STATIC_RULES is Chrome's documented floor (30000)", function() {
+            // getAvailableStaticRuleCount resolves this constant (Promise.resolve in the shim); the
+            // marathon runner can't await, so pin the value through the synchronous constant it returns.
+            assert.strictEqual(c.declarativeNetRequest.GUARANTEED_MINIMUM_STATIC_RULES, 30000,
+                "GUARANTEED_MINIMUM_STATIC_RULES constant should be Chrome's documented floor");
+        });
+        test("adblock-plus: static-rule reads return thenables without throwing", function() {
+            // No-callback form returns a Promise (Chrome MV3). Calling must not throw synchronously.
+            var p1 = c.declarativeNetRequest.getAvailableStaticRuleCount();
+            var p2 = c.declarativeNetRequest.getDisabledRuleIds({ rulesetId: "rs1" });
+            assert.strictEqual(typeof p1.then, "function", "getAvailableStaticRuleCount should return a Promise");
+            assert.strictEqual(typeof p2.then, "function", "getDisabledRuleIds should return a Promise");
+        });
+        test("adblock-plus: updateStaticRules degrades gracefully (does not throw/reject)", function() {
+            // The real native rejects unsupported static-rule mutations; the shim catches and degrades to
+            // a no-op rather than letting the rejection break the SW's ruleset configuration.
+            var p = c.declarativeNetRequest.updateStaticRules({ rulesetId: "rs1", disableRuleIds: [1, 2] });
+            assert.strictEqual(typeof p.then, "function", "updateStaticRules should return a Promise");
+            // Swallow the resolution so a degraded no-op never surfaces as an unhandled rejection.
+            p.then(function() {}, function() {});
+        });
+    }
+
+    if (name === "adblock") {
+        // AdBlock (BetaFish) is built on the Adblock Plus core, so its 3MB MV3 service worker drives the
+        // same chrome 120+ static-ruleset API. Guards that the fix generalizes beyond adblock-plus.
+        test("adblock: chrome.declarativeNetRequest static-rule methods are functions", function() {
+            assertFunction(c.declarativeNetRequest.updateStaticRules, "declarativeNetRequest.updateStaticRules");
+            assertFunction(c.declarativeNetRequest.getDisabledRuleIds, "declarativeNetRequest.getDisabledRuleIds");
+            assertFunction(c.declarativeNetRequest.getAvailableStaticRuleCount, "declarativeNetRequest.getAvailableStaticRuleCount");
+        });
+    }
+
+    if (name === "dashlane") {
+        // Dashlane (MV3 password manager) registers webRequest.onAuthRequired across its SW, content
+        // scripts, and popup for HTTP basic/digest-auth autofill (the webRequestAuthProvider permission).
+        // WKWebView can't intercept requests, so this event is inert — but it MUST exist or every Dashlane
+        // surface throws "undefined is not an object" at the addListener call. It also drives DNR + privacy.
+        test("dashlane: chrome.webRequest.onAuthRequired/onErrorOccurred are events (auth autofill, inert)", function() {
+            assertEvent(c.webRequest.onAuthRequired, "webRequest.onAuthRequired");
+            assertEvent(c.webRequest.onErrorOccurred, "webRequest.onErrorOccurred");
+            // Inert by design: registering a listener must not throw, and it simply never fires on iOS.
+            assert.doesNotThrow(function () { c.webRequest.onAuthRequired.addListener(function () {}, { urls: ["<all_urls>"] }, ["blocking"]); },
+                "onAuthRequired.addListener must not throw");
+        });
+        test("dashlane: chrome.privacy + cookies + idle surfaces exist (SW boot dependencies)", function() {
+            assertObject(c.privacy.network, "privacy.network");
+            assertFunction(c.cookies.getAll, "cookies.getAll");
+            assertFunction(c.idle.queryState, "idle.queryState");
+        });
+    }
+
+    if (name === "loom") {
+        // Loom (MV3 screen recorder) reads chrome.system.cpu.getInfo and drives tabCapture/desktopCapture.
+        // The namespaces were absent → "chrome.system is undefined" the moment recording runs. system.*
+        // returns plausible info; capture is a hard WKWebView limit and fails closed (never crashes boot).
+        test("loom: chrome.system.{cpu,memory,display}.getInfo are functions", function() {
+            assertFunction(c.system.cpu.getInfo, "system.cpu.getInfo");
+            assertFunction(c.system.memory.getInfo, "system.memory.getInfo");
+            assertFunction(c.system.display.getInfo, "system.display.getInfo");
+        });
+        test("loom: system.cpu.getInfo returns a thenable without throwing (async, Chrome-shaped)", function() {
+            // settleBg resolves on a microtask (Chrome's system.* callbacks are async too); the marathon
+            // runner can't await, so assert the no-callback Promise form rather than a sync callback value.
+            var p = c.system.cpu.getInfo();
+            assert.strictEqual(typeof p.then, "function", "system.cpu.getInfo should return a Promise");
+            p.then(function() {}, function() {});
+        });
+        test("loom: chrome.tabCapture surface exists and fails closed (no WKWebView capture)", function() {
+            assertFunction(c.tabCapture.capture, "tabCapture.capture");
+            assertFunction(c.tabCapture.getMediaStreamId, "tabCapture.getMediaStreamId");
+            assertEvent(c.tabCapture.onStatusChanged, "tabCapture.onStatusChanged");
+            // capture(...) calls back with null rather than throwing.
+            var got = "unset";
+            c.tabCapture.capture({ audio: true, video: true }, function(stream) { got = stream; });
+            assert.strictEqual(got, null, "tabCapture.capture should yield null (unavailable)");
+        });
+        test("loom: chrome.desktopCapture.chooseDesktopMedia returns a request id + cancels with ''", function() {
+            assertFunction(c.desktopCapture.chooseDesktopMedia, "desktopCapture.chooseDesktopMedia");
+            assertFunction(c.desktopCapture.cancelChooseDesktopMedia, "desktopCapture.cancelChooseDesktopMedia");
+            var streamId = "unset";
+            var reqId = c.desktopCapture.chooseDesktopMedia(["screen", "window"], function(id) { streamId = id; });
+            assert.strictEqual(typeof reqId, "number", "chooseDesktopMedia returns a numeric request id");
+            assert.strictEqual(streamId, "", "callback streamId is '' (cancelled/unavailable)");
+        });
+    }
+
     if (name === "browsec") {
         test("browsec: chrome.proxy.settings.get/set/clear/onChange exist", function() {
             assertFunction(c.proxy.settings.get, "proxy.settings.get");
@@ -1094,6 +1190,11 @@ const EXTENSIONS_TO_TEST = [
     // Wave 3
     "google-translate",
     "keepa",
+    // Wave 4
+    "adblock-plus",
+    "adblock",
+    "dashlane",
+    "loom",
 ];
 
 console.log("BrownBear Extension Marathon Harness");
