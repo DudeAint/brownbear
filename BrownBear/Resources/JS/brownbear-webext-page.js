@@ -231,7 +231,11 @@
   function runtimeConnect(connectInfo) {
     var ci = connectInfo || {};
     var port = makePort(ci.name || "", null);
-    bridge("port.connect", { name: ci.name || "" }).then(function (res) {
+    // Include this page's URL: Chrome's onConnect Port.sender carries the connecting page's url, and
+    // uBO's vAPI.messaging onConnect does `sender.url.startsWith(...)` — undefined threw in the
+    // worker's onConnect and killed the popup's port before any reply.
+    bridge("port.connect", { name: ci.name || "",
+                             url: (W.location && W.location.href) || "" }).then(function (res) {
       port._bindId(res && res.portId ? res.portId : null);
     }, function () { port._bindId(null); });
     return port;

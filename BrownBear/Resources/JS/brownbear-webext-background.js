@@ -1896,6 +1896,20 @@
     onInstalled: makeEvent(installedListeners),
     onStartup: makeEvent(startupListeners),
     onConnect: makeEvent(connectListeners),
+    // chrome.runtime.onConnectExternal / onMessageExternal — fired when a DIFFERENT extension
+    // (or a website listed in externally_connectable) opens a port to or sends a message to this
+    // extension. Tampermonkey and other script managers register listeners unconditionally at boot;
+    // without these event objects the addListener call throws "Cannot read properties of undefined"
+    // before any message handlers are installed, leaving the background unable to receive messages.
+    onConnectExternal: makeEvent([]),
+    onMessageExternal: makeEvent([]),
+    // chrome.runtime.onBrowserUpdateAvailable / onRestartRequired — Chrome-specific lifecycle events
+    // that fire when a browser update is pending or a restart is required. No iOS analog (the app
+    // updates through the App Store, not a background browser process), so these never fire — but
+    // they must exist so extensions that register handlers (e.g. Tampermonkey's update watchdog)
+    // don't throw "Cannot read properties of undefined (reading 'addListener')".
+    onBrowserUpdateAvailable: makeEvent([]),
+    onRestartRequired: makeEvent([]),
     onSuspend: makeEvent([]),
     sendMessage: function () {
       // Accept (extensionId?, message, options?, callback?) — Chrome's overloaded shape. Returns a
@@ -2499,6 +2513,88 @@
     }
   };
 
+  // ---------------------------------------------------------------- chrome.proxy
+  // Browsec VPN and VeePN (and any extension that modifies the system proxy) call chrome.proxy.settings
+  // get/set/clear to route traffic through their server. On iOS, direct per-dataStore proxy control
+  // is available from iOS 17 via WKWebsiteDataStore.proxyConfigurations; we route through a NEW
+  // __bb_proxy(method, argsJSON, cb) native when it exists (iOS 17+ WKWebView).
+  //
+  // Critical VeePN fix: `this.setting.onChange.addListener` is called unconditionally at init time.
+  // The onChange event MUST exist or VeePN throws "Cannot read properties of undefined (reading
+  // 'addListener')" before its message handlers are installed, leaving the background silent.
+  //
+  // Browsec fix: its handler awaits a reply to its proxy-get request; without a shim the promise
+  // never settles and onMessage never fires (the "onMessage:date no-reply" hang). Returning a
+  // valid get result unblocks the loop.
+  (function () {
+    var _proxyValue = { mode: 'system' };
+    var _proxyLOC    = 'controllable_by_this_extension';
+    var _proxyChangeListeners = [];
+    var proxyOnChange = makeEvent(_proxyChangeListeners);
+
+    function _fireProxyChange(value) {
+      var detail = { value: value, levelOfControl: _proxyLOC };
+      for (var i = 0; i < _proxyChangeListeners.length; i++) {
+        try { _proxyChangeListeners[i](detail); } catch (e) {}
+      }
+    }
+
+    function proxySettingsGet(details, cb) {
+      var r = { value: _proxyValue, levelOfControl: _proxyLOC };
+      if (typeof cb === 'function') { cb(r); return undefined; }
+      return Promise.resolve(r);
+    }
+
+    function proxySettingsSet(details, cb) {
+      var value = (details && details.value) ? details.value : { mode: 'system' };
+      if (typeof __bb_proxy === 'function') {
+        return new Promise(function (resolve) {
+          __bb_proxy('set', JSON.stringify(value), function (errJSON) {
+            var err = errJSON ? JSON.parse(errJSON) : null;
+            if (!err) { _proxyValue = value; _fireProxyChange(value); }
+            if (typeof cb === 'function') { cb(); }
+            resolve();
+          });
+        });
+      }
+      // Native not available yet (pre-iOS-17 shim path): record locally and fire onChange.
+      _proxyValue = value;
+      _fireProxyChange(value);
+      if (typeof cb === 'function') { cb(); return undefined; }
+      return Promise.resolve();
+    }
+
+    function proxySettingsClear(details, cb) {
+      var clearedValue = { mode: 'system' };
+      if (typeof __bb_proxy === 'function') {
+        return new Promise(function (resolve) {
+          __bb_proxy('clear', '{}', function () {
+            _proxyValue = clearedValue;
+            _fireProxyChange(clearedValue);
+            if (typeof cb === 'function') { cb(); }
+            resolve();
+          });
+        });
+      }
+      _proxyValue = clearedValue;
+      _fireProxyChange(clearedValue);
+      if (typeof cb === 'function') { cb(); return undefined; }
+      return Promise.resolve();
+    }
+
+    var proxy = {
+      settings: {
+        get:      proxySettingsGet,
+        set:      proxySettingsSet,
+        clear:    proxySettingsClear,
+        onChange: proxyOnChange
+      },
+      onProxyError: makeEvent([])
+    };
+    // Expose on globalThis so the chrome/browser object literal below can reference it.
+    globalThis.__bbProxyNS = proxy;
+  })();
+
   // ---------------------------------------------------------------- chrome.webRequest (observe-only no-op)
   // WebKit can't intercept network requests, so these listeners never fire — but the event objects must
   // EXIST so extensions that register handlers (ScriptCat, ad blockers) don't throw "undefined is not an
@@ -3059,6 +3155,7 @@
     management: management,
     permissions: permissions,
     privacy: privacy,
+    proxy: globalThis.__bbProxyNS,
     declarativeNetRequest: declarativeNetRequest,
     userScripts: userScripts,
     webNavigation: webNavigation,

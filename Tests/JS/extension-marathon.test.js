@@ -142,6 +142,8 @@ function makeNativeBridge() {
         __bb_alarm_getall: bbCall([]),
         __bb_alarm_clear:  bbCall(true),
         __bb_alarm_clearall: bbCall(true),
+        __bb_alarm_get_all: bbCall([]),
+        __bb_alarm_clear_all: bbCall(true),
 
         // context menus
         __bb_context_menus: bbCall({ id: "1" }),
@@ -205,6 +207,11 @@ function makeNativeBridge() {
         // import (for importScripts in MV2 backgrounds)
         __bb_import_script: function(spec) { return "/* stub: " + spec + " */"; },
         __bb_eval_global: function(src, spec) { return null; },
+
+        // image fetch (used by Image.src in MV2 background pages)
+        __bb_fetch_image: function(url, cb) {
+            if (typeof cb === "function") { cb(JSON.stringify({ dataUrl: null })); }
+        },
 
         // runtime
         __bb_runtime_open_options: function(cb) { if (typeof cb === "function") { cb(); } },
@@ -482,6 +489,17 @@ function runCoreShimTests(ctx, extName) {
     });
     test(extName + ": chrome.runtime.getPlatformInfo is a function", function() {
         assertFunction(c.runtime.getPlatformInfo, "runtime.getPlatformInfo");
+    });
+    test(extName + ": chrome.runtime.onConnectExternal/onMessageExternal exist", function() {
+        // Tampermonkey and other script managers register listeners on both events unconditionally
+        // at boot: without these, addListener throws "Cannot read properties of undefined".
+        assertEvent(c.runtime.onConnectExternal, "runtime.onConnectExternal");
+        assertEvent(c.runtime.onMessageExternal, "runtime.onMessageExternal");
+    });
+    test(extName + ": chrome.runtime.onBrowserUpdateAvailable/onRestartRequired exist", function() {
+        // Chrome-specific lifecycle events that update-aware extensions (Tampermonkey watchdog) register.
+        assertEvent(c.runtime.onBrowserUpdateAvailable, "runtime.onBrowserUpdateAvailable");
+        assertEvent(c.runtime.onRestartRequired, "runtime.onRestartRequired");
     });
 
     // storage
@@ -947,6 +965,88 @@ function runExtensionSpecificTests(ctx, name) {
             assertFunction(c.tabGroups.update, "tabGroups.update");
         });
     }
+
+    if (name === "tampermonkey") {
+        test("tampermonkey: chrome.runtime.onConnectExternal.addListener works", function() {
+            // Tampermonkey registers externally-connectable listeners unconditionally at boot.
+            var fired = false;
+            c.runtime.onConnectExternal.addListener(function() { fired = true; });
+            assert.ok(true, "addListener on onConnectExternal should not throw");
+        });
+        test("tampermonkey: chrome.runtime.onMessageExternal.addListener works", function() {
+            var fired = false;
+            c.runtime.onMessageExternal.addListener(function() { fired = true; });
+            assert.ok(true, "addListener on onMessageExternal should not throw");
+        });
+        test("tampermonkey: chrome.userScripts.register/configureWorld are functions", function() {
+            assertFunction(c.userScripts.register, "userScripts.register");
+            assertFunction(c.userScripts.configureWorld, "userScripts.configureWorld");
+        });
+        test("tampermonkey: chrome.scripting.ExecutionWorld.USER_SCRIPT exists", function() {
+            assertString(c.scripting.ExecutionWorld.USER_SCRIPT, "ExecutionWorld.USER_SCRIPT");
+        });
+    }
+
+    if (name === "violentmonkey") {
+        test("violentmonkey: chrome.webRequest.OnBeforeSendHeadersOptions.EXTRA_HEADERS exists", function() {
+            // Violentmonkey's background reads these enum values at init time.
+            assertString(c.webRequest.OnBeforeSendHeadersOptions.EXTRA_HEADERS, "OnBeforeSendHeadersOptions.EXTRA_HEADERS");
+            assertString(c.webRequest.OnHeadersReceivedOptions.EXTRA_HEADERS, "OnHeadersReceivedOptions.EXTRA_HEADERS");
+        });
+        test("violentmonkey: chrome.tabs.executeScript is a function (MV2 API)", function() {
+            assertFunction(c.tabs.executeScript, "tabs.executeScript");
+            assertFunction(c.tabs.insertCSS, "tabs.insertCSS");
+        });
+    }
+
+    if (name === "browsec") {
+        test("browsec: chrome.proxy.settings.get/set/clear/onChange exist", function() {
+            assertFunction(c.proxy.settings.get, "proxy.settings.get");
+            assertFunction(c.proxy.settings.set, "proxy.settings.set");
+            assertFunction(c.proxy.settings.clear, "proxy.settings.clear");
+            assertEvent(c.proxy.settings.onChange, "proxy.settings.onChange");
+        });
+        test("browsec: chrome.alarms.create/onAlarm work without crash", function() {
+            assertFunction(c.alarms.create, "alarms.create");
+            assertEvent(c.alarms.onAlarm, "alarms.onAlarm");
+        });
+    }
+
+    if (name === "ghostery") {
+        // Ghostery uses an ESM service worker (import/export syntax). The shim boots cleanly;
+        // the background script itself cannot execute in vm.runInContext (ESM-only) — expected degradation.
+        test("ghostery: chrome.privacy.network settings exist (Ghostery reads them)", function() {
+            assertObject(c.privacy.network, "privacy.network");
+            assertFunction(c.privacy.network.networkPredictionEnabled.get, "networkPredictionEnabled.get");
+        });
+        test("ghostery: chrome.declarativeNetRequest.updateDynamicRules exists", function() {
+            assertFunction(c.declarativeNetRequest.updateDynamicRules, "dnr.updateDynamicRules");
+        });
+    }
+
+    if (name === "decentraleyes") {
+        // Decentraleyes uses an ESM service worker. Shim surface is verified; bg boot is ESM-only.
+        test("decentraleyes: chrome.webNavigation events exist", function() {
+            assertEvent(c.webNavigation.onBeforeNavigate, "webNavigation.onBeforeNavigate");
+            assertEvent(c.webNavigation.onCommitted, "webNavigation.onCommitted");
+        });
+    }
+
+    if (name === "clearurls") {
+        test("clearurls: chrome.contextMenus.create is a function", function() {
+            assertFunction(c.contextMenus.create, "contextMenus.create");
+            assertEvent(c.contextMenus.onClicked, "contextMenus.onClicked");
+        });
+        test("clearurls: chrome.storage.local.get/set work (MV2 background)", function() {
+            assertFunction(c.storage.local.get, "storage.local.get");
+            assertFunction(c.storage.local.set, "storage.local.set");
+        });
+        test("clearurls: chrome.webRequest.onBeforeRequest exists (ClearURLs uses blocking webRequest)", function() {
+            // webRequest blocking is an expected platform degradation on iOS (WKWebView can't intercept).
+            // The event object must exist so listener registration at boot does not throw.
+            assertEvent(c.webRequest.onBeforeRequest, "webRequest.onBeforeRequest");
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -955,7 +1055,11 @@ function runExtensionSpecificTests(ctx, name) {
 
 const EXTENSIONS_TO_TEST = [
     "bitwarden",
+    "browsec",
+    "clearurls",
     "dark-reader",
+    "decentraleyes",
+    "ghostery",
     "grammarly",
     "honey",
     "lastpass",
@@ -963,14 +1067,16 @@ const EXTENSIONS_TO_TEST = [
     "momentum",
     "notion",
     "react-devtools",
+    "tampermonkey",
     "todoist",
     "ublock-origin",
+    "violentmonkey",
     "vimium",
 ];
 
 console.log("BrownBear Extension Marathon Harness");
 console.log("====================================");
-console.log("Testing BrownBear chrome.* shim against " + EXTENSIONS_TO_TEST.length + " popular extensions.");
+console.log("Testing BrownBear chrome.* shim against " + EXTENSIONS_TO_TEST.length + " popular extensions (Wave 1 + Wave 2).");
 console.log("Extensions directory: " + EXTDIR);
 console.log("BrownBear JS directory: " + JSDIR);
 console.log("");
@@ -1005,33 +1111,68 @@ for (var i = 0; i < EXTENSIONS_TO_TEST.length; i++) {
         runCoreShimTests(ctx, name);
         runExtensionSpecificTests(ctx, name);
 
-        // Try running background script
-        var bgScript = null;
+        // Try running the extension's background. For MV2 multi-script backgrounds the engine
+        // runs ALL scripts in the same context (same as a browser background page). For MV3
+        // service workers, run the single entry point. ESM modules (import/export) are an
+        // expected degradation — vm.runInContext cannot parse ES module syntax; only the real
+        // browser can. For extensions whose importScripts loads packaged files (e.g. Browsec's
+        // lodash), patch __bb_import_script to read the actual file so the load succeeds.
+        var bgScripts = [];
         if (manifest.background) {
             if (manifest.background.service_worker) {
-                bgScript = path.join(extInfo.extDir, manifest.background.service_worker);
+                var swPath = path.join(extInfo.extDir, manifest.background.service_worker);
+                if (fs.existsSync(swPath)) { bgScripts = [swPath]; }
             } else if (manifest.background.scripts && manifest.background.scripts.length > 0) {
-                bgScript = path.join(extInfo.extDir, manifest.background.scripts[0]);
+                // MV2: run all scripts in order in the same context (background page semantics).
+                for (var si = 0; si < manifest.background.scripts.length; si++) {
+                    var sPath = path.join(extInfo.extDir, manifest.background.scripts[si]);
+                    if (fs.existsSync(sPath)) { bgScripts.push(sPath); }
+                }
             }
         }
 
-        if (!bgScript || !fs.existsSync(bgScript)) {
+        // Patch __bb_import_script in this context to resolve packaged-file paths against the
+        // extension dir. Browsec calls importScripts('/lodash.js') from its background; our
+        // default stub returns a comment instead of the real lodash, crashing its MV3 worker.
+        // This mirrors how the real engine resolves chrome-extension:// relative URLs.
+        (function patchImportScripts(c, extDir) {
+            if (typeof c.__bb_import_script !== "function") { return; }
+            var orig = c.__bb_import_script;
+            c.__bb_import_script = function(spec) {
+                // Strip chrome-extension://id/ prefix (if any) to get the bare extension-relative path.
+                var bare = String(spec)
+                    .replace(/^chrome-extension:\/\/[^/]+\//, "")
+                    .replace(/^\//, "");
+                var candidate = path.join(extDir, bare);
+                if (candidate.indexOf(extDir) === 0 && fs.existsSync(candidate)) {
+                    try { return fs.readFileSync(candidate, "utf8"); } catch (e) { /* fall through */ }
+                }
+                return orig.call(this, spec);
+            };
+        })(ctx, extInfo.extDir);
+
+        if (bgScripts.length === 0) {
             skip(name + ": background script boot", "no background script found");
         } else {
             var bgName = name; // capture for closure
-            var bgPath = bgScript;
+            var bgPaths = bgScripts.slice();
             var bgCtx = ctx;
             test(bgName + ": background script loads without TypeError/ReferenceError", function() {
-                var result = tryRunExtScript(bgCtx, bgPath, bgName + "/background.js");
-                if (!result.ok) {
-                    var msg = result.error || "";
-                    // Crashes on missing API members = real shim gaps.
-                    // Module-parse failures (import/export syntax, etc.) = extension uses ESM and we
-                    // can't run it in vm.runInContext — skip those, they require the real browser.
-                    var isESM = /import\b|export\b|Cannot use import|SyntaxError.*import/.test(msg);
-                    var isCrash = !isESM && /TypeError.*undefined.*not.*object|TypeError.*not a function|ReferenceError.*not.*defined|Cannot read prop|is not a function/.test(msg);
-                    if (isCrash) {
-                        throw new Error("Background script crash (likely missing shim API): " + msg.slice(0, 300));
+                for (var bi = 0; bi < bgPaths.length; bi++) {
+                    var result = tryRunExtScript(bgCtx, bgPaths[bi], bgName + "/background[" + bi + "].js");
+                    if (!result.ok) {
+                        var msg = result.error || "";
+                        // Crashes on missing API members = real shim gaps.
+                        // Module-parse failures (import/export syntax, etc.) = extension uses ESM and we
+                        // can't run it in vm.runInContext — skip those, they require the real browser.
+                        var isESM = /import\b|export\b|Cannot use import|SyntaxError.*import/.test(msg);
+                        var isCrash = !isESM && /TypeError.*undefined.*not.*object|TypeError.*not a function|ReferenceError.*not.*defined|Cannot read prop|is not a function/.test(msg);
+                        if (isCrash) {
+                            throw new Error("Background script crash (likely missing shim API): " + msg.slice(0, 300));
+                        }
+                        // Non-crash (ESM, extension self-check, etc.) — stop loading further scripts
+                        // but do not fail the test.
+                        break;
                     }
                 }
             });
