@@ -30,7 +30,8 @@ enum UserScriptInstallRouter {
     /// The redirect a `redirect`-action DNR rule in `rules` would produce for `url` (treated as a
     /// main-frame GET, which is what a `.user.js` navigation is), or nil if none matches. The first
     /// matching rule wins (callers pass rules in Chrome precedence order: session/dynamic over static).
-    static func redirect(for url: URL, extensionID: String, rules: [[String: Any]]) -> Redirect? {
+    static func redirect(for url: URL, extensionID: String,
+                         scheme: String = WebExtensionSchemeHandler.scheme, rules: [[String: Any]]) -> Redirect? {
         let urlString = url.absoluteString
         let host = url.host?.lowercased() ?? ""
         for rule in rules {
@@ -66,17 +67,17 @@ enum UserScriptInstallRouter {
                 guard let re = try? NSRegularExpression(pattern: regexFilter, options: options) else { continue }
                 let range = NSRange(urlString.startIndex..., in: urlString)
                 guard let match = re.firstMatch(in: urlString, options: [], range: range) else { continue }
-                if let target = computeTarget(redirect, extensionID: extensionID, match: match, source: urlString) {
+                if let target = computeTarget(redirect, extensionID: extensionID, scheme: scheme, match: match, source: urlString) {
                     return Redirect(extensionID: extensionID, target: target)
                 }
             } else if let urlFilter = condition["urlFilter"] as? String, !urlFilter.isEmpty {
                 guard urlFilterMatches(urlFilter, urlString, caseSensitive: caseSensitive) else { continue }
-                if let target = computeTarget(redirect, extensionID: extensionID, match: nil, source: urlString) {
+                if let target = computeTarget(redirect, extensionID: extensionID, scheme: scheme, match: nil, source: urlString) {
                     return Redirect(extensionID: extensionID, target: target)
                 }
             } else {
                 // No urlFilter/regexFilter → matches every URL (subject to the gates above).
-                if let target = computeTarget(redirect, extensionID: extensionID, match: nil, source: urlString) {
+                if let target = computeTarget(redirect, extensionID: extensionID, scheme: scheme, match: nil, source: urlString) {
                     return Redirect(extensionID: extensionID, target: target)
                 }
             }
@@ -89,24 +90,24 @@ enum UserScriptInstallRouter {
     /// Resolve a DNR `redirect` object to a concrete URL. Supports the three forms a userscript manager
     /// uses: `regexSubstitution` (with `\0…\9` back-references into the regexFilter match — ScriptCat's
     /// `…/install.html?url=\1`), `extensionPath`, and an absolute `url`. `transform` is not supported.
-    private static func computeTarget(_ redirect: [String: Any], extensionID: String,
+    private static func computeTarget(_ redirect: [String: Any], extensionID: String, scheme: String,
                                       match: NSTextCheckingResult?, source: String) -> URL? {
         var resolved: URL?
         if let substitution = redirect["regexSubstitution"] as? String, let match {
             resolved = URL(string: applyRegexSubstitution(substitution, match: match, source: source))
         } else if let extensionPath = redirect["extensionPath"] as? String {
             let path = extensionPath.hasPrefix("/") ? extensionPath : "/" + extensionPath
-            resolved = URL(string: "\(WebExtensionSchemeHandler.scheme)://\(extensionID)\(path)")
+            resolved = URL(string: "\(scheme)://\(extensionID)\(path)")
         } else if let absolute = redirect["url"] as? String {
             resolved = URL(string: absolute)
         }
         // SECURITY (CLAUDE.md §5): the hand-off opens this URL under the RULE-OWNER's scheme handler, so
-        // it MUST be that extension's OWN page. Require chrome-extension://<extensionID>/… and reject
-        // anything else — a web origin, a javascript:/data: URL, or another extension's id — so a rule
-        // can't hijack a .user.js navigation into an attacker-chosen page/origin. (A userscript-manager
-        // install page is always a chrome-extension:// page of the manager itself.)
+        // it MUST be that extension's OWN page. Require an extension scheme (chrome- or moz-extension for a
+        // Firefox manager) on <extensionID> and reject anything else — a web origin, a javascript:/data:
+        // URL, or another extension's id — so a rule can't hijack a .user.js navigation into an
+        // attacker-chosen page/origin. (A userscript-manager install page is always its OWN extension page.)
         guard let target = resolved,
-              target.scheme?.lowercased() == WebExtensionSchemeHandler.scheme,
+              WebExtensionSchemeHandler.isExtensionScheme(target.scheme),
               let host = target.host, host.lowercased() == extensionID.lowercased() else { return nil }
         return target
     }

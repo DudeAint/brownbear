@@ -66,6 +66,12 @@ struct WebExtensionManifest: Equatable {
     var descriptionText: String?
     var defaultLocale: String?
     var icons: [String: String]
+    /// True when this is a FIREFOX build (manifest declares `browser_specific_settings.gecko` or the
+    /// legacy `applications.gecko`). Firefox builds hardcode `moz-extension:` as their internal-page
+    /// protocol and gate runtime messaging on it (Tampermonkey's background `mp()` rejects any sender
+    /// whose URL doesn't start with `moz-extension://`), so we must serve them under that scheme instead
+    /// of `chrome-extension://` or their pages blank. Drives `WebExtension.scheme`.
+    var isFirefoxBuild: Bool
 
     // Behavior
     var contentScripts: [ContentScript]
@@ -160,6 +166,12 @@ struct WebExtensionManifest: Equatable {
         let dnr = parseDNRRulesets(json["declarative_net_request"])
         let commands = parseCommands(json["commands"])
 
+        // Firefox build markers — `browser_specific_settings.gecko` (current) or `applications.gecko`
+        // (legacy). Either presence means the bundle was compiled for Firefox and expects moz-extension://.
+        let bss = (json["browser_specific_settings"] as? [String: Any])?["gecko"] != nil
+        let appsGecko = (json["applications"] as? [String: Any])?["gecko"] != nil
+        let isFirefoxBuild = bss || appsGecko
+
         return WebExtensionManifest(
             manifestVersion: manifestVersion,
             name: name,
@@ -167,6 +179,7 @@ struct WebExtensionManifest: Equatable {
             descriptionText: json["description"] as? String,
             defaultLocale: json["default_locale"] as? String,
             icons: icons,
+            isFirefoxBuild: isFirefoxBuild,
             contentScripts: contentScripts,
             background: background,
             action: action,

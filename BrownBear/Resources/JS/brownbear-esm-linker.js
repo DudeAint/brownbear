@@ -65,9 +65,10 @@
         if (typeof spec !== 'string' || spec.length === 0) {
             throw new Error('invalid module specifier: ' + String(spec));
         }
-        // chrome-extension://<id>/<path> — accept our own origin, reduce to its package path.
-        if (/^chrome-extension:\/\//i.test(spec)) {
-            var rest = spec.replace(/^chrome-extension:\/\//i, '');
+        // {chrome,moz}-extension://<id>/<path> — accept our own origin (Firefox builds are served under
+        // moz-extension), reduce to its package path.
+        if (/^(?:chrome|moz)-extension:\/\//i.test(spec)) {
+            var rest = spec.replace(/^(?:chrome|moz)-extension:\/\//i, '');
             var slash = rest.indexOf('/');
             return normalize(slash < 0 ? '' : rest.slice(slash + 1));
         }

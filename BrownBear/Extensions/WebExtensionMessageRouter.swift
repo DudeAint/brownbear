@@ -522,7 +522,10 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
         guard !targets.isEmpty else { return nil }
         // A tabs.sendMessage push originates from the extension itself (background/popup), which is NOT a
         // tab — so the content script's onMessage sender carries the extension id + origin and no `tab`.
-        let sender: [String: Any] = ["id": extensionID, "origin": "chrome-extension://\(extensionID)"]
+        // Origin uses the extension's own scheme (moz-extension for a Firefox build) so a sender-origin
+        // check in the content script matches, exactly as a page sender's would.
+        let scheme = (await store.ext(for: extensionID))?.scheme ?? WebExtensionSchemeHandler.scheme
+        let sender: [String: Any] = ["id": extensionID, "origin": "\(scheme)://\(extensionID)"]
         for (token, session) in targets {
             let response = await pushMessage(token: token, webView: webView, frame: session.frameInfo,
                                              message: message, sender: sender)

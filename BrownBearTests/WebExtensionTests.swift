@@ -99,6 +99,37 @@ final class WebExtensionManifestTests: XCTestCase {
         XCTAssertEqual(meta.action?.defaultIcon["0"], "a.png")
         XCTAssertEqual(meta.webAccessibleResources.first?.resources, ["img/*"])
         XCTAssertEqual(meta.contentSecurityPolicy, "script-src 'self'")
+        XCTAssertFalse(meta.isFirefoxBuild, "a plain Chrome MV3 manifest is not a Firefox build")
+    }
+
+    /// Firefox builds (declaring `browser_specific_settings.gecko` or the legacy `applications.gecko`)
+    /// must be detected so they're served under moz-extension:// — their bundles hardcode that protocol
+    /// and gate runtime messaging on it (a Firefox Tampermonkey served under chrome-extension:// blanks).
+    func testDetectsFirefoxBuildAndScheme() throws {
+        let ffJSON = """
+        { "manifest_version": 2, "name": "FF Ext", "version": "1.0",
+          "browser_specific_settings": { "gecko": { "id": "x@y", "strict_min_version": "78.0" } } }
+        """
+        let legacyJSON = """
+        { "manifest_version": 2, "name": "FF Legacy", "version": "1.0",
+          "applications": { "gecko": { "id": "x@y" } } }
+        """
+        let chromeJSON = """
+        { "manifest_version": 3, "name": "Chrome Ext", "version": "1.0" }
+        """
+        XCTAssertTrue(try WebExtensionManifest.parse(Data(ffJSON.utf8)).isFirefoxBuild)
+        XCTAssertTrue(try WebExtensionManifest.parse(Data(legacyJSON.utf8)).isFirefoxBuild,
+                      "legacy applications.gecko also marks a Firefox build")
+        XCTAssertFalse(try WebExtensionManifest.parse(Data(chromeJSON.utf8)).isFirefoxBuild)
+
+        // WebExtension.scheme / baseURLString follow the build end-to-end.
+        let id = "abcdefghijklmnopabcdefghijklmnop"
+        let ffExt = WebExtension(id: id, manifestJSON: ffJSON)
+        XCTAssertEqual(ffExt.scheme, "moz-extension")
+        XCTAssertEqual(ffExt.baseURLString, "moz-extension://\(id)/")
+        let chromeExt = WebExtension(id: id, manifestJSON: chromeJSON)
+        XCTAssertEqual(chromeExt.scheme, "chrome-extension")
+        XCTAssertEqual(chromeExt.baseURLString, "chrome-extension://\(id)/")
     }
 
     func testParsesManifestV2PolymorphicShapes() throws {

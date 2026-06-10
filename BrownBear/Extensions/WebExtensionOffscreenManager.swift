@@ -209,8 +209,11 @@ final class WebExtensionOffscreenManager {
     nonisolated static func sanitizedPath(extID: String, rawPath: String) -> String? {
         var path = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !path.isEmpty else { return nil }
-        let ownPrefix = "\(WebExtensionSchemeHandler.scheme)://\(extID)/"
-        if path.hasPrefix(ownPrefix) {
+        // Strip the extension's own resource prefix under EITHER scheme (chrome- / moz-extension) so a
+        // Firefox build's own-origin path isn't rejected by the colon guard below.
+        let ownPrefix = WebExtensionSchemeHandler.extensionSchemes
+            .map { "\($0)://\(extID)/" }.first { path.hasPrefix($0) }
+        if let ownPrefix {
             path = String(path.dropFirst(ownPrefix.count))
         } else if path.contains(":") {
             // Any colon in a non-own-prefix path is a smuggled scheme — `https://`, `file://`, but also

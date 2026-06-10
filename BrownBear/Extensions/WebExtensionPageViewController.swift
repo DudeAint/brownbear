@@ -230,7 +230,7 @@ extension WebExtensionPageViewController: WKUIDelegate {
                  windowFeatures: WKWindowFeatures) -> WKWebView? {
         guard let url = navigationAction.request.url else { return nil }
         let host = BrownBearServices.shared.webExtensionRuntime.host
-        if url.scheme == WebExtensionSchemeHandler.scheme {
+        if WebExtensionSchemeHandler.isExtensionScheme(url.scheme) {
             // Resolve against THIS popup's extension origin (a popup only opens its own pages); the path is
             // what openExtensionPageTab needs. Restrict to the popup's own extension as a trust boundary.
             let path = url.path.isEmpty ? "/" : url.path

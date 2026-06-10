@@ -68,7 +68,7 @@ final class WebExtensionPageSession {
         self.runtime = runtime
         self.router = WebExtensionMessageRouter(store: store, storage: storage, runtime: runtime,
                                                 contentWorld: contentWorld)
-        self.schemeHandler = WebExtensionSchemeHandler(extensionID: ext.id, store: store)
+        self.schemeHandler = WebExtensionSchemeHandler(extensionID: ext.id, scheme: ext.scheme, store: store)
         // The page runs its own router instance, so give it the same chrome.tabs + chrome.cookies
         // bridges the runtime holds (set when the browser VC loaded), or pages couldn't reach them.
         self.router.host = runtime.host
@@ -93,12 +93,13 @@ final class WebExtensionPageSession {
         }
     }
 
-    /// The chrome-extension:// URL of this page, or nil if the extension declares no such page.
+    /// The extension-scheme URL of this page (chrome- or moz-extension per the build), or nil if the
+    /// extension declares no such page.
     var pageURL: URL? {
         guard let path = pagePath, !path.isEmpty else { return nil }
         var trimmed = path
         while trimmed.hasPrefix("/") { trimmed.removeFirst() }
-        return URL(string: "\(WebExtensionSchemeHandler.scheme)://\(ext.id)/\(trimmed)")
+        return URL(string: "\(ext.scheme)://\(ext.id)/\(trimmed)")
     }
 
     // MARK: - Configuration
@@ -135,7 +136,7 @@ final class WebExtensionPageSession {
 
         let configuration = WKWebViewConfiguration()
         configuration.userContentController = controller
-        configuration.setURLSchemeHandler(schemeHandler, forURLScheme: WebExtensionSchemeHandler.scheme)
+        configuration.setURLSchemeHandler(schemeHandler, forURLScheme: ext.scheme)
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         return configuration
     }
@@ -312,7 +313,7 @@ extension WebExtensionPageSession: WebExtensionEventReceiver {
             "contextType": contextType,
             "documentId": pageToken,
             "documentUrl": pageURL?.absoluteString ?? NSNull(),
-            "documentOrigin": "\(WebExtensionSchemeHandler.scheme)://\(ext.id)",
+            "documentOrigin": "\(ext.scheme)://\(ext.id)",
             "frameId": isOffscreen ? -1 : 0,
             "tabId": -1,
             "windowId": isOffscreen ? -1 : BrownBearBrowserViewController.webExtWindowID,

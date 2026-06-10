@@ -125,11 +125,12 @@ enum WebExtensionDNRRedirect {
         return nil
     }
 
-    /// Accept only an absolute http(s) or chrome-extension URL as a redirect target (never a javascript:,
-    /// data:, etc. target an extension could abuse).
+    /// Accept only an absolute http(s) or extension-scheme URL as a redirect target (never a javascript:,
+    /// data:, etc. target an extension could abuse). Both chrome- and moz-extension count (Firefox builds).
     private static func validatedTarget(_ string: String) -> URL? {
         guard let url = URL(string: string), let scheme = url.scheme?.lowercased(),
-              scheme == "http" || scheme == "https" || scheme == "chrome-extension" else { return nil }
+              scheme == "http" || scheme == "https"
+              || WebExtensionSchemeHandler.isExtensionScheme(scheme) else { return nil }
         return url
     }
 

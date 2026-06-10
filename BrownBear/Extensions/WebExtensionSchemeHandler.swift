@@ -17,8 +17,26 @@ import WebKit
 
 final class WebExtensionSchemeHandler: NSObject, WKURLSchemeHandler {
 
-    /// The custom scheme. Not a WebKit built-in, so it's safe to register a handler for it.
+    /// The Chrome-build scheme — the canonical default, and what non-extension-scoped call sites use.
+    /// Not a WebKit built-in, so it's safe to register a handler for it.
     static let scheme = "chrome-extension"
+    /// The Firefox-build scheme. Firefox bundles hardcode `moz-extension:` as their internal-page
+    /// protocol; also not a WebKit built-in, so a handler can be registered for it too. (We deliberately
+    /// do NOT serve under `safari-web-extension://` — that IS reserved by WebKit and rejects a handler.)
+    static let firefoxScheme = "moz-extension"
+    /// Every scheme an extension page can be served under. Used by checks that must accept either build.
+    static let extensionSchemes: Set<String> = [scheme, firefoxScheme]
+
+    /// True for a URL scheme that hosts an extension's own pages/resources (chrome- or moz-extension).
+    /// Use at CHECK sites ("is this an extension URL?"); use a specific `WebExtension.scheme` to BUILD one.
+    static func isExtensionScheme(_ candidate: String?) -> Bool {
+        guard let candidate else { return false }
+        return extensionSchemes.contains(candidate.lowercased())
+    }
+
+    /// The scheme THIS handler serves (`chrome-extension` for Chrome builds, `moz-extension` for Firefox).
+    /// WebKit routes only this scheme's requests here, so it also stamps the CORS origin on responses.
+    let scheme: String
 
     private let store: WebExtensionStore
     /// The ONE extension this handler may serve. A popup/options page running at
@@ -29,8 +47,10 @@ final class WebExtensionSchemeHandler: NSObject, WKURLSchemeHandler {
     /// Identifiers of tasks WebKit has started and not yet stopped. Main-thread only.
     private var liveTasks: Set<ObjectIdentifier> = []
 
-    init(extensionID: String, store: WebExtensionStore = BrownBearServices.shared.webExtensionStore) {
+    init(extensionID: String, scheme: String = WebExtensionSchemeHandler.scheme,
+         store: WebExtensionStore = BrownBearServices.shared.webExtensionStore) {
         self.allowedExtensionID = extensionID
+        self.scheme = scheme
         self.store = store
     }
 
@@ -61,7 +81,7 @@ final class WebExtensionSchemeHandler: NSObject, WKURLSchemeHandler {
             liveTasks.remove(key)
             let data = Data(bundleJS.utf8)
             let headers = Self.responseHeaders(path: resolvedPath, dataCount: data.count,
-                                               extensionID: extensionID, csp: nil)
+                                               extensionID: extensionID, csp: nil, scheme: self.scheme)
             if let response = HTTPURLResponse(url: url, statusCode: 200,
                                               httpVersion: "HTTP/1.1", headerFields: headers) {
                 urlSchemeTask.didReceive(response)
@@ -88,7 +108,7 @@ final class WebExtensionSchemeHandler: NSObject, WKURLSchemeHandler {
             var payload = data
             if isHTMLPage, let data, let htmlString = String(data: data, encoding: .utf8) {
                 let rewritten = WebExtensionPageModuleBundler.rewrittenHTML(
-                    extensionID: extensionID, htmlPath: resolvedPath, html: htmlString,
+                    extensionID: extensionID, htmlPath: resolvedPath, html: htmlString, scheme: self.scheme,
                     moduleSource: { store.fileSync(extensionID: extensionID, path: $0) },
                     log: { level, message in
                         Task { await BrownBearServices.shared.webExtensionRuntime
@@ -108,7 +128,7 @@ final class WebExtensionSchemeHandler: NSObject, WKURLSchemeHandler {
                     return
                 }
                 let headers = Self.responseHeaders(path: resolvedPath, dataCount: data.count,
-                                                   extensionID: extensionID, csp: csp)
+                                                   extensionID: extensionID, csp: csp, scheme: self.scheme)
                 if let response = HTTPURLResponse(url: url, statusCode: 200,
                                                   httpVersion: "HTTP/1.1", headerFields: headers) {
                     urlSchemeTask.didReceive(response)
@@ -148,7 +168,8 @@ final class WebExtensionSchemeHandler: NSObject, WKURLSchemeHandler {
     /// restrictions actually apply (matching Chrome); non-HTML resources never carry it, and a CSP-less
     /// manifest is left unchanged (no default injected — that would break pages that work without one).
     /// Pure mapping — unit-tested directly (the WKURLSchemeHandler response path needs a live web view).
-    static func responseHeaders(path: String, dataCount: Int, extensionID: String, csp: String?) -> [String: String] {
+    static func responseHeaders(path: String, dataCount: Int, extensionID: String, csp: String?,
+                                scheme: String = WebExtensionSchemeHandler.scheme) -> [String: String] {
         let contentType = mimeType(forPath: path)
         var headers = [
             "Content-Type": contentType,

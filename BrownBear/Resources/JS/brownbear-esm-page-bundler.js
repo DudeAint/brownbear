@@ -43,11 +43,12 @@
     // "js/popup.js" means <pageDir>/js/popup.js, never a bare specifier. Resolve it that way to a
     // package path; return null for anything not served from this package (http(s)/data/cross-origin),
     // which the caller skips (such an entry can't be pre-linked — it would fail to load in Chrome too
-    // under a 'self' CSP). chrome-extension://<thisId>/<p> reduces to its package path <p>.
+    // under a 'self' CSP). {chrome,moz}-extension://<thisId>/<p> reduces to its package path <p>
+    // (Firefox builds are served under moz-extension).
     function resolveEntrySrc(src) {
       src = String(src);
-      if (/^chrome-extension:\/\//i.test(src)) {
-        var rest = src.replace(/^chrome-extension:\/\//i, "");
+      if (/^(?:chrome|moz)-extension:\/\//i.test(src)) {
+        var rest = src.replace(/^(?:chrome|moz)-extension:\/\//i, "");
         var s = rest.indexOf("/");
         return esm.normalize(s < 0 ? "" : rest.slice(s + 1));
       }

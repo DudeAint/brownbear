@@ -51,7 +51,7 @@ extension WebExtensionBackgroundContext {
                     return
                 }
                 self.performHTTPFetch(url: url, req: req, callback: callback)
-            case "chrome-extension":
+            case "chrome-extension", "moz-extension":
                 self.performPackagedFetch(url: url, extensionID: extensionID, callback: callback)
             default:
                 self.callBack(callback, with: Self.fetchError("unsupported scheme: \(scheme)"))

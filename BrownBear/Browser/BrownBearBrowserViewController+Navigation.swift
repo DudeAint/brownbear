@@ -174,6 +174,10 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
                (extensionRedirectDepth[key] ?? 0) < 5,
                let redirectTo = injection.contentBlocker.redirectTarget(
                    for: url.absoluteString,
+                   // chrome-extension is correct for the dominant case: DNR is a Chrome/MV3 feature, and
+                   // Firefox builds (which would want moz-extension) use webRequest, not DNR — so they
+                   // never produce a redirect rule here. Resolving the per-extension scheme would need an
+                   // async store (actor) hop this sync decision handler can't make.
                    extensionOrigin: { "\(WebExtensionSchemeHandler.scheme)://\($0)" }) {
                 extensionRedirectDepth[key] = (extensionRedirectDepth[key] ?? 0) + 1
                 pendingNavTargets.removeValue(forKey: key)

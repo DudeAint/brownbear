@@ -36,8 +36,8 @@ enum WebExtensionImageBridge {
         guard let url = URL(string: trimmed) else { return ["error": "invalid image url"] }
         let scheme = url.scheme?.lowercased()
 
-        // chrome-extension://<thisExt>/path — a packaged icon. Read it from the store (this extension only).
-        if scheme == WebExtensionSchemeHandler.scheme {
+        // {chrome,moz}-extension://<thisExt>/path — a packaged icon. Read it from the store (this ext only).
+        if WebExtensionSchemeHandler.isExtensionScheme(scheme) {
             guard url.host == extensionID else { return ["error": "cross-extension image"] }
             var path = url.path
             while path.hasPrefix("/") { path.removeFirst() }
