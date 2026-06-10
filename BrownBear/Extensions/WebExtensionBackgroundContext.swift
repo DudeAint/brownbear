@@ -60,6 +60,9 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
     // setTimeout / setInterval registry.
     private var timers: [Int: DispatchSourceTimer] = [:]
     private var timerCounter = 0
+    // Pending setTimeout(fn, 0) one-shots dispatched via queue.async (not a DispatchSourceTimer). Removed
+    // when they fire or are cleared; an id absent here when its block runs means clearTimeout cancelled it.
+    private var pendingZeroDelay: Set<Int> = []
 
     init(extensionID: String,
          extensionName: String,
@@ -201,6 +204,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
             for timer in timers.values { timer.cancel() }
             alarmTimers.removeAll()
             timers.removeAll()
+            pendingZeroDelay.removeAll()   // queued setTimeout(0) blocks check isAlive and no-op anyway
             alarms.removeAll()
             // Resolve anything still waiting so callers never hang.
             for (_, continuation) in pendingResponses { continuation.resume(returning: nil) }
@@ -501,6 +505,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
         let clearTimer: @convention(block) (Double) -> Void = { [weak self] id in
             guard let self else { return }
             let key = Int(id)
+            self.pendingZeroDelay.remove(key)   // cancel a queued setTimeout(0) before it runs
             self.timers[key]?.cancel()
             self.timers.removeValue(forKey: key)
         }
@@ -560,6 +565,23 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
         timerCounter += 1
         let id = timerCounter
         let seconds = max(0, ms / 1000)
+        // Fast path for setTimeout(fn, 0) one-shots. A DispatchSourceTimer per call is heavy, and the
+        // IndexedDB engine (fake-indexeddb) drains a transaction by rescheduling its run loop through MANY
+        // setTimeout(0) macrotasks — on iOS the per-timer create/resume/cancel overhead made IDB-heavy
+        // inits crawl: Tampermonkey's userscript-tree load didn't finish before its popup asked, so the
+        // popup blanked with "unable to load tree" (the alarm/storage paths, which don't lean on IDB,
+        // worked fine — confirmed via the [bb-bg] device diagnostic). queue.async runs the callback in the
+        // next serial-queue turn — the same one-task-per-turn macrotask semantics fake-indexeddb relies on,
+        // FIFO-ordered — at a fraction of the cost. clearTimeout still cancels it via pendingZeroDelay.
+        if !repeats && seconds == 0 {
+            pendingZeroDelay.insert(id)
+            queue.async { [weak self] in
+                guard let self, self.isAlive else { return }
+                guard self.pendingZeroDelay.remove(id) != nil else { return }   // cancelled by clearTimeout
+                callback.call(withArguments: [])
+            }
+            return id
+        }
         let timer = DispatchSource.makeTimerSource(queue: queue)
         if repeats {
             // Floor at 4ms (the HTML spec's nested-timer clamp) so setInterval(fn, 0) can't spin the
