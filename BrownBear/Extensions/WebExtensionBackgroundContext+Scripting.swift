@@ -48,7 +48,14 @@ extension WebExtensionBackgroundContext {
             }
             guard !code.isEmpty else { return [] }
             let world = (args["world"] as? String) ?? "ISOLATED"
-            return await host.webExtExecuteScript(extTabId: tabId, world: world, code: code)
+            // MV3 target carries frameIds/allFrames; MV2 tabs.executeScript details carry a single
+            // frameId + allFrames at the top level. Honor both so an extension can reach subframes
+            // (uBO Lite injects its procedural-filterer API into the exact requesting iframe).
+            let frameIds = (target["frameIds"] as? [Int]) ?? (args["frameId"] as? Int).map { [$0] }
+            let allFrames = (target["allFrames"] as? Bool) ?? (args["allFrames"] as? Bool) ?? false
+            return await host.webExtExecuteScript(extensionID: extensionID, extTabId: tabId,
+                                                  world: world, code: code,
+                                                  frameIds: frameIds, allFrames: allFrames)
         case "insertCSS", "removeCSS":
             var css = args["css"] as? String ?? ""
             if css.isEmpty {
@@ -95,7 +102,10 @@ extension WebExtensionBackgroundContext {
         guard !code.isEmpty else { return [] }
         // USER_SCRIPT (or any non-MAIN world) runs in our single isolated content world; only MAIN is the page.
         let world = ((injection["world"] as? String)?.uppercased() == "MAIN") ? "MAIN" : "USER_SCRIPT"
-        return await host.webExtExecuteScript(extTabId: tabId, world: world, code: code)
+        return await host.webExtExecuteScript(extensionID: extensionID, extTabId: tabId,
+                                              world: world, code: code,
+                                              frameIds: target["frameIds"] as? [Int],
+                                              allFrames: (target["allFrames"] as? Bool) ?? false)
     }
 
     // MARK: - chrome.scripting.registerContentScripts (MV3 dynamic content scripts)

@@ -423,8 +423,10 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
             guard await canInjectIntoTab(extensionID: extensionID, isMV3: true, extTabId: tabId) else { return [] }
             let code = await resolveInjectedCode(payload: payload, extensionID: extensionID, separator: "\n;\n")
             guard !code.isEmpty else { return [] }
-            return await host.webExtExecuteScript(extTabId: tabId,
-                                                  world: (payload["world"] as? String) ?? "ISOLATED", code: code)
+            return await host.webExtExecuteScript(extensionID: extensionID, extTabId: tabId,
+                                                  world: (payload["world"] as? String) ?? "ISOLATED", code: code,
+                                                  frameIds: target["frameIds"] as? [Int],
+                                                  allFrames: (target["allFrames"] as? Bool) ?? false)
 
         case "scripting.insertCSS", "scripting.removeCSS":
             guard let host else { return NSNull() }
@@ -447,8 +449,12 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
             if code.isEmpty, let file = payload["file"] as? String,
                let text = await store.text(extensionID: extensionID, path: file) { code = text }
             guard !code.isEmpty else { return [] }
-            let results = await host.webExtExecuteScript(extTabId: tabId,
-                                                         world: (payload["world"] as? String) ?? "ISOLATED", code: code)
+            // MV2 details: `allFrames` + a single `frameId` (not the MV3 frameIds array).
+            let mv2FrameIds = (payload["frameId"] as? Int).map { [$0] }
+            let results = await host.webExtExecuteScript(extensionID: extensionID, extTabId: tabId,
+                                                         world: (payload["world"] as? String) ?? "ISOLATED", code: code,
+                                                         frameIds: mv2FrameIds,
+                                                         allFrames: (payload["allFrames"] as? Bool) ?? false)
             return results.map { $0["result"] ?? NSNull() }   // MV2 returns the raw results array
 
         case "tabs.insertCSS":
@@ -472,6 +478,43 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
     /// the message into each matching content session and resolves with the first non-null response
     /// (chrome resolves sendMessage with the first listener that answers). Returns nil if the tab has
     /// no content sessions for this extension. Called via the bridge host from any surface's router.
+    /// chrome.scripting.executeScript frame targeting: evaluate `code` into this extension's frames of
+    /// `webView` — the specific extension frameIds, or every content frame when `allFrames`. Returns one
+    /// InjectionResult ({result, frameId}) per evaluated frame, main frame first (Chrome's shape). The
+    /// main frame needs no session; subframes resolve through the content sessions' stored WKFrameInfo
+    /// (a session exists exactly where this extension's content scripts run — the frames Chrome's
+    /// executeScript may target). `world` is the isolated content world or `.page` for world:"MAIN".
+    func evaluateInContentFrames(extensionID: String, webView: WKWebView, world: WKContentWorld,
+                                 code: String, frameIds: [Int]?, allFrames: Bool) async -> [[String: Any]] {
+        let wanted: Set<Int>? = frameIds.map(Set.init)
+        var results: [[String: Any]] = []
+        // Main frame: when allFrames, when explicitly listed, or when no target was given (Chrome default).
+        if allFrames || (wanted?.contains(0) ?? true) {
+            let value: Any? = await withCheckedContinuation { continuation in
+                BBEvaluateJavaScriptForResult(webView, code, world) { result, _ in
+                    continuation.resume(returning: result)
+                }
+            }
+            results.append(["result": value ?? NSNull(), "frameId": 0])
+        }
+        // Subframes: only reachable where this extension registered a content session.
+        let subframes = sessions.values.filter {
+            $0.isContent && $0.extensionID == extensionID && $0.webView === webView && $0.frameId != 0
+        }
+        for session in subframes {
+            if !allFrames {
+                guard let wanted, wanted.contains(session.frameId) else { continue }
+            }
+            let value: Any? = await withCheckedContinuation { continuation in
+                BBEvaluateJavaScriptInFrameForResult(webView, code, session.frameInfo, world) { result, _ in
+                    continuation.resume(returning: result)
+                }
+            }
+            results.append(["result": value ?? NSNull(), "frameId": session.frameId])
+        }
+        return results
+    }
+
     func sendMessageToTab(extensionID: String, webView: WKWebView, message: Any, frameId: Int?) async -> Any? {
         let targets = sessions.filter { _, session in
             session.isContent && session.extensionID == extensionID && session.webView === webView

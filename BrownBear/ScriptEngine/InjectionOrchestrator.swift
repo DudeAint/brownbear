@@ -218,6 +218,19 @@ final class InjectionOrchestrator {
                                                   frameId: frameId)
     }
 
+    /// chrome.scripting.executeScript frame targeting — evaluate into the main frame and/or the frames
+    /// where this extension's content scripts run (the router owns those sessions). One InjectionResult
+    /// per evaluated frame. The browser VC resolves the tab → web view before calling this.
+    func webExtEvaluateInContentFrames(extensionID: String, webView: WKWebView, world: WKContentWorld,
+                                       code: String, frameIds: [Int]?, allFrames: Bool) async -> [[String: Any]] {
+        await webExtensionRouter.evaluateInContentFrames(extensionID: extensionID,
+                                                         webView: webView,
+                                                         world: world,
+                                                         code: code,
+                                                         frameIds: frameIds,
+                                                         allFrames: allFrames)
+    }
+
     // MARK: - Userscript menu commands & per-tab GM tab objects (GM_registerMenuCommand / GM_getTab)
 
     /// The active tab's userscript menu commands (registration order) — the browser builds the menu's
