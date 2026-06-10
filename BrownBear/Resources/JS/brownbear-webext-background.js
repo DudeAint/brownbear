@@ -3236,7 +3236,25 @@
       return settleBg(Promise.resolve({ email: '', id: '' }), cb);
     },
     getAccounts: function (cb) { return settleBg(Promise.resolve([]), cb); },
+    // chrome.identity.AccountStatus enum — Google Keep reads chrome.identity.AccountStatus.ANY in a
+    // getProfileUserInfo({ accountStatus }) call at boot; a missing enum threw "Cannot read properties of
+    // undefined (reading 'ANY')" and aborted the worker.
+    AccountStatus: { SYNC: 'SYNC', ANY: 'ANY' },
     onSignInChanged: makeEvent([])
+  };
+
+  // chrome.omnibox — address-bar keyword API. Toby and JSON Viewer register omnibox.onInputChanged/
+  // onInputEntered at boot; an undefined namespace threw "Cannot read properties of undefined (reading
+  // 'onInputEntered')" and aborted the worker. BrownBear's omnibox doesn't route a registered keyword's
+  // input to extensions yet, so the events are inert (never fire) and setDefaultSuggestion is a no-op —
+  // but the surface must exist so registration at boot doesn't crash.
+  var omnibox = {
+    setDefaultSuggestion: function () {},
+    onInputStarted: makeEvent([]),
+    onInputChanged: makeEvent([]),
+    onInputEntered: makeEvent([]),
+    onInputCancelled: makeEvent([]),
+    onDeleteSuggestion: makeEvent([])
   };
 
   // chrome.system.{cpu,memory,display,storage} — system-info APIs. Screen recorders / monitors (Loom
@@ -3385,6 +3403,7 @@
     alarms: alarms,
     commands: commands,
     search: search,
+    omnibox: omnibox,
     bookmarks: bookmarks,
     history: history,
     sessions: sessions,

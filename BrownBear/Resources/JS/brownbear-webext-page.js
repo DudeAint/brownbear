@@ -879,7 +879,16 @@
         return settle(_Promise.resolve({ email: "", id: "" }), cb);
       },
       getAccounts: function (cb) { return settle(_Promise.resolve([]), cb); },
+      // chrome.identity.AccountStatus enum (Google Keep reads AccountStatus.ANY at boot).
+      AccountStatus: { SYNC: "SYNC", ANY: "ANY" },
       onSignInChanged: makeEvent([])
+    },
+    // chrome.omnibox — address-bar keyword API; inert on a page (keyword input isn't routed to
+    // extensions yet) but must exist so a popup/options script registering it doesn't throw.
+    omnibox: {
+      setDefaultSuggestion: function () {},
+      onInputStarted: makeEvent([]), onInputChanged: makeEvent([]), onInputEntered: makeEvent([]),
+      onInputCancelled: makeEvent([]), onDeleteSuggestion: makeEvent([])
     },
     cookies: cookiesApi(),
     notifications: notificationsApi(),
