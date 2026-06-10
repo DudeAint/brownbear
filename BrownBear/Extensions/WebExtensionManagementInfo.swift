@@ -146,7 +146,7 @@ enum WebExtensionManagementInfo {
                          granted: PermissionSet) -> Bool {
         let held = effective(manifest: manifest, granted: granted)
         return requested.permissions.isSubset(of: held.permissions)
-            && requested.origins.isSubset(of: held.origins)
+            && originsCovered(requested.origins, by: held.origins)
     }
 
     /// chrome.permissions.request resolution. Returns the set of permissions to NEWLY record as
@@ -156,10 +156,96 @@ enum WebExtensionManagementInfo {
     static func resolveRequest(_ requested: PermissionSet,
                                manifest: WebExtensionManifest?) -> PermissionSet? {
         let declared = declaredPermissions(for: manifest)
-        // Reject if anything requested was never declared anywhere in the manifest.
+        // Reject if anything requested was never declared anywhere in the manifest. Origins are matched by
+        // Chrome match-pattern CONTAINMENT, not exact string membership: an extension that declares a broad
+        // optional_host_permissions (`<all_urls>` / `*://*/*`) and requests a single site `*://site.com/*`
+        // at runtime — uBlock Origin Lite does exactly this when you raise a site's filtering mode — is a
+        // valid request and must not be silently rejected.
         guard requested.permissions.isSubset(of: declared.permissions),
-              requested.origins.isSubset(of: declared.origins) else { return nil }
+              originsCovered(requested.origins, by: declared.origins) else { return nil }
         return requested
+    }
+
+    /// True if every requested host match-pattern is COVERED by some declared/held host pattern, per
+    /// Chrome's match-pattern containment (a broad `<all_urls>` / `*://*/*` covers a specific
+    /// `*://site.com/*`; `*.foo.com` covers `foo.com` and its subdomains). Exact-string membership was the
+    /// bug: a broad-optional extension requesting one origin got rejected before the consent prompt even
+    /// showed. An empty request is trivially covered (nothing new to grant). Pure — unit-tested.
+    static func originsCovered(_ requested: Set<String>, by declared: Set<String>) -> Bool {
+        if requested.isEmpty { return true }
+        let declaredPatterns = declared.compactMap(HostMatchPattern.init)
+        return requested.allSatisfy { req in
+            guard let r = HostMatchPattern(req) else { return false }
+            return declaredPatterns.contains { $0.covers(r) }
+        }
+    }
+
+    /// A parsed Chrome host match pattern (`<scheme>://<host><path>` or `<all_urls>`) with the containment
+    /// test chrome.permissions needs: does a declared pattern subsume a requested one? Conservative — it
+    /// never reports coverage it can't justify, so it can't widen what an extension may be granted.
+    private struct HostMatchPattern {
+        let isAllUrls: Bool
+        let scheme: String   // lowercased; "*" or a concrete scheme
+        let host: String     // lowercased; "*", "*.domain", or an exact host
+        let path: String     // e.g. "/*"
+
+        init?(_ raw: String) {
+            let pattern = raw.trimmingCharacters(in: .whitespaces)
+            if pattern == "<all_urls>" {
+                isAllUrls = true; scheme = "*"; host = "*"; path = "/*"; return
+            }
+            guard let sep = pattern.range(of: "://") else { return nil }
+            let scheme = pattern[pattern.startIndex..<sep.lowerBound].lowercased()
+            guard !scheme.isEmpty else { return nil }
+            let rest = pattern[sep.upperBound...]
+            let host: Substring, path: Substring
+            if let slash = rest.firstIndex(of: "/") {
+                host = rest[rest.startIndex..<slash]
+                path = rest[slash...]
+            } else {
+                host = rest; path = "/*"
+            }
+            guard !host.isEmpty || scheme == "file" else { return nil }
+            self.isAllUrls = false
+            self.scheme = scheme
+            self.host = host.lowercased()
+            self.path = path.isEmpty ? "/*" : String(path)
+        }
+
+        /// True if every URL `other` (a requested pattern) matches is also matched by `self` (declared).
+        func covers(_ other: HostMatchPattern) -> Bool {
+            if isAllUrls { return true }
+            if other.isAllUrls { return false }   // only <all_urls> covers <all_urls>
+            return schemeCovers(other.scheme) && hostCovers(other.host) && pathCovers(other.path)
+        }
+
+        private func schemeCovers(_ other: String) -> Bool {
+            if scheme == other { return true }
+            // Chrome's "*" scheme spans http/https/ws/wss; a declared "*" covers those concrete schemes.
+            return scheme == "*" && ["http", "https", "ws", "wss"].contains(other)
+        }
+
+        private func hostCovers(_ other: String) -> Bool {
+            if host == "*" { return true }       // "*" host covers any host
+            if other == "*" { return false }     // only "*" covers "*"
+            if host.hasPrefix("*.") {
+                let suffix = String(host.dropFirst(2))           // "*.foo.com" → "foo.com" (+subdomains)
+                if other.hasPrefix("*.") {
+                    let otherSuffix = String(other.dropFirst(2))
+                    return otherSuffix == suffix || otherSuffix.hasSuffix("." + suffix)
+                }
+                return other == suffix || other.hasSuffix("." + suffix)
+            }
+            return host == other                 // exact host covers only the identical host
+        }
+
+        private func pathCovers(_ other: String) -> Bool {
+            if path == "/*" || path == other { return true }
+            if path.hasSuffix("/*") {            // a prefix glob covers any path under it
+                return other.hasPrefix(String(path.dropLast(1)))
+            }
+            return false
+        }
     }
 
     /// chrome.permissions.remove — the runtime-granted set after removing `requested`, or nil if the
