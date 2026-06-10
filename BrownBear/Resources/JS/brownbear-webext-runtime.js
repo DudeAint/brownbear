@@ -207,7 +207,10 @@
     function runtimeConnect(connectInfo) {
       var ci = connectInfo || {};
       var port = makePort(ci.name || "", null);
-      bridge("port.connect", { name: ci.name || "" }, token).then(function (res) {
+      // Include the page URL: Chrome's onConnect Port.sender carries the connecting context's url
+      // (uBO's vAPI.messaging onConnect reads `sender.url` unconditionally — undefined threw).
+      bridge("port.connect", { name: ci.name || "",
+                               url: (W.location && W.location.href) || "" }, token).then(function (res) {
         port._bindId(res && res.portId ? res.portId : null);
       }, function () { port._bindId(null); });
       return port;

@@ -359,6 +359,9 @@ class WebExtensionRuntime {
             offscreenManager.close(extensionID: id)
             // Cancel any in-flight downloads the gone worker started.
             downloadsManager.close(extensionID: id)
+            // Clear any proxy config the gone worker applied so traffic is no longer routed
+            // through a server belonging to an extension the user disabled or uninstalled.
+            WebExtensionProxyManager.shared.clear(extensionID: id)
         }
 
         // Spin up newly enabled extensions.

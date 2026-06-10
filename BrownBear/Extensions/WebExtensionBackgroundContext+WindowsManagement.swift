@@ -14,10 +14,11 @@ import JavaScriptCore
 
 extension WebExtensionBackgroundContext {
 
-    /// chrome.windows / chrome.management / chrome.permissions + the real runtime.openOptionsPage and
-    /// runtime.setUninstallURL for the BACKGROUND worker. windows hop to the browser host on the main
-    /// actor; management/permissions read the store + grants actors (off BrownBearServices.shared,
-    /// which is @MainActor) then call back on this context's serial queue.
+    /// chrome.windows / chrome.management / chrome.permissions / chrome.proxy + the real
+    /// runtime.openOptionsPage and runtime.setUninstallURL for the BACKGROUND worker.
+    /// windows hop to the browser host on the main actor; management/permissions read the
+    /// store + grants actors (off BrownBearServices.shared, which is @MainActor) then call
+    /// back on this context's serial queue. chrome.proxy routes to WebExtensionProxyManager.
     func installWindowsManagementPermissionsNatives(into context: JSContext) {
         let windows: @convention(block) (String, String, JSValue) -> Void = { [weak self] method, argsJSON, callback in
             guard let self else { return }
@@ -79,6 +80,58 @@ extension WebExtensionBackgroundContext {
             }
         }
         context.setObject(setUninstallURL, forKeyedSubscript: "__bb_runtime_set_uninstall_url" as NSString)
+
+        // chrome.proxy.settings.set / .clear — wired as __bb_proxy(method, argsJSON, cb).
+        // method is "set" or "clear". On "set", argsJSON is the ProxyConfig value object.
+        // Gate: the extension MUST declare "proxy" in its manifest permissions; we check
+        // against the store asynchronously (same Task hop used by __bb_permissions above).
+        // On iOS < 17 the manager records the intent and returns nil (no error) so VPN
+        // extensions proceed with their JS logic while not actually routing traffic —
+        // logged once via logSink so the developer can see it in the Logs tab.
+        let proxy: @convention(block) (String, String, JSValue) -> Void = { [weak self] method, argsJSON, callback in
+            guard let self else { return }
+            let extID = self.extensionID
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let store = BrownBearServices.shared.webExtensionStore
+                let ext = await store.ext(for: extID)
+                let manifest = ext?.manifest
+
+                // Permission gate: fail closed if "proxy" is not declared.
+                guard manifest?.permissions.contains("proxy") == true else {
+                    let errJSON = self.jsonString(["error": "the \"proxy\" permission is not granted"])
+                    self.callBack(callback, with: errJSON)
+                    return
+                }
+
+                let proxyMgr = WebExtensionProxyManager.shared
+                var errorString: String?
+
+                if method == "set" {
+                    let config = ((try? JSONSerialization.jsonObject(
+                        with: Data(argsJSON.utf8))) as? [String: Any]) ?? [:]
+                    // Log once on pre-iOS-17 devices so the developer can see the limitation.
+                    if #available(iOS 17.0, *) {
+                        // Full proxy support available — no diagnostic needed.
+                    } else {
+                        self.logSink(self.makeLog(.info,
+                            "chrome.proxy requires iOS 17+; proxy config recorded but not applied at the network layer"))
+                    }
+                    errorString = proxyMgr.apply(extensionID: extID, config: config)
+                } else {
+                    // "clear" (or any other method): reset to direct.
+                    proxyMgr.clear(extensionID: extID)
+                }
+
+                if let err = errorString {
+                    let errJSON = self.jsonString(["error": err])
+                    self.callBack(callback, with: errJSON)
+                } else {
+                    self.callBack(callback, with: nil)
+                }
+            }
+        }
+        context.setObject(proxy, forKeyedSubscript: "__bb_proxy" as NSString)
     }
 
     /// Map a chrome.windows method + args to the bridge host, returning a JSON-serializable value.
