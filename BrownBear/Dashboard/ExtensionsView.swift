@@ -246,31 +246,11 @@ struct ExtensionIconView: View {
         }
         .frame(width: 28, height: 28)
         .task(id: ext.id) {
-            guard let path = ExtensionIconView.bestIconPath(ext.manifest) else { return }
+            guard let path = WebExtensionIconResolver.bestIconPath(ext.manifest) else { return }
             if let data = await BrownBearServices.shared.webExtensionStore.file(extensionID: ext.id, path: path),
                let loaded = UIImage(data: data) {
                 image = loaded
             }
         }
-    }
-
-    /// Prefer the action/toolbar icon (what users associate with the extension), else the manifest
-    /// icon set; within a set, pick the size closest to 64 (crisp at 28pt @2–3x), else the largest.
-    static func bestIconPath(_ manifest: WebExtensionManifest?) -> String? {
-        guard let manifest else { return nil }
-        return pickIconPath(from: manifest.action?.defaultIcon) ?? pickIconPath(from: manifest.icons)
-    }
-
-    /// Pick a path from a `size → path` icon map. Internal for testing.
-    static func pickIconPath(from icons: [String: String]?) -> String? {
-        guard let icons else { return nil }
-        let sized = icons.compactMap { key, value -> (size: Int, path: String)? in
-            value.isEmpty ? nil : (Int(key) ?? 0, value)
-        }
-        guard !sized.isEmpty else { return nil }
-        let inRange = sized.filter { $0.size >= 32 && $0.size <= 128 }
-        let chosen = inRange.min { abs($0.size - 64) < abs($1.size - 64) }
-            ?? sized.max { $0.size < $1.size }
-        return chosen?.path
     }
 }
