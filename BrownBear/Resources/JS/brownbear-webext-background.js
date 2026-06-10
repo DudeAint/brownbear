@@ -2515,7 +2515,13 @@
     onDOMContentLoaded: makeEvent(webNavLists['webNavigation.onDOMContentLoaded']),
     onCompleted: makeEvent(webNavLists['webNavigation.onCompleted']),
     onHistoryStateUpdated: makeEvent(webNavLists['webNavigation.onHistoryStateUpdated']),
+    onReferenceFragmentUpdated: makeEvent(webNavLists['webNavigation.onReferenceFragmentUpdated'] || []),
     onErrorOccurred: makeEvent(webNavLists['webNavigation.onErrorOccurred']),
+    // onTabReplaced — Chrome fires this when a tab is replaced (e.g. an instant/prerendered page swap).
+    // WKWebView has no equivalent so it never fires, but iCloud Passwords' background reads
+    // `chrome.webNavigation.onTabReplaced.addListener` UNGUARDED at boot — an undefined event threw
+    // "undefined is not an object" and aborted the whole service worker. Inert, but must exist.
+    onTabReplaced: makeEvent([]),
     // onCreatedNavigationTarget — fired when a navigation creates a new window/tab (target=_blank etc.).
     // BrownBear can't intercept the target selection on WKWebView, so this event never fires; the
     // listener object must exist or vAPI.Tabs constructor (vapi-background.js:282) throws.

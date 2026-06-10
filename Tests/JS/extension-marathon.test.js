@@ -632,6 +632,10 @@ function runCoreShimTests(ctx, extName) {
         assertEvent(c.webNavigation.onCommitted, "webNavigation.onCommitted");
         assertEvent(c.webNavigation.onBeforeNavigate, "webNavigation.onBeforeNavigate");
         assertEvent(c.webNavigation.onCreatedNavigationTarget, "webNavigation.onCreatedNavigationTarget");
+        // onTabReplaced + onReferenceFragmentUpdated: inert on WKWebView but must exist — iCloud Passwords'
+        // background reads chrome.webNavigation.onTabReplaced.addListener UNGUARDED at boot.
+        assertEvent(c.webNavigation.onTabReplaced, "webNavigation.onTabReplaced");
+        assertEvent(c.webNavigation.onReferenceFragmentUpdated, "webNavigation.onReferenceFragmentUpdated");
         assertFunction(c.webNavigation.getAllFrames, "webNavigation.getAllFrames");
     });
 
