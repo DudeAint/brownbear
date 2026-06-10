@@ -77,8 +77,17 @@ struct WebExtension: Codable, Identifiable, Equatable {
 
     var version: String { manifest?.version ?? "—" }
 
-    /// A chrome-extension-style base URL for this extension's resources.
-    var baseURLString: String { "chrome-extension://\(id)/" }
+    /// The URL scheme this extension's pages are served under. Chrome builds use `chrome-extension`;
+    /// FIREFOX builds use `moz-extension`, because their bundles hardcode that protocol and gate runtime
+    /// messaging on it (a Firefox Tampermonkey served under chrome-extension:// blanks — its background
+    /// `mp()` rejects every page sender whose URL isn't moz-extension://). See `WebExtensionManifest
+    /// .isFirefoxBuild`. Cached `manifest` parse is cheap; a malformed manifest falls back to Chrome.
+    var scheme: String { (manifest?.isFirefoxBuild ?? false) ? "moz-extension" : "chrome-extension" }
+
+    /// The extension's resource base URL, e.g. `chrome-extension://<id>/` (or `moz-extension://<id>/`
+    /// for a Firefox build). Every page/background/sender URL is built off this, so the scheme is
+    /// consistent end-to-end (page-serving scheme handler, worker location.origin, runtime sender.origin).
+    var baseURLString: String { "\(scheme)://\(id)/" }
 
     /// Generate a random Chrome-style id (32 chars from a–p, mapping each hex nibble).
     static func generateID() -> String {

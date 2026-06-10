@@ -184,7 +184,7 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
         // Iterate by sorted id so the target/picker order is deterministic — `byID.values` (and the runtime's
         // `contexts` dict) have undefined iteration order, which would make `routeToSingleManager` and the
         // picker's button order flip across runs / OS versions / extension-state changes.
-        var candidates: [(id: String, rulesJSON: String)] = []
+        var candidates: [(id: String, scheme: String, rulesJSON: String)] = []
         for id in byID.keys.sorted() {
             guard let ext = byID[id], let manifest = ext.manifest else { continue }
             var rules = await dnr.getSessionRules(extensionID: ext.id)
@@ -198,7 +198,7 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
             guard !rules.isEmpty,
                   let data = try? JSONSerialization.data(withJSONObject: rules),
                   let json = String(data: data, encoding: .utf8) else { continue }
-            candidates.append((ext.id, json))
+            candidates.append((ext.id, ext.scheme, json))
         }
         let urlString = url.absoluteString
         let dnrMatches: [(id: String, target: String)] = await Task.detached(priority: .userInitiated) {
@@ -206,7 +206,7 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
             for candidate in candidates {
                 guard let candidateURL = URL(string: urlString),
                       let rules = (try? JSONSerialization.jsonObject(with: Data(candidate.rulesJSON.utf8))) as? [[String: Any]],
-                      let redirect = UserScriptInstallRouter.redirect(for: candidateURL, extensionID: candidate.id, rules: rules)
+                      let redirect = UserScriptInstallRouter.redirect(for: candidateURL, extensionID: candidate.id, scheme: candidate.scheme, rules: rules)
                 else { continue }
                 out.append((candidate.id, redirect.target.absoluteString))
             }
@@ -253,12 +253,12 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
     }
 
     func webExtCreateTab(url: String?, active: Bool) -> [String: Any] {
-        // A chrome-extension://<id>/<path> URL needs the per-extension scheme handler + chrome.* page
+        // A {chrome,moz}-extension://<id>/<path> URL needs the per-extension scheme handler + chrome.* page
         // bridge a normal tab lacks (else it loads blank). Route it to the real extension-page tab. The
         // target extension is the URL's host; resolving it is async (the store is an actor), so we kick
         // it off and return a provisional record (chrome.tabs.create's result; callers rarely need the id).
         if let url, let parsed = URL(string: url),
-           parsed.scheme == WebExtensionSchemeHandler.scheme,
+           WebExtensionSchemeHandler.isExtensionScheme(parsed.scheme),
            let extID = parsed.host, ChromeWebStore.isExtensionID(extID) {
             let path = Self.extensionPageRelativePath(from: parsed)
             Task { @MainActor in

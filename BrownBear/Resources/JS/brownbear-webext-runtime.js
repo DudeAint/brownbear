@@ -1009,7 +1009,9 @@
       return;
     }
     var chrome = buildChrome(data);
-    var sourceURL = "//# sourceURL=chrome-extension://" + data.extensionId + "/content.js";
+    // Use the extension's own base (moz-extension:// for a Firefox build) so the error-attribution label
+    // matches the page origin; fall back to chrome-extension if native didn't supply a base.
+    var sourceURL = "//# sourceURL=" + ((data.baseURL || ("chrome-extension://" + data.extensionId + "/")) + "content.js");
     // Webpack-bundled content scripts (Violentmonkey's injected.js, ScriptCat's scripting/content
     // brokers) read `chrome`/`browser` off the GLOBAL at module load — `const { chrome } = global` then
     // a top-level `chrome.runtime.getURL('')` — not from our eval params. Our isolated world's window had

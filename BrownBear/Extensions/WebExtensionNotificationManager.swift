@@ -325,8 +325,11 @@ private extension UNMutableNotificationContent {
         // The mapping stashes the raw iconUrl under "iconUrl" only when present; read it back.
         guard let iconURL = userInfo["iconUrl"] as? String, !iconURL.isEmpty else { return self }
         var path = iconURL
-        let prefix = "chrome-extension://\(extensionID)/"
-        if path.hasPrefix(prefix) { path = String(path.dropFirst(prefix.count)) }
+        // Strip the extension's own resource prefix (chrome- or moz-extension for a Firefox build).
+        for scheme in WebExtensionSchemeHandler.extensionSchemes {
+            let prefix = "\(scheme)://\(extensionID)/"
+            if path.hasPrefix(prefix) { path = String(path.dropFirst(prefix.count)); break }
+        }
         // Reject absolute/remote/data URLs: only an in-package relative path is honored.
         guard !path.contains("://"), !path.hasPrefix("data:") else { return self }
         guard let data = await store.file(extensionID: extensionID, path: path) else { return self }

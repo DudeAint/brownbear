@@ -58,6 +58,7 @@ enum WebExtensionPageModuleBundler {
     static func rewrittenHTML(extensionID: String,
                               htmlPath: String,
                               html: String,
+                              scheme: String = WebExtensionSchemeHandler.scheme,
                               moduleSource: @escaping @Sendable (String) -> Data?,
                               log: (_ level: String, _ message: String) -> Void) -> String? {
         let scripts = moduleScripts(in: html)
@@ -84,7 +85,7 @@ enum WebExtensionPageModuleBundler {
 
         // Build the classic bundle in a throwaway JSContext.
         guard let bundleJS = buildBundle(extensionID: extensionID, htmlPath: htmlPath, srcs: srcs,
-                                         moduleSource: moduleSource, log: log) else {
+                                         scheme: scheme, moduleSource: moduleSource, log: log) else {
             lock.lock(); htmlRewrites[rewriteKey] = .some(nil); lock.unlock()   // memo the no-op
             return nil
         }
@@ -104,6 +105,7 @@ enum WebExtensionPageModuleBundler {
     private static func buildBundle(extensionID: String,
                                     htmlPath: String,
                                     srcs: [String],
+                                    scheme: String,
                                     moduleSource: @escaping @Sendable (String) -> Data?,
                                     log: (_ level: String, _ message: String) -> Void) -> String? {
         guard let context = JSContext() else { return nil }
@@ -115,7 +117,7 @@ enum WebExtensionPageModuleBundler {
             return String(data: data, encoding: .utf8)
         }
         context.setObject(resolveSource, forKeyedSubscript: "__bbModuleSource" as NSString)
-        let baseURL = "\(WebExtensionSchemeHandler.scheme)://\(extensionID)/"
+        let baseURL = "\(scheme)://\(extensionID)/"
         context.setObject(baseURL as NSString, forKeyedSubscript: "__bbBgBaseURL" as NSString)
 
         context.evaluateScript(runtimeJS, withSourceURL: URL(string: "brownbear://webext/\(extensionID)/page-bundler.js"))
