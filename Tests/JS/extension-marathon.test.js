@@ -1154,6 +1154,26 @@ function runExtensionSpecificTests(ctx, name) {
         });
     }
 
+    if (name === "chrome-remote-desktop") {
+        // Chrome Remote Desktop's service worker calls chrome.runtime.connectNative to reach its native
+        // host. iOS has NO native-messaging hosts (a hard limit), so the port must degrade — return a
+        // non-null Port the extension can attach onDisconnect to, then disconnect with lastError, rather
+        // than throwing "undefined is not an object" and aborting the worker.
+        test("chrome-remote-desktop: connectNative returns a degraded, non-null Port (no native hosts on iOS)", function() {
+            assertFunction(c.runtime.connectNative, "runtime.connectNative");
+            var port = c.runtime.connectNative("com.google.chrome.remote_desktop");
+            assert.ok(port && typeof port === "object", "connectNative must return a non-null port");
+            assertFunction(port.postMessage, "port.postMessage");
+            assertFunction(port.disconnect, "port.disconnect");
+            assert.doesNotThrow(function () { port.onDisconnect.addListener(function () {}); port.onMessage.addListener(function () {}); },
+                "attaching port listeners must not throw");
+        });
+        test("chrome-remote-desktop: chrome.downloads surface exists (its only other permission)", function() {
+            assertFunction(c.downloads.download, "downloads.download");
+            assertFunction(c.downloads.search, "downloads.search");
+        });
+    }
+
     if (name === "browsec") {
         test("browsec: chrome.proxy.settings.get/set/clear/onChange exist", function() {
             assertFunction(c.proxy.settings.get, "proxy.settings.get");
@@ -1238,6 +1258,8 @@ const EXTENSIONS_TO_TEST = [
     // Wave 5
     "colorzilla",
     "readaloud",
+    // Wave 6
+    "chrome-remote-desktop",
 ];
 
 console.log("BrownBear Extension Marathon Harness");
