@@ -69,8 +69,15 @@ extension WebExtensionBackgroundContext {
     static func dispatchUserScripts(extensionID: String, method: String, args: [String: Any]) async -> Any {
         let services = BrownBearServices.shared
         let usStore = services.webExtensionUserScriptStore
-        let perms = await services.webExtensionStore.ext(for: extensionID)?.manifest?.permissions ?? []
-        guard perms.contains("userScripts") else { return ["error": "userScripts permission not granted"] }
+        // Diagnostic (Tampermonkey declares userScripts in MV3 yet hit this on device): name the actual
+        // store state so the next device log distinguishes a lookup miss / MV mis-detection from a
+        // genuinely-absent permission, rather than the opaque "not granted".
+        let ext = await services.webExtensionStore.ext(for: extensionID)
+        let perms = ext?.manifest?.permissions ?? []
+        guard perms.contains("userScripts") else {
+            return ["error": "userScripts permission not granted (extLoaded=\(ext != nil) "
+                + "mv=\(ext?.manifest?.manifestVersion ?? 0) perms=[\(perms.sorted().joined(separator: ","))])"]
+        }
         do {
             switch method {
             case "register":
