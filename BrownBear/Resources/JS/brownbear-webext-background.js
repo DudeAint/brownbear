@@ -81,20 +81,27 @@
     // passthrough: it only wraps the callback so the pending entry clears when the native replies.
     (function installNativeWatchdog() {
       if (typeof __bb_log !== 'function') { return; }
-      var TRACKED = ['__bb_storage_get', '__bb_storage_set', '__bb_storage_remove', '__bb_storage_clear',
-        '__bb_dnr', '__bb_scripting', '__bb_userscripts', '__bb_permissions', '__bb_management', '__bb_fetch',
-        '__bb_send_message', '__bb_tabs_send_message', '__bb_tabs', '__bb_action', '__bb_cookies', '__bb_idle',
-        '__bb_get_contexts', '__bb_offscreen', '__bb_windows', '__bb_browser_data', '__bb_notifications',
-        '__bb_downloads', '__bb_context_menus', '__bb_search', '__bb_capture_visible_tab'];
-      var pending = Object.create(null), seq = 1, warned = Object.create(null);
+      // Track EVERY __bb_* request/response native (auto-detected), not a curated list — a boot can hang
+      // on any of them. Denylist only the ones that would recurse or track the watchdog's own machinery.
+      var DENY = { __bb_log: 1, __bb_set_timeout: 1, __bb_clear_timer: 1 };
+      var names = [];
+      try {
+        var all = Object.getOwnPropertyNames(globalThis);
+        for (var ai = 0; ai < all.length; ai++) {
+          var nm = all[ai];
+          if (nm.indexOf('__bb_') === 0 && !DENY[nm] && typeof globalThis[nm] === 'function') { names.push(nm); }
+        }
+      } catch (eNames) { /* fall through with whatever we have */ }
+      var pending = Object.create(null), seq = 1, warned = Object.create(null), totalCalls = 0;
       function nowMs() { try { return Date.now(); } catch (e) { return 0; } }
-      TRACKED.forEach(function (name) {
+      names.forEach(function (name) {
         var orig = globalThis[name];
         if (typeof orig !== 'function') { return; }
         globalThis[name] = function () {
           var args = Array.prototype.slice.call(arguments), cbIdx = -1;
           for (var i = args.length - 1; i >= 0; i--) { if (typeof args[i] === 'function') { cbIdx = i; break; } }
           if (cbIdx < 0) { return orig.apply(this, args); }   // a synchronous native — nothing to track
+          totalCalls++;
           var id = seq++;
           pending[id] = { label: name + (typeof args[0] === 'string' ? '(' + args[0] + ')' : ''), t: nowMs() };
           var userCb = args[cbIdx];
@@ -102,6 +109,16 @@
           return orig.apply(this, args);
         };
       });
+      // Let the inbound message dispatcher register an in-flight onMessage so a popup/dashboard request
+      // that the worker receives but never answers (start() stuck, handler never sendResponse-s) is
+      // named here too — the most direct signal for "page waiting on the background worker". Returns a
+      // clear fn; an unanswered entry surfaces in the same >6s sweep.
+      globalThis.__bbTrackPending = function (label) {
+        totalCalls++;
+        var pid = seq++;
+        pending[pid] = { label: label, t: nowMs() };
+        return function () { delete pending[pid]; };
+      };
       function sweep() {
         var now = nowMs(), stuck = [];
         for (var id in pending) {
@@ -112,6 +129,18 @@
         try { setTimeout(sweep, 4000); } catch (e) { /* timer gone — stop */ }
       }
       try { setTimeout(sweep, 4000); } catch (e) { /* no timer yet */ }
+      // One-shot classifier: a healthy worker fires MANY native calls during boot. If it made ZERO in 8s,
+      // its background source never ran start() — a module-link failure or a top-level throw — so the
+      // sweep has nothing to name. Logged ONLY in that broken case, so healthy workers stay silent.
+      try {
+        setTimeout(function () {
+          if (totalCalls === 0) {
+            __bb_log('error', '[BrownBear] background worker made NO native bridge calls in 8s — its '
+              + 'background source likely failed to evaluate / never ran start() (module-link failure or a '
+              + 'top-level throw). Any popup/dashboard message will hang waiting on it.');
+          }
+        }, 8000);
+      } catch (eHeartbeat) { /* no timer */ }
     })();
 
     // ---------------------------------------------------------------- Web Crypto + importScripts
@@ -2815,10 +2844,17 @@
       var sender = parseJSON(senderJSON) || {};
       var responded = false;
       var willRespondAsync = false;
+      // Diagnostic: track this inbound message until it is answered or declined, so a popup/dashboard
+      // request the worker RECEIVES but never answers (its onMessage stuck on `await isFullyInitialized`)
+      // is named in the watchdog sweep — the smoking gun for "page waiting on the background worker".
+      var _mwhat = (message && (message.what || message.cmd || message.type)) || '?';
+      var _clearTrack = (typeof __bbTrackPending === 'function') ? __bbTrackPending('onMessage:' + _mwhat) : null;
+      function _doneTrack() { if (_clearTrack) { _clearTrack(); _clearTrack = null; } }
 
       function sendResponse(value) {
         if (responded) { return; }
         responded = true;
+        _doneTrack();
         __bb_message_response(responseId, JSON.stringify({ value: (value === undefined ? null : value) }));
       }
 
@@ -2842,7 +2878,9 @@
       }
 
       if (responded) { return; }
-      if (willRespondAsync) { return; }   // native waits (with a timeout) for an async sendResponse
+      if (willRespondAsync) { return; }   // native waits (with a timeout) for an async sendResponse; the
+                                          // tracker stays until sendResponse fires (or the sweep names it)
+      _doneTrack();
       // Distinguish "no onMessage listener at all" (→ Chrome's "Could not establish connection.
       // Receiving end does not exist." on the sender) from a listener that declined (received but
       // returned nothing → the sender resolves undefined with no lastError).
