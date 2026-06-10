@@ -18,6 +18,7 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Key.addressBarPosition) private var addressBarPositionRaw = AddressBarPosition.top.rawValue
     @AppStorage(AppSettings.Key.userScriptInstallPolicy) private var installPolicyRaw = UserScriptInstallPolicy.ask.rawValue
     @AppStorage(AppSettings.Key.userScriptWorld) private var userScriptWorldRaw = UserScriptWorld.userScript.rawValue
+    @AppStorage(AppSettings.Key.keepVideosInline) private var keepVideosInline = false
     @State private var isClearing = false
     @State private var didClear = false
     @State private var confirmingClear = false
@@ -44,6 +45,15 @@ struct SettingsView: View {
                 Toggle("Hide bar while scrolling", isOn: $hideBarsOnScroll)
                 Text("The address bar slides away as you scroll down a page and returns when you scroll up. "
                     + "Set it at the top or, Safari-style, at the bottom (where the toolbar hides with it).")
+                    .font(.caption)
+                    .foregroundStyle(BBTheme.Color.textSecondary)
+            }
+
+            Section("Media") {
+                Toggle("Keep videos inline", isOn: $keepVideosInline)
+                Text("Stops a site or player from forcing a video fullscreen, so it stays in the page — handy "
+                    + "for automation that needs the page visible while a video plays. You can still go "
+                    + "fullscreen yourself with the video's button. Reopen BrownBear to apply.")
                     .font(.caption)
                     .foregroundStyle(BBTheme.Color.textSecondary)
             }

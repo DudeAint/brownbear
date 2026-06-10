@@ -120,6 +120,17 @@ final class InjectionOrchestrator {
                                            in: .page)
         userContentController.addUserScript(resilientEvents)
 
+        // "Keep videos inline" — page-world shim that neutralizes scripted/auto fullscreen so videos stay
+        // in the page (the Focus/Player behavior). Opt-in; installed on the shared controller at boot, so
+        // toggling it takes effect on the next app launch (documented in Settings).
+        if AppSettings.keepVideosInline {
+            let inlineVideo = WKUserScript(source: Self.bootstrapSource("brownbear-inline-video"),
+                                           injectionTime: .atDocumentStart,
+                                           forMainFrameOnly: false,
+                                           in: .page)
+            userContentController.addUserScript(inlineVideo)
+        }
+
         // Page-console capture — registered in the PAGE world (not the isolated bridge world) with
         // its own handler, so the page's console.* can be surfaced in the Logs "Page" filter without
         // ever exposing the privileged BrownBear bridge to page scripts.
