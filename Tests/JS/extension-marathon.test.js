@@ -526,6 +526,9 @@ function runCoreShimTests(ctx, extName) {
             "new globalThis.URL('" + expected + "/options.html').origin", ctx);
         assert.strictEqual(urlOrigin, expected,
             "new URL(chrome-extension://...).origin must be the tuple origin, got: " + JSON.stringify(urlOrigin));
+        // WorkerGlobalScope.origin is exposed as a bare global too (=== location.origin), like a real SW.
+        assert.strictEqual(ctx.origin, expected,
+            "globalThis.origin (self.origin) must equal the tuple origin, got: " + JSON.stringify(ctx.origin));
     });
 
     // chrome.privacy ChromeSettings expose get/set/clear AND onChange (Chrome spec). A VPN extension

@@ -1475,6 +1475,15 @@
       } catch (e) { /* leave undefined */ }
     }
 
+    // WorkerGlobalScope.origin — a real service worker exposes `origin` as a bare global (=== the
+    // tuple location.origin, e.g. "chrome-extension://<id>"), not only as location.origin. Bundled
+    // libraries read `self.origin` directly (origin checks, URL construction); without it they see
+    // `undefined` and either throw or compare against the literal "undefined". Mirror Chrome.
+    if (typeof globalThis.origin === 'undefined' && globalThis.location
+        && typeof globalThis.location.origin === 'string') {
+      try { globalThis.origin = globalThis.location.origin; } catch (e) { /* leave undefined */ }
+    }
+
     // performance.now() — high-res-ish via Date (JSC has Date). timeOrigin anchors at boot.
     if (typeof globalThis.performance === 'undefined') {
       var _timeOrigin = Date.now();
