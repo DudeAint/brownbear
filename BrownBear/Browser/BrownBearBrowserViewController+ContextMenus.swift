@@ -48,6 +48,20 @@ extension BrownBearBrowserViewController {
         completionHandler(config)
     }
 
+    /// The user tapped the long-press link PREVIEW (the peek view). Without this, WebKit commits the
+    /// previewed link through the system — which on a non-default browser opens Safari, not us. Open it
+    /// in a new BrownBear tab instead (mirroring the opener's private state), so a previewed link stays
+    /// in the app like every other navigation.
+    func webView(_ webView: WKWebView,
+                 contextMenuForElement elementInfo: WKContextMenuElementInfo,
+                 willCommitWithAnimator animator: UIContextMenuInteractionCommitAnimating) {
+        guard let url = elementInfo.linkURL else { return }
+        let isPrivate = tabManager.activeTab?.isPrivate ?? false
+        animator.addCompletion { [weak self] in
+            self?.tabManager.createTab(loading: url, activate: true, isPrivate: isPrivate)
+        }
+    }
+
     /// Turn one resolved item (and its applicable children) into a UIAction / submenu. Separators are
     /// omitted (UIMenu has no separator element); disabled items render dimmed; checkbox/radio show a
     /// checkmark via `.on`.
