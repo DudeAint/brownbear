@@ -19,11 +19,14 @@
 //  `import.meta.url`). Swift calls `__bbRunModuleWorker(entryPath)` once, after the chrome.* runtime
 //  is installed.
 //
-//  Known, documented limitations (acceptable for bundled extension service workers, which are the
-//  only consumers): named imports (`import {a} from './x'`) are snapshot at first evaluation, so a
-//  *true* import cycle that reads a not-yet-initialised named binding sees `undefined` (the classic
-//  CommonJS-cycle hazard; namespace imports and re-exports stay live via getters, and acyclic graphs
-//  — the overwhelming majority — are always correct because dependencies fully evaluate first).
+//  Import cycles are supported with ESM-faithful semantics (they broke uBO Lite's admin ⇄
+//  ruleset-manager boot before): export getters are HOISTED to the top of each module body, so a
+//  cycle partner re-entering mid-evaluation resolves hoisted function declarations immediately; and
+//  every named/default import binding is re-snapshotted (`__fixup`) once the outermost evaluation
+//  settles, so value bindings that were still uninitialised mid-cycle land before any code outside
+//  the cycle runs. Remaining divergence from real ESM (acceptable, documented): a SYNCHRONOUS
+//  mid-cycle read of a local imported binding (not the namespace) sees the eager snapshot
+//  (undefined) until the graph settles — real ESM would forward the live value.
 //  Top-level `await` is unsupported (synchronous registry); a module that uses it fails closed with
 //  a clear error rather than silently mis-running.
 //
@@ -128,20 +131,33 @@
 
     // ---- rewrite ---------------------------------------------------------------------------------
 
-    /** Build the require/binding code for a single `import` declaration. `tmp` is a unique temp name. */
+    /** Build the require/binding code for a single `import` declaration. `tmp` is a unique temp name.
+     *
+     *  Cycle-correct binding: each named/default binding is snapshotted eagerly (guarded — a mid-cycle
+     *  read of a not-yet-initialised let/const export getter throws TDZ, which must not abort the
+     *  importer the way real ESM linking wouldn't) AND re-snapshotted via `__fixup` once the whole graph
+     *  has finished evaluating — so a binding that was still `undefined` mid-cycle (uBO Lite's
+     *  admin ⇄ ruleset-manager cycle) lands on its real value before any code outside the cycle runs.
+     *  Namespace imports bind the live exports object itself and need no fixup. */
     function rewriteImport(node, tmp) {
         var spec = node.source.value;
         if (node.specifiers.length === 0) return '__require(' + lit(spec) + ');';
         var code = 'var ' + tmp + '=__require(' + lit(spec) + ');';
+        var binds = '';
         for (var i = 0; i < node.specifiers.length; i++) {
             var s = node.specifiers[i];
             if (s.type === 'ImportDefaultSpecifier') {
-                code += 'var ' + s.local.name + '=' + tmp + '.default;';
+                code += 'var ' + s.local.name + ';';
+                binds += 'try{' + s.local.name + '=' + tmp + '.default;}catch(__bbE){}';
             } else if (s.type === 'ImportNamespaceSpecifier') {
                 code += 'var ' + s.local.name + '=' + tmp + ';';
             } else { // ImportSpecifier
-                code += 'var ' + s.local.name + '=' + tmp + '[' + lit(nameOf(s.imported)) + '];';
+                code += 'var ' + s.local.name + ';';
+                binds += 'try{' + s.local.name + '=' + tmp + '[' + lit(nameOf(s.imported)) + '];}catch(__bbE){}';
             }
+        }
+        if (binds) {
+            code += binds + '__fixup(function(){' + binds + '});';
         }
         return code;
     }
@@ -163,6 +179,13 @@
         var tmpCount = 0;
         function tmp() { return '__bb_m' + (tmpCount++); }
         var deps = [];           // static + string-literal-dynamic import specifiers (for page bundling)
+        // Export-getter registrations hoisted to the TOP of the module body, BEFORE any imports run.
+        // In an import cycle the partner re-enters this module mid-evaluation; with the getters already
+        // registered, its reads resolve hoisted function declarations immediately (real ESM semantics)
+        // instead of finding an empty namespace — the uBO Lite admin ⇄ ruleset-manager boot deadlock.
+        // The getters close over module-scope names: functions are hoisted (defined), `var`s read
+        // undefined until assigned, let/const throw TDZ until initialised — all faithful to ESM.
+        var prelude = [];
 
         // Top-level import/export declarations (only valid at Program.body level).
         var body = ast.body;
@@ -175,14 +198,14 @@
                     break;
                 case 'ExportNamedDeclaration':
                     if (node.source) { deps.push(node.source.value); }
-                    rewriteExportNamed(node, edits, tmp);
+                    rewriteExportNamed(node, edits, prelude);
                     break;
                 case 'ExportDefaultDeclaration':
-                    rewriteExportDefault(node, src, edits);
+                    rewriteExportDefault(node, src, edits, prelude);
                     break;
                 case 'ExportAllDeclaration':
                     if (node.source) { deps.push(node.source.value); }
-                    rewriteExportAll(node, edits, tmp());
+                    rewriteExportAll(node, edits, prelude, tmp());
                     break;
             }
         }
@@ -207,11 +230,11 @@
         });
 
         var rewritten = applyEdits(src, edits, path);
-        var fnSource = '"use strict";' + rewritten + '\n//# sourceURL=' + sourceURL;
+        var fnSource = '"use strict";' + prelude.join('') + rewritten + '\n//# sourceURL=' + sourceURL;
         var fn, isAsync = false;
         try {
             // eslint-disable-next-line no-new-func
-            fn = new Function('__exports', '__require', '__import', '__meta', '__export', fnSource);
+            fn = new Function('__exports', '__require', '__import', '__meta', '__export', '__fixup', fnSource);
         } catch (e) {
             var msg = e && e.message ? e.message : String(e);
             if (/await/i.test(msg) && allowAsync) {
@@ -219,7 +242,7 @@
                 // so it validates, and flag it so the bundler emits an async wrapper + awaits it.
                 try {
                     var AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-                    fn = new AsyncFunction('__exports', '__require', '__import', '__meta', '__export', fnSource);
+                    fn = new AsyncFunction('__exports', '__require', '__import', '__meta', '__export', '__fixup', fnSource);
                     isAsync = true;
                 } catch (e2) {
                     throw new Error('codegen error in ' + path + ': ' + (e2 && e2.message ? e2.message : e2));
@@ -238,17 +261,19 @@
         return fn;
     }
 
-    function rewriteExportNamed(node, edits, tmp) {
+    function rewriteExportNamed(node, edits, prelude) {
         if (node.source) {
             // Re-export: export { a, b as c } from './x'  /  export {} from './x'
-            var t = tmp();
-            var code = 'var ' + t + '=__require(' + lit(node.source.value) + ');';
+            // Getters go to the PRELUDE so a mid-cycle importer already sees the names; each getter
+            // requires lazily (memoized — mid-cycle it hands back the partial ns, after settle the full
+            // one, so the binding is live). The source position keeps a bare __require so WHEN the dep
+            // evaluates is unchanged.
             for (var i = 0; i < node.specifiers.length; i++) {
                 var s = node.specifiers[i];
-                code += '__export(' + lit(nameOf(s.exported)) + ',function(){return ' + t
-                      + '[' + lit(nameOf(s.local)) + '];});';
+                prelude.push('__export(' + lit(nameOf(s.exported)) + ',function(){return __require('
+                    + lit(node.source.value) + ')[' + lit(nameOf(s.local)) + '];});');
             }
-            edits.push({ start: node.start, end: node.end, text: code });
+            edits.push({ start: node.start, end: node.end, text: '__require(' + lit(node.source.value) + ');' });
             return;
         }
         if (node.declaration) {
@@ -261,48 +286,56 @@
                 names.push(decl.id.name);
             }
             // Strip only the `export ` keyword; leave the declaration (and any inner import()) intact.
+            // The getter registrations are hoisted to the prelude (see transform) so a cycle partner
+            // re-entering before this line sees hoisted functions already bound.
             edits.push({ start: node.start, end: decl.start, text: '' });
-            var appended = ';';
             for (var n = 0; n < names.length; n++) {
-                appended += '__export(' + lit(names[n]) + ',function(){return ' + names[n] + ';});';
+                prelude.push('__export(' + lit(names[n]) + ',function(){return ' + names[n] + ';});');
             }
-            edits.push({ start: decl.end, end: decl.end, text: appended });
             return;
         }
-        // export { a, b as c };  (local bindings, no `from`)
-        var only = '';
+        // export { a, b as c };  (local bindings, no `from`) — registrations hoist; the statement goes.
         for (var k = 0; k < node.specifiers.length; k++) {
             var sp = node.specifiers[k];
-            only += '__export(' + lit(nameOf(sp.exported)) + ',function(){return ' + sp.local.name + ';});';
+            prelude.push('__export(' + lit(nameOf(sp.exported)) + ',function(){return ' + sp.local.name + ';});');
         }
-        edits.push({ start: node.start, end: node.end, text: only });
+        edits.push({ start: node.start, end: node.end, text: '' });
     }
 
-    function rewriteExportDefault(node, src, edits) {
+    function rewriteExportDefault(node, src, edits, prelude) {
         var decl = node.declaration;
         var isNamedDecl = (decl.type === 'FunctionDeclaration' || decl.type === 'ClassDeclaration') && decl.id;
         if (isNamedDecl) {
-            // export default function foo(){} -> keep the (hoistable) declaration, assign by name.
+            // export default function foo(){} -> keep the (hoistable) declaration; the getter hoists so a
+            // cycle partner resolves the function immediately (a class stays TDZ until its line, like ESM).
             edits.push({ start: node.start, end: decl.start, text: '' });
-            edits.push({ start: decl.end, end: node.end, text: ';__exports.default=' + decl.id.name + ';' });
+            edits.push({ start: decl.end, end: node.end, text: ';' });
+            prelude.push('__export("default",function(){return ' + decl.id.name + ';});');
         } else {
-            // Anonymous function/class or an arbitrary expression -> assign as an expression value,
-            // wrapping in parens so an anonymous `function(){}`/`class{}` is read as an expression.
-            edits.push({ start: node.start, end: decl.start, text: '__exports.default=(' });
+            // Anonymous function/class or an arbitrary expression -> evaluate in place into a hoisted
+            // slot; the prelude getter makes ns.default visible (undefined until the line runs, as in
+            // a CJS-style cycle — importers' __fixup re-snapshot lands the settled value).
+            prelude.push('var __bb_default$;__export("default",function(){return __bb_default$;});');
+            edits.push({ start: node.start, end: decl.start, text: '__bb_default$=(' });
             edits.push({ start: decl.end, end: node.end, text: ');' });
         }
     }
 
-    function rewriteExportAll(node, edits, t) {
-        var code = 'var ' + t + '=__require(' + lit(node.source.value) + ');';
+    function rewriteExportAll(node, edits, prelude, t) {
         if (node.exported) {
-            // export * as ns from './x'
-            code += '__export(' + lit(nameOf(node.exported)) + ',function(){return ' + t + ';});';
-        } else {
-            // export * from './x' — re-export all named (not default) exports, kept live via getters.
-            code += 'for(var __k in ' + t + '){if(__k!=="default"){(function(k){__export(k,function(){return '
-                  + t + '[k];});})(__k);}}';
+            // export * as ns from './x' — the getter hoists (lazy require keeps it live); the source
+            // position keeps a bare __require so dep evaluation order is unchanged.
+            prelude.push('__export(' + lit(nameOf(node.exported)) + ',function(){return __require('
+                + lit(node.source.value) + ');});');
+            edits.push({ start: node.start, end: node.end, text: '__require(' + lit(node.source.value) + ');' });
+            return;
         }
+        // export * from './x' — the names aren't knowable until the dep evaluates, so this stays at its
+        // source position (re-exported names appear once the dep settles; importers' __fixup re-snapshot
+        // covers a cycle). Kept live via getters.
+        var code = 'var ' + t + '=__require(' + lit(node.source.value) + ');'
+            + 'for(var __k in ' + t + '){if(__k!=="default"){(function(k){__export(k,function(){return '
+            + t + '[k];});})(__k);}}';
         edits.push({ start: node.start, end: node.end, text: code });
     }
 
@@ -339,6 +372,21 @@
         return rec;
     }
 
+    // Import-binding fixups: each import statement registers a re-snapshot closure; once the OUTERMOST
+    // evaluation finishes (evalDepth back to 0 — every cycle in the graph has settled), they run so a
+    // binding snapshotted mid-cycle (undefined) lands on its real value. Runs synchronously before any
+    // microtask, so async continuations (a worker's start()) always see settled bindings.
+    var fixups = [];
+    var evalDepth = 0;
+    function registerFixup(fn) { fixups.push(fn); }
+    function runFixups() {
+        var queue = fixups;
+        fixups = [];
+        for (var i = 0; i < queue.length; i++) {
+            try { queue[i](); } catch (eIgnored) { /* a still-TDZ binding keeps its eager value */ }
+        }
+    }
+
     function evaluate(path) {
         var rec = load(path);
         if (rec.evaluated || rec.evaluating) return rec.exports;   // cycle: hand back the partial ns
@@ -353,8 +401,9 @@
         var exp = function (name, getter) {
             Object.defineProperty(rec.exports, name, { get: getter, enumerable: true, configurable: true });
         };
+        evalDepth++;
         try {
-            rec.fn(rec.exports, req, dyn, meta, exp);
+            rec.fn(rec.exports, req, dyn, meta, exp, registerFixup);
             rec.evaluated = true;
         } catch (e) {
             // A module is evaluated exactly once; a failed module STAYS failed (ESM semantics). Mark it
@@ -373,6 +422,10 @@
             throw e;
         } finally {
             rec.evaluating = false;
+            evalDepth--;
+            // Outermost evaluation done (even if it threw — partial graphs still get their bindings
+            // settled, so a sibling module that DID evaluate isn't left with stale snapshots).
+            if (evalDepth === 0) { runFixups(); }
         }
         return rec.exports;
     }
