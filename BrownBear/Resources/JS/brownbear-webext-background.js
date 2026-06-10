@@ -17,12 +17,21 @@
 (function () {
   'use strict';
 
-  var manifest = {};
-  try { manifest = typeof __bbBgManifest === 'string' ? JSON.parse(__bbBgManifest) : {}; } catch (e) {}
   var extId = (typeof __bbBgExtId === 'string') ? __bbBgExtId : '';
   var baseURL = (typeof __bbBgBaseURL === 'string') ? __bbBgBaseURL : '';
   var messages = {};
   try { messages = typeof __bbBgMessages === 'string' ? JSON.parse(__bbBgMessages) : {}; } catch (e) {}
+  var manifest = {};
+  try {
+    // Match Chrome: getManifest() returns the manifest with __MSG_<key>__ substituted from the
+    // default-locale messages (name, description, …), so getManifest().name is the localized name.
+    var __bbManifestJSON = (typeof __bbBgManifest === 'string' ? __bbBgManifest : '{}')
+      .replace(/__MSG_(@?\w+)__/g, function (token, key) {
+        var value = messages[key];
+        return (typeof value === 'string') ? value : token;
+      });
+    manifest = JSON.parse(__bbManifestJSON);
+  } catch (e) {}
 
   function parseJSON(s) {
     if (s === null || s === undefined) { return undefined; }

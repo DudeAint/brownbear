@@ -154,9 +154,18 @@
     });
   })();
 
-  var manifest = {};
-  try { manifest = _JSON.parse(data.manifestJSON || "{}"); } catch (e) { manifest = {}; }
   var messages = data.messages || {};
+  var manifest = {};
+  try {
+    // Chrome substitutes __MSG_<key>__ in the manifest that getManifest() returns (name, description,
+    // action.default_title, …) from the default-locale messages — so an extension that names itself
+    // `__MSG_extName__` reads back its real localized name (e.g. Violentmonkey's popup header). Do the same.
+    var manifestJSON = (data.manifestJSON || "{}").replace(/__MSG_(@?\w+)__/g, function (token, key) {
+      var value = messages[key];
+      return (typeof value === "string") ? value : token;
+    });
+    manifest = _JSON.parse(manifestJSON);
+  } catch (e) { manifest = {}; }
 
   // chrome.runtime.lastError slot for this page. Settable so the message/port paths can set it before
   // invoking a callback (Chrome semantics), then clear it.
