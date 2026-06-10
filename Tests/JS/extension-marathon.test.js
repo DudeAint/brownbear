@@ -1218,6 +1218,30 @@ function runExtensionSpecificTests(ctx, name) {
         });
     }
 
+    if (name === "google-keep") {
+        // Google Keep reads chrome.identity.AccountStatus.ANY at boot — a missing enum threw
+        // "Cannot read properties of undefined (reading 'ANY')" and aborted the worker.
+        test("google-keep: chrome.identity.AccountStatus enum exists (SYNC/ANY)", function() {
+            assertObject(c.identity.AccountStatus, "identity.AccountStatus");
+            assertString(c.identity.AccountStatus.ANY, "identity.AccountStatus.ANY");
+            assertString(c.identity.AccountStatus.SYNC, "identity.AccountStatus.SYNC");
+        });
+    }
+
+    if (name === "toby" || name === "json-viewer") {
+        // Toby + JSON Viewer register chrome.omnibox.onInputChanged/onInputEntered at boot. The namespace
+        // was absent → "Cannot read properties of undefined (reading 'onInputEntered')" aborted the worker.
+        // Inert on iOS (keyword input isn't routed to extensions yet), but the surface must exist.
+        test(name + ": chrome.omnibox surface exists (inert keyword events)", function() {
+            assertObject(c.omnibox, "omnibox");
+            assertEvent(c.omnibox.onInputChanged, "omnibox.onInputChanged");
+            assertEvent(c.omnibox.onInputEntered, "omnibox.onInputEntered");
+            assertFunction(c.omnibox.setDefaultSuggestion, "omnibox.setDefaultSuggestion");
+            assert.doesNotThrow(function () { c.omnibox.onInputEntered.addListener(function () {}); },
+                "omnibox.onInputEntered.addListener must not throw");
+        });
+    }
+
     if (name === "browsec") {
         test("browsec: chrome.proxy.settings.get/set/clear/onChange exist", function() {
             assertFunction(c.proxy.settings.get, "proxy.settings.get");
@@ -1308,6 +1332,23 @@ const EXTENSIONS_TO_TEST = [
     "evernote",
     "pinterest",
     "ublacklist",
+    // Wave 8 (batch)
+    "google-docs-offline",
+    "google-keep",
+    "adobe-acrobat",
+    "malwarebytes",
+    "mcafee-webadvisor",
+    "zoom-scheduler",
+    "rakuten",
+    "onetab",
+    "toby",
+    "video-speed-controller",
+    "web-scraper",
+    "colorpick-eyedropper",
+    "reader-mode",
+    "volume-master",
+    "boomerang-gmail",
+    "json-viewer",
 ];
 
 console.log("BrownBear Extension Marathon Harness");
