@@ -97,6 +97,20 @@ final class InjectionOrchestrator {
     // MARK: - Setup
 
     private func configure() {
+        // requestIdleCallback / cancelIdleCallback polyfill — FIRST, so it precedes every other script in
+        // both worlds. WebKit ships neither in any JS world (Safari has never implemented them); Chrome has
+        // both in every window context, so an extension content script or userscript that calls
+        // requestIdleCallback (ScriptCat's content runtime does) otherwise throws a bare ReferenceError and
+        // dies. Page world (page scripts + MAIN-world userscripts) AND our isolated content world (content
+        // scripts + isolated userscripts); NOT the background JSContext — service workers lack rIC in Chrome.
+        for world in [WKContentWorld.page, contentWorld] {
+            let idlePolyfill = WKUserScript(source: Self.bootstrapSource("brownbear-idle-callback"),
+                                            injectionTime: .atDocumentStart,
+                                            forMainFrameOnly: false,
+                                            in: world)
+            userContentController.addUserScript(idlePolyfill)
+        }
+
         // Userscript runtime.
         userContentController.addScriptMessageHandler(router,
                                                       contentWorld: contentWorld,
