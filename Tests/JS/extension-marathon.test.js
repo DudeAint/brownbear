@@ -510,6 +510,24 @@ function runCoreShimTests(ctx, extName) {
         assert.ok(/\.(js|html)$/i.test(ctx.location.href), "location.href ends in a script/page filename: " + ctx.location.href);
     });
 
+    // The worker's own location.origin MUST be the chrome-extension tuple origin, NOT the URL spec's
+    // opaque "null" (chrome-extension isn't a "special" scheme, so a spec-strict URL impl yields "null").
+    // Chrome gives extension pages a real origin, and managers compare it: Tampermonkey's background
+    // message gate rejects any sender whose origin !== the worker's self.location.origin, so a "null"
+    // origin fails the gate and the popup's loadTree returns empty → blank popup / "unable to load tree".
+    test(extName + ": worker location.origin is the chrome-extension tuple origin (not 'null')", function() {
+        // Expected origin is the scheme+host of the worker's own location (id is the host), e.g.
+        // chrome-extension://brownbear-bitwarden/background.js → chrome-extension://brownbear-bitwarden.
+        var expected = (ctx.location.href.match(/^(chrome-extension:\/\/[^/]+)/) || [])[1];
+        assert.ok(expected, "location.href has a chrome-extension origin: " + ctx.location.href);
+        assert.strictEqual(ctx.location.origin, expected,
+            "location.origin must be the tuple origin, got: " + JSON.stringify(ctx.location.origin));
+        var urlOrigin = vm.runInContext(
+            "new globalThis.URL('" + expected + "/options.html').origin", ctx);
+        assert.strictEqual(urlOrigin, expected,
+            "new URL(chrome-extension://...).origin must be the tuple origin, got: " + JSON.stringify(urlOrigin));
+    });
+
     // chrome.privacy ChromeSettings expose get/set/clear AND onChange (Chrome spec). A VPN extension
     // (VeePN) wraps a privacy setting in a class and calls setting.onChange.addListener at init; a
     // missing onChange crashed module-eval with "this.setting.onChange.addListener is undefined".
