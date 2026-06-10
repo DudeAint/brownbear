@@ -158,5 +158,41 @@ test("page shim carries the rest of the namespaces Tampermonkey's popup reads (a
         "declarativeContent.onPageChanged.addListener must not throw");
 });
 
+// Regression for VeePN's blank popup (device Logs 2026-06-10): "[bb page bundle] ... undefined is not an
+// object (evaluating 'super()')". It was NOT a linker/super() bug — VeePN's popup reads
+// chrome.privacy.network.webRTCIPHandlingPolicy (then chrome.proxy.settings) in CLASS FIELD INITIALIZERS
+// at module-eval, and the page shim had neither namespace (only the background shim did). The undefined
+// read threw inside a constructor; JSC attributed it to the enclosing super(). The page shim must mirror
+// the background's privacy/proxy ChromeSetting surfaces.
+function assertChromeSetting(s, name) {
+    assert.ok(s && typeof s === "object", name + " must be a ChromeSetting object");
+    assert.strictEqual(typeof s.get, "function", name + ".get");
+    assert.strictEqual(typeof s.set, "function", name + ".set");
+    assert.strictEqual(typeof s.clear, "function", name + ".clear");
+    assertEvent(s.onChange, name + ".onChange");
+}
+
+test("page chrome.privacy mirrors the background ChromeSetting surface (VeePN reads it at module-eval)", function () {
+    const c = bootPageShim();
+    assert.ok(c.privacy && c.privacy.network, "chrome.privacy.network must exist");
+    assertChromeSetting(c.privacy.network.webRTCIPHandlingPolicy, "privacy.network.webRTCIPHandlingPolicy");
+    assertChromeSetting(c.privacy.network.networkPredictionEnabled, "privacy.network.networkPredictionEnabled");
+    assertChromeSetting(c.privacy.websites.hyperlinkAuditingEnabled, "privacy.websites.hyperlinkAuditingEnabled");
+    assertChromeSetting(c.privacy.services.passwordSavingEnabled, "privacy.services.passwordSavingEnabled");
+    // The EXACT VeePN access must not throw and must read as a ChromeSetting (not undefined).
+    let threw = false;
+    try { void c.privacy.network.webRTCIPHandlingPolicy.get; } catch (e) { threw = true; }
+    assert.strictEqual(threw, false, "reading chrome.privacy.network.webRTCIPHandlingPolicy must not throw");
+});
+
+test("page chrome.proxy.settings is a ChromeSetting (VeePN's VPN popup reads it next)", function () {
+    const c = bootPageShim();
+    assert.ok(c.proxy, "chrome.proxy must exist on the page");
+    assertChromeSetting(c.proxy.settings, "proxy.settings");
+    assertEvent(c.proxy.onProxyError, "proxy.onProxyError");
+    // VeePN reads chrome.proxy.settings in a field initializer; the chain must resolve, not throw.
+    assert.doesNotThrow(function () { c.proxy.settings.get({}, function () {}); }, "proxy.settings.get must not throw");
+});
+
 console.log("\n" + passed + " passed, " + failed + " failed");
 process.exit(failed === 0 ? 0 : 1);
