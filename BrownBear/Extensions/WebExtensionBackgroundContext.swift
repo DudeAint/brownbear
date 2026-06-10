@@ -136,6 +136,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
             // tagged record. All three happen before the background/module source runs.
             BrownBearIDBStore.shared.install(into: context, namespace: .ext(extensionID), rehydrate: false)
             context.evaluateScript(runtimeJS, withSourceURL: URL(string: "brownbear://webext/\(extensionID)/runtime.js"))
+            logSink(makeLog(.debug, "[bb-bg] runtime shim + IndexedDB ready; evaluating background source"))
             BrownBearIDBStore.shared.rehydrate(into: context, namespace: .ext(extensionID))
             if let moduleEntry, let esmRuntimeJS, let moduleSource {
                 // An MV2 background PAGE (uBlock Origin's background.html) can carry classic <script>s
@@ -170,6 +171,15 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
                     }
                 }
             }
+            // DIAGNOSTIC: report that the background source finished its SYNCHRONOUS evaluation, and that
+            // chrome.* is wired. Most managers then do ASYNC init (load their tree from IndexedDB, register
+            // onMessage). If the popup later logs "no __bbBg dispatcher" or "NEVER responded", that async
+            // init is what stalled — which pins the global blank-popup / "unable to load tree" symptom.
+            let chromeReady = context.evaluateScript(
+                "(function(){try{return !!(globalThis.chrome&&globalThis.chrome.runtime);}catch(e){return false;}})()"
+            )?.toBool() ?? false
+            logSink(makeLog(.debug, "[bb-bg] background source evaluated (chrome.runtime ready: \(chromeReady)); "
+                + "async init now running"))
 
             // onInstalled fires with reason 'install' on the first-ever boot and 'update' (carrying the
             // previousVersion) when this id boots at a new version — the Chrome contract; `installReason`
@@ -228,14 +238,32 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
                 if let dispatcher = context.objectForKeyedSubscript("__bbBg"),
                    !dispatcher.isUndefined {
                     dispatcher.invokeMethod(method, withArguments: [messageJSON, senderJSON, responseId])
+                    // DIAGNOSTIC (the global "popup blank / unable to load tree" hunt): a popup's first
+                    // ping (e.g. Tampermonkey's init) blanks the popup if the background never replies.
+                    // After invoking the dispatcher, the continuation is gone iff a listener answered
+                    // synchronously; still parked means a listener returned true (will sendResponse later)
+                    // or NO listener ran at all. Name which, so the device log pins where the bg stalls.
+                    if pendingResponses[responseId] == nil {
+                        logSink(makeLog(.debug, "[bb-bg] \(method) answered synchronously"))
+                    } else {
+                        logSink(makeLog(.debug, "[bb-bg] \(method) deferred — a listener will sendResponse, or none ran; awaiting reply"))
+                    }
                 } else {
+                    logSink(makeLog(.warn, "[bb-bg] \(method): no __bbBg dispatcher — background never finished init "
+                        + "(stalled before registering onMessage). The popup/dashboard will hang/blank waiting on it."))
                     resolveResponse(responseId, payload: nil)
                     return
                 }
 
                 // Don't leak a continuation if a listener returns `true` then never responds.
                 queue.asyncAfter(deadline: .now() + 30) { [weak self] in
-                    self?.resolveResponse(responseId, payload: nil)
+                    guard let self else { return }
+                    if self.pendingResponses[responseId] != nil {
+                        self.logSink(self.makeLog(.warn, "[bb-bg] \(method) NEVER responded within 30s — the onMessage "
+                            + "handler stalled (its async work, e.g. an IndexedDB read, never completed). This is the "
+                            + "root of the blank popup / 'unable to load tree'."))
+                    }
+                    self.resolveResponse(responseId, payload: nil)
                 }
             }
         }
