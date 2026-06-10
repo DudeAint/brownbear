@@ -318,12 +318,9 @@ function buildWorkerContext(extId, baseURL, manifestJSON, messagesJSON) {
     };
     ctx.sessionStorage = ctx.localStorage;
 
-    // location for relative URL resolution
-    ctx.location = {
-        href: baseURL || "chrome-extension://test-extension-id/",
-        origin: "chrome-extension://test-extension-id",
-        protocol: "chrome-extension:"
-    };
+    // location is intentionally LEFT UNSET so the real shim DERIVES it from the manifest background
+    // entry (a SW's location.href is its script URL, e.g. .../background.js — webpack SWs branch on
+    // location.href.includes("background")). Asserted by "shim derives a script-URL location".
 
     ctx.navigator = {
         language: "en-US",
@@ -500,6 +497,28 @@ function runCoreShimTests(ctx, extName) {
         // Chrome-specific lifecycle events that update-aware extensions (Tampermonkey watchdog) register.
         assertEvent(c.runtime.onBrowserUpdateAvailable, "runtime.onBrowserUpdateAvailable");
         assertEvent(c.runtime.onRestartRequired, "runtime.onRestartRequired");
+    });
+
+    // The SW's own location.href is its SCRIPT URL (e.g. .../background.js), not the bare origin. The
+    // harness leaves location unset so the shim must DERIVE it from the manifest background entry;
+    // webpack-bundled SWs read location.href.includes("background") to branch SW-vs-page (Browsec
+    // messaged itself → "Receiving end does not exist" when location was only the origin).
+    test(extName + ": shim derives a script-URL location (not the bare origin)", function() {
+        assertObject(ctx.location, "location");
+        assert.ok(typeof ctx.location.href === "string" && ctx.location.href.length > 0, "location.href set");
+        assert.notStrictEqual(ctx.location.href, "chrome-extension://" + extName + "/", "location is a script URL, not the bare origin");
+        assert.ok(/\.(js|html)$/i.test(ctx.location.href), "location.href ends in a script/page filename: " + ctx.location.href);
+    });
+
+    // chrome.privacy ChromeSettings expose get/set/clear AND onChange (Chrome spec). A VPN extension
+    // (VeePN) wraps a privacy setting in a class and calls setting.onChange.addListener at init; a
+    // missing onChange crashed module-eval with "this.setting.onChange.addListener is undefined".
+    test(extName + ": chrome.privacy.* settings expose onChange (ChromeSetting shape)", function() {
+        assertObject(c.privacy, "privacy");
+        assertEvent(c.privacy.network.webRTCIPHandlingPolicy.onChange, "privacy.network.webRTCIPHandlingPolicy.onChange");
+        assertEvent(c.privacy.network.networkPredictionEnabled.onChange, "privacy.network.networkPredictionEnabled.onChange");
+        assertEvent(c.privacy.websites.hyperlinkAuditingEnabled.onChange, "privacy.websites.hyperlinkAuditingEnabled.onChange");
+        assertFunction(c.privacy.network.webRTCIPHandlingPolicy.set, "privacy ChromeSetting.set");
     });
 
     // storage

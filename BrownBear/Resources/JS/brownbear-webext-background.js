@@ -1452,9 +1452,18 @@
       globalThis.FileReader = BBFileReader;
     }
 
-    // The service worker's own location (its script's URL). Extensions read location.origin/href.
+    // The service worker's own location IS its SCRIPT URL (e.g. .../background.js), NOT the bare origin.
+    // Webpack-bundled SWs read `location.href.includes("background")` to tell SW-vs-page context and
+    // branch (call a service directly vs sendMessage to "the background"); given only the origin, every
+    // module thinks it is a page and messages itself → "Receiving end does not exist" (Browsec). Use the
+    // manifest's background entry (MV3 service_worker, or an MV2 background page), default background.js.
     if (typeof globalThis.location === 'undefined') {
-      try { globalThis.location = new globalThis.URL(baseURL || 'chrome-extension://invalid/'); } catch (e) { /* leave undefined */ }
+      var __bbBgEntry = (manifest && manifest.background
+        && (manifest.background.service_worker || manifest.background.page)) || 'background.js';
+      try {
+        globalThis.location = new globalThis.URL((baseURL || 'chrome-extension://invalid/')
+          + String(__bbBgEntry).replace(/^\//, ''));
+      } catch (e) { /* leave undefined */ }
     }
 
     // performance.now() — high-res-ish via Date (JSC has Date). timeOrigin anchors at boot.
@@ -2530,7 +2539,11 @@
     return {
       get: function (details, cb) { var r = { value: _value, levelOfControl: 'controllable_by_this_extension' }; if (typeof cb === 'function') { cb(r); return undefined; } return Promise.resolve(r); },
       set: function (details, cb) { if (details && 'value' in details) { _value = details.value; } if (typeof cb === 'function') { cb(); return undefined; } return Promise.resolve(); },
-      clear: function (details, cb) { _value = undefined; if (typeof cb === 'function') { cb(); return undefined; } return Promise.resolve(); }
+      clear: function (details, cb) { _value = undefined; if (typeof cb === 'function') { cb(); return undefined; } return Promise.resolve(); },
+      // Every Chrome ChromeSetting (privacy.*, proxy.settings) exposes onChange. Extensions that wrap a
+      // privacy setting in a class call `setting.onChange.addListener` unconditionally at init — VeePN
+      // (which locks WebRTC) crashed module-eval on `this.setting.onChange.addListener` without it.
+      onChange: makeEvent([])
     };
   }
   var privacy = {
