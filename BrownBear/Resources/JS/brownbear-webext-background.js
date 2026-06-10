@@ -999,14 +999,55 @@
       };
     }
     if (typeof globalThis.registration === 'undefined') {
+      var __bbRegListeners = {};
+      // A minimal ServiceWorker descriptor for self.registration.serviceWorker /
+      // self.registration.active / self.registration.installing. Extensions like MetaMask check
+      // `registration.serviceWorker.state === "activated"` during their init handshake. Represent
+      // the running worker as already activated — the only honest state in a JSContext (we have
+      // no install/activate lifecycle since the context is headless, not a real browser SW).
+      var __bbSWDescriptor = { state: 'activated', scriptURL: baseURL + 'service-worker.js',
+        addEventListener: function () {}, removeEventListener: function () {}, dispatchEvent: function () { return true; } };
       globalThis.registration = {
         scope: baseURL,
-        active: null, installing: null, waiting: null,
+        // Report as activated — headless JSC has no pending installation lifecycle.
+        active: __bbSWDescriptor, installing: null, waiting: null,
+        // registration.serviceWorker — the controller descriptor (navigator.serviceWorker.controller
+        // shape). MetaMask checks `registration.serviceWorker.state === 'activated'` at boot; without
+        // this property it throws "Cannot read properties of undefined (reading 'state')".
+        serviceWorker: __bbSWDescriptor,
         unregister: function () { return Promise.resolve(true); },
         update: function () { return Promise.resolve(); },
         showNotification: function () { return Promise.resolve(); },
-        getNotifications: function () { return Promise.resolve([]); }
+        getNotifications: function () { return Promise.resolve([]); },
+        // Service workers use self.registration.addEventListener('updatefound', ...) to track SW
+        // lifecycle updates. JSC's ServiceWorkerRegistration has addEventListener/dispatchEvent;
+        // our minimal stub was missing them and Momentum's serviceWorker.js crashed on it.
+        addEventListener: function (type, listener) {
+          if (typeof listener !== 'function') { return; }
+          (__bbRegListeners[type] = __bbRegListeners[type] || []).push(listener);
+        },
+        removeEventListener: function (type, listener) {
+          var arr = __bbRegListeners[type]; if (!arr) { return; }
+          var i = arr.indexOf(listener); if (i >= 0) { arr.splice(i, 1); }
+        },
+        dispatchEvent: function (event) {
+          var arr = __bbRegListeners[event && event.type];
+          if (!arr) { return true; }
+          arr.slice().forEach(function (l) { try { l(event); } catch (e) {} });
+          return !(event && event.defaultPrevented);
+        }
       };
+      // MetaMask (and other SW bundles compiled via webpack) alias `var a = globalThis.self` and
+      // then access `a.serviceWorker.state`. In a real extension service worker, `self` is the
+      // ServiceWorkerGlobalScope itself (i.e. self === globalThis), and `self.serviceWorker` is
+      // the ServiceWorker descriptor (same as registration.active). Mirror both so bundles that
+      // do `globalThis.self.serviceWorker.state` don't crash with "reading 'state' of undefined".
+      if (typeof globalThis.self === 'undefined') {
+        globalThis.self = globalThis;
+      }
+      if (typeof globalThis.serviceWorker === 'undefined') {
+        globalThis.serviceWorker = __bbSWDescriptor;
+      }
     }
 
     // --- URL / URLSearchParams / location / performance ------------------------------------------
@@ -1515,6 +1556,53 @@
       };
     }
 
+    // BroadcastChannel — uBO's scriptlet-filtering.js does `new self.BroadcastChannel('uBO')` at module
+    // eval; its absence ("undefined is not a constructor") aborts the module graph. Same-context
+    // loopback: channels with one name reach each other inside THIS worker; cross-context fan-out
+    // (worker ↔ extension pages) is not bridged — uBO uses the channel for diagnostics traffic, and a
+    // silent channel degrades cleanly where a missing constructor kills boot.
+    if (typeof globalThis.BroadcastChannel === 'undefined') {
+      (function () {
+        var channelsByName = Object.create(null);
+        function BroadcastChannel(name) {
+          this.name = String(name);
+          this.onmessage = null;
+          this.onmessageerror = null;
+          this._listeners = [];
+          this._closed = false;
+          (channelsByName[this.name] = channelsByName[this.name] || []).push(this);
+        }
+        BroadcastChannel.prototype.postMessage = function (message) {
+          var peers = channelsByName[this.name] || [];
+          for (var i = 0; i < peers.length; i++) {
+            var peer = peers[i];
+            if (peer === this || peer._closed) { continue; }
+            (function (p) {
+              setTimeout(function () {
+                var event = { data: message, type: 'message' };
+                try { if (typeof p.onmessage === 'function') { p.onmessage(event); } } catch (e) {}
+                for (var j = 0; j < p._listeners.length; j++) { try { p._listeners[j](event); } catch (e) {} }
+              }, 0);
+            })(peer);
+          }
+        };
+        BroadcastChannel.prototype.addEventListener = function (type, fn) {
+          if (type === 'message' && typeof fn === 'function') { this._listeners.push(fn); }
+        };
+        BroadcastChannel.prototype.removeEventListener = function (type, fn) {
+          var i = this._listeners.indexOf(fn);
+          if (i >= 0) { this._listeners.splice(i, 1); }
+        };
+        BroadcastChannel.prototype.close = function () {
+          this._closed = true;
+          var peers = channelsByName[this.name] || [];
+          var i = peers.indexOf(this);
+          if (i >= 0) { peers.splice(i, 1); }
+        };
+        globalThis.BroadcastChannel = BroadcastChannel;
+      })();
+    }
+
     // CSS.supports — uBO's vapi-common.js:179 calls CSS.supports('selector(a:has(b))') to detect
     // native :has() support at background startup. JSC's headless global has no CSS object, so a
     // bare `CSS.supports(...)` throws "Can't find variable: CSS" and aborts the entire module graph.
@@ -1869,6 +1957,29 @@
       });
       if (typeof cb === 'function') { p.then(function (v) { cb(v); }); return undefined; }
       return p;
+    },
+    // chrome.runtime.sendNativeMessage — native app messaging is not available on iOS (no native
+    // messaging hosts). Reject clearly so extensions that try it get a diagnosable error instead of
+    // a silent undefined call or a hang. The callback form sets lastError and calls back with undefined
+    // (Chrome's error semantics); the Promise form rejects.
+    sendNativeMessage: function (application, message, cb) {
+      var err = { message: 'native messaging is not supported on iOS' };
+      if (typeof cb === 'function') {
+        _bbLastError = err;
+        try { cb(undefined); } finally { _bbLastError = null; }
+        return undefined;
+      }
+      var e = new Error(err.message);
+      e.__bbLastError = true;
+      return Promise.reject(e);
+    },
+    // chrome.runtime.getBrowserInfo — Firefox-originated API that some extensions probe. On Chrome it
+    // does not exist; we return a Chrome-shaped no-op so extensions that guard with
+    // `chrome.runtime.getBrowserInfo?.()` don't throw "not a function" on a direct call.
+    getBrowserInfo: function (cb) {
+      var info = { name: 'BrownBear', vendor: 'BrownBear', version: '1.0.0', buildID: '20240101' };
+      if (typeof cb === 'function') { cb(info); return undefined; }
+      return Promise.resolve(info);
     },
     get lastError() { return _bbLastError; }
   };
@@ -2374,6 +2485,17 @@
     },
     websites: {
       hyperlinkAuditingEnabled: makePrivacySetting()
+    },
+    // chrome.privacy.services — not in the official Chrome extension API docs but accessed by
+    // Bitwarden and LastPass to read/write autofill-related browser-level settings. On iOS these
+    // are no-ops (WKWebView has no autofill-address or credential-save toggle that extensions can
+    // control), but the shape must exist or those extensions throw "Cannot read properties of
+    // undefined" at init time and their content scripts never attach. We provide the same
+    // {get/set/clear} PrivacySetting shape as the rest of chrome.privacy.
+    services: {
+      autofillAddressEnabled:    makePrivacySetting(),
+      autofillCreditCardEnabled: makePrivacySetting(),
+      passwordSavingEnabled:     makePrivacySetting()
     }
   };
 
@@ -2606,6 +2728,11 @@
     return scriptingCall(method, args).then(function (r) { if (r && r.error) { throw new Error(r.error); } return undefined; });
   }
   var scripting = {
+    // chrome.scripting.ExecutionWorld — enum that extensions read by name (e.g.
+    // `world: chrome.scripting.ExecutionWorld.MAIN`). React DevTools, Bitwarden, and several other
+    // MV3 extensions reference it at the call-site rather than as a string literal. Its absence
+    // causes "Cannot read properties of undefined (reading 'MAIN')" and aborts script injection.
+    ExecutionWorld: { ISOLATED: 'ISOLATED', MAIN: 'MAIN', USER_SCRIPT: 'USER_SCRIPT' },
     executeScript: function (injection, cb) { return settleBg(scriptingCall('executeScript', serializeInjection(injection)), cb); },
     insertCSS: function (injection, cb) { return settleBg(scriptingCall('insertCSS', cssInjection(injection)).then(function () { return undefined; }), cb); },
     removeCSS: function (injection, cb) { return settleBg(scriptingCall('removeCSS', cssInjection(injection)).then(function () { return undefined; }), cb); },
@@ -2751,15 +2878,39 @@
     });
   }
   var userScripts = {
-    register: function (scripts, cb) { return settleBg(userScriptsCall('register', { scripts: scripts || [] }).then(function () { return undefined; }), cb); },
+    // register/unregister/getScripts are called by uBO Lite's registerSandboxFilters.register() without
+    // a try/catch around each await. If any of them reject, register() throws uncaught, and
+    // registerSandboxFilters.pendingOp (a module-level singleton in filter-manager.js) becomes a
+    // permanently-rejected Promise. Every subsequent call to registerSandboxFilters() then returns an
+    // immediately-rejected Promise via .then(() => register()) chained on the poisoned pendingOp, which
+    // propagates through registerDeclarativeAssets() → the 'setFilteringMode' onMessage case →
+    // onMessage() rejects → onMessage(req).then(callback) skips the callback → the popup/dashboard
+    // message never gets a reply → infinite loading state on the filtering-mode slider.
+    //
+    // Fix: absorb errors at the shim boundary for the three methods called without try/catch in
+    // registerSandboxFilters.register(). On native error they degrade to safe empty values (undefined
+    // for void ops, [] for getScripts) and log the error for diagnosis instead of propagating a
+    // rejection that permanently corrupts the pendingOp singleton.
+    register: function (scripts, cb) {
+      return settleBg(userScriptsCall('register', { scripts: scripts || [] }).then(function () { return undefined; }, function (e) {
+        __bb_log('error', '[userScripts.register] native error (degrading gracefully): ' + (e && e.message ? e.message : e));
+        return undefined;
+      }), cb);
+    },
     update: function (scripts, cb) { return settleBg(userScriptsCall('update', { scripts: scripts || [] }).then(function () { return undefined; }), cb); },
     unregister: function (filter, cb) {
       if (typeof filter === 'function') { cb = filter; filter = null; }
-      return settleBg(userScriptsCall('unregister', { filter: filter || null }).then(function () { return undefined; }), cb);
+      return settleBg(userScriptsCall('unregister', { filter: filter || null }).then(function () { return undefined; }, function (e) {
+        __bb_log('error', '[userScripts.unregister] native error (degrading gracefully): ' + (e && e.message ? e.message : e));
+        return undefined;
+      }), cb);
     },
     getScripts: function (filter, cb) {
       if (typeof filter === 'function') { cb = filter; filter = null; }
-      return settleBg(userScriptsCall('getScripts', { filter: filter || null }), cb);
+      return settleBg(userScriptsCall('getScripts', { filter: filter || null }).catch(function (e) {
+        __bb_log('error', '[userScripts.getScripts] native error (degrading to []): ' + (e && e.message ? e.message : e));
+        return [];
+      }), cb);
     },
     configureWorld: function (properties, cb) { return settleBg(userScriptsCall('configureWorld', { properties: properties || {} }).then(function () { return undefined; }), cb); },
     resetWorldConfiguration: function (worldId, cb) {
@@ -2944,6 +3095,65 @@
       sendMessage: runtime.sendMessage,
       onMessage: runtime.onMessage,
       onRequest: runtime.onMessage
+    },
+    // chrome.dom — content-script utility that exposes openOrClosedShadowRoot(el), which reaches a
+    // CLOSED shadow root (inaccessible via el.shadowRoot) from a privileged content-script world.
+    // WebKit only exposes OPEN roots via shadowRoot; CLOSED ones are inaccessible to any script, so
+    // we return shadowRoot (open) or null instead of throwing "chrome.dom is undefined". Present in
+    // the content-script runtime (brownbear-webext-runtime.js) and needed here too — Bitwarden's
+    // bootstrap content scripts are run from the background via scripting.executeScript and reach
+    // chrome.dom through their bundled chrome reference.
+    dom: {
+      openOrClosedShadowRoot: function (element) {
+        try { return (element && element.shadowRoot) || null; } catch (e) { return null; }
+      }
+    },
+    // chrome.sidePanel — Chrome 114+ side-panel API. Grammarly, Bing, and several productivity
+    // extensions register a side panel. iOS has no persistent side-panel surface, so these resolve
+    // as graceful no-ops (open/setOptions resolve; getOptions returns {}) rather than throwing
+    // "chrome.sidePanel is undefined" and killing the background worker's init flow.
+    sidePanel: {
+      open: function (options, cb) { return settleBg(Promise.resolve(undefined), cb); },
+      setOptions: function (options, cb) { return settleBg(Promise.resolve(undefined), cb); },
+      getOptions: function (options, cb) { return settleBg(Promise.resolve({}), cb); },
+      setPanel: function (options, cb) { return settleBg(Promise.resolve(undefined), cb); },
+      setPanelBehavior: function (behavior, cb) { return settleBg(Promise.resolve(undefined), cb); },
+      getPanelBehavior: function (cb) { return settleBg(Promise.resolve({ openPanelOnActionClick: false }), cb); },
+      onShown: makeEvent([]),
+      onHidden: makeEvent([])
+    },
+    // chrome.devtools — the DevTools extension API. Only loaded when an extension's devtools page is
+    // active; a background service worker that references it unguarded (e.g. React DevTools) gets
+    // "chrome.devtools is undefined" and crashes. Provide an inert namespace: inspectedWindow.eval
+    // and panels.create are no-ops (there is no embedded DevTools on iOS), and network is an empty
+    // event surface. These never fire real events; they exist so registration doesn't throw.
+    devtools: {
+      inspectedWindow: {
+        eval: function (expression, options, cb) {
+          if (typeof options === 'function') { cb = options; }
+          if (typeof cb === 'function') { cb(undefined, { isException: false }); return undefined; }
+          return Promise.resolve([undefined, { isException: false }]);
+        },
+        reload: function () {},
+        getResources: function (cb) { if (typeof cb === 'function') { cb([]); } },
+        tabId: 0
+      },
+      panels: {
+        create: function (title, iconPath, pagePath, cb) {
+          if (typeof cb === 'function') { cb(null); }
+          return Promise.resolve(null);
+        },
+        elements: { createSidebarPane: function (title, cb) { if (typeof cb === 'function') { cb(null); } } },
+        sources: { createSidebarPane: function (title, cb) { if (typeof cb === 'function') { cb(null); } } },
+        themeName: 'default',
+        openResource: function () {}
+      },
+      network: {
+        addRules: function () {},
+        getHAR: function (cb) { if (typeof cb === 'function') { cb({ entries: [] }); } },
+        onNavigated: makeEvent([]),
+        onRequestFinished: makeEvent([])
+      }
     }
   };
 
@@ -2991,8 +3201,25 @@
       }
 
       if (responded) { return; }
-      if (willRespondAsync) { return; }   // native waits (with a timeout) for an async sendResponse; the
-                                          // tracker stays until sendResponse fires (or the sweep names it)
+      if (willRespondAsync) {
+        // An extension listener returned `true`, claiming it will call sendResponse asynchronously.
+        // Chrome's pattern is `onMessage(req).then(cb)` — if onMessage's promise REJECTS, cb is never
+        // called and the sender hangs forever (uBO Lite's popup showed infinite loading on the slider).
+        // Belt-and-suspenders safety net: if sendResponse hasn't fired within 30s, force-send null so
+        // the sender unblocks with a defined error state rather than hanging forever. 30s is intentionally
+        // longer than the native watchdog (10s) — the watchdog will fire and name the stuck message first,
+        // giving us a log entry; this timer just ensures eventual resolution.
+        var _safetyTimer = setTimeout(function () {
+          if (!responded) {
+            __bb_log('error', '[dispatchMessage] onMessage:' + _mwhat + ' — listener returned true but sendResponse never called after 30s; force-responding null to unblock sender');
+            sendResponse(null);
+          }
+        }, 30000);
+        var _origSendResponse = sendResponse;
+        sendResponse = function (value) { clearTimeout(_safetyTimer); _origSendResponse(value); };
+        return;   // native waits (with a timeout) for an async sendResponse; the
+                  // tracker stays until sendResponse fires (or the sweep names it)
+      }
       _doneTrack();
       // Distinguish "no onMessage listener at all" (→ Chrome's "Could not establish connection.
       // Receiving end does not exist." on the sender) from a listener that declined (received but

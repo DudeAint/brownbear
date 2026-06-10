@@ -288,6 +288,10 @@
         return payload;
       }
       return {
+        // chrome.scripting.ExecutionWorld — enum for world: targets. Content scripts that build
+        // injection payloads with `world: chrome.scripting.ExecutionWorld.MAIN` (React DevTools,
+        // Bitwarden overlay content) would throw "Cannot read properties of undefined" without it.
+        ExecutionWorld: { ISOLATED: 'ISOLATED', MAIN: 'MAIN', USER_SCRIPT: 'USER_SCRIPT' },
         executeScript: function (injection, callback) { return settle(bridge("scripting.executeScript", serialize(injection), token), callback); },
         insertCSS: function (injection, callback) { return settle(bridge("scripting.insertCSS", cssPayload(injection), token).then(function () { return undefined; }), callback); },
         removeCSS: function (injection, callback) { return settle(bridge("scripting.removeCSS", cssPayload(injection), token).then(function () { return undefined; }), callback); }
@@ -614,7 +618,26 @@
         onInstalled: noopEvent,
         connect: runtimeConnect,
         get lastError() { return _bbLastError; },
-        getPlatformInfo: function (cb) { var info = { os: "ios", arch: "arm64", nacl_arch: "arm64" }; if (typeof cb === "function") { cb(info); return undefined; } return _Promise.resolve(info); }
+        getPlatformInfo: function (cb) { var info = { os: "ios", arch: "arm64", nacl_arch: "arm64" }; if (typeof cb === "function") { cb(info); return undefined; } return _Promise.resolve(info); },
+        // chrome.runtime.sendNativeMessage — native app messaging is not supported on iOS. Reject
+        // clearly (callback: sets lastError + calls back with undefined; promise: rejects) so an
+        // extension that probes it gets a diagnosable error instead of a crash on undefined.
+        sendNativeMessage: function (application, message, cb) {
+          var err = { message: "native messaging is not supported on iOS" };
+          if (typeof cb === "function") {
+            _bbLastError = err;
+            try { cb(undefined); } finally { _bbLastError = null; }
+            return undefined;
+          }
+          var e = new Error(err.message); e.__bbLastError = true;
+          return _Promise.reject(e);
+        },
+        // chrome.runtime.getBrowserInfo — Firefox-origin API, probed by Vimium and others.
+        getBrowserInfo: function (cb) {
+          var info = { name: "BrownBear", vendor: "BrownBear", version: "1.0.0", buildID: "20240101" };
+          if (typeof cb === "function") { cb(info); return undefined; }
+          return _Promise.resolve(info);
+        }
       },
       tabs: tabsApi(),
       scripting: scriptingApi(),
@@ -635,6 +658,71 @@
       dom: {
         openOrClosedShadowRoot: function (element) {
           try { return (element && element.shadowRoot) || null; } catch (e) { return null; }
+        }
+      },
+      // chrome.sidePanel — Chrome 114+ side-panel API. Content scripts from Grammarly and other
+      // productivity extensions call sidePanel.open() from a content-script context. iOS has no
+      // persistent side-panel surface, so all methods resolve as graceful no-ops.
+      sidePanel: {
+        open: function (options, cb) {
+          if (typeof options === "function") { cb = options; }
+          if (typeof cb === "function") { cb(); return undefined; }
+          return _Promise.resolve(undefined);
+        },
+        setOptions: function (options, cb) {
+          if (typeof cb === "function") { cb(); return undefined; }
+          return _Promise.resolve(undefined);
+        },
+        getOptions: function (options, cb) {
+          if (typeof options === "function") { cb = options; }
+          if (typeof cb === "function") { cb({}); return undefined; }
+          return _Promise.resolve({});
+        },
+        setPanel: function (options, cb) {
+          if (typeof cb === "function") { cb(); return undefined; }
+          return _Promise.resolve(undefined);
+        },
+        setPanelBehavior: function (behavior, cb) {
+          if (typeof cb === "function") { cb(); return undefined; }
+          return _Promise.resolve(undefined);
+        },
+        getPanelBehavior: function (cb) {
+          var r = { openPanelOnActionClick: false };
+          if (typeof cb === "function") { cb(r); return undefined; }
+          return _Promise.resolve(r);
+        },
+        onShown: noopEvent,
+        onHidden: noopEvent
+      },
+      // chrome.devtools — DevTools extension API. Content scripts in a devtools context (React
+      // DevTools injects content/prepareInjection.js into every tab) reference this namespace.
+      // iOS has no embedded DevTools, so all methods are inert no-ops that don't throw.
+      devtools: {
+        inspectedWindow: {
+          eval: function (expression, options, cb) {
+            if (typeof options === "function") { cb = options; }
+            if (typeof cb === "function") { cb(undefined, { isException: false }); return undefined; }
+            return _Promise.resolve([undefined, { isException: false }]);
+          },
+          reload: function () {},
+          getResources: function (cb) { if (typeof cb === "function") { cb([]); } },
+          tabId: 0
+        },
+        panels: {
+          create: function (title, iconPath, pagePath, cb) {
+            if (typeof cb === "function") { cb(null); }
+            return _Promise.resolve(null);
+          },
+          elements: { createSidebarPane: function (title, cb) { if (typeof cb === "function") { cb(null); } } },
+          sources: { createSidebarPane: function (title, cb) { if (typeof cb === "function") { cb(null); } } },
+          themeName: "default",
+          openResource: function () {}
+        },
+        network: {
+          addRules: function () {},
+          getHAR: function (cb) { if (typeof cb === "function") { cb({ entries: [] }); } },
+          onNavigated: noopEvent,
+          onRequestFinished: noopEvent
         }
       }
     };
