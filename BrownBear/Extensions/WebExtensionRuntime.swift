@@ -441,7 +441,7 @@ class WebExtensionRuntime {
             return
         }
 
-        let messages = await loadMessages(ext, manifest: manifest)
+        let loaded = await loadMessages(ext, manifest: manifest)
         let logStore = self.logStore
         let context = WebExtensionBackgroundContext(
             extensionID: ext.id,
@@ -479,7 +479,8 @@ class WebExtensionRuntime {
                      backgroundSource: source,
                      manifestJSON: ext.manifestJSON,
                      baseURL: ext.baseURLString,
-                     messages: messages,
+                     messages: loaded.messages,
+                     placeholders: loaded.placeholders,
                      installReason: install.reason,
                      previousVersion: install.previousVersion,
                      moduleEntry: moduleEntry,
@@ -601,11 +602,12 @@ class WebExtensionRuntime {
 
     // MARK: - i18n messages
 
-    private func loadMessages(_ ext: WebExtension, manifest: WebExtensionManifest) async -> [String: String] {
+    private func loadMessages(_ ext: WebExtension, manifest: WebExtensionManifest)
+        async -> (messages: [String: String], placeholders: [String: [String: String]]) {
         guard let locale = manifest.defaultLocale,
               let data = await store.file(extensionID: ext.id, path: "_locales/\(locale)/messages.json"),
               let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
-            return [:]
+            return ([:], [:])
         }
         var out: [String: String] = [:]
         for (key, value) in json {
@@ -613,7 +615,7 @@ class WebExtensionRuntime {
                 out[key] = message
             }
         }
-        return out
+        return (out, WebExtensionLocalizer.extractPlaceholders(fromMessagesJSON: json))
     }
 
     // MARK: - Ports (background-side delivery)

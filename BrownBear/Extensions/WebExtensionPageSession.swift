@@ -109,7 +109,7 @@ final class WebExtensionPageSession {
     /// Async because it reads the extension's default-locale i18n messages. Mints the page session
     /// token (so `bind(to:)` can attach the live web view afterwards).
     func makeConfiguration() async -> WKWebViewConfiguration {
-        let messages = await loadMessages()
+        let loaded = await loadMessages()
         let token = router.makePageSession(for: ext.id)
         self.pageToken = token
 
@@ -118,7 +118,8 @@ final class WebExtensionPageSession {
             "extensionId": ext.id,
             "manifestJSON": ext.manifestJSON,
             "baseURL": ext.baseURLString,
-            "messages": messages
+            "messages": loaded.messages,
+            "placeholders": loaded.placeholders
         ]
         let dataJSON = Self.jsonString(bootstrapData)
 
@@ -165,11 +166,11 @@ final class WebExtensionPageSession {
     // MARK: - i18n
 
     /// Load the default-locale messages.json (flattened) for chrome.i18n, mirroring the content side.
-    private func loadMessages() async -> [String: String] {
+    private func loadMessages() async -> (messages: [String: String], placeholders: [String: [String: String]]) {
         guard let locale = ext.manifest?.defaultLocale,
               let data = await store.file(extensionID: ext.id, path: "_locales/\(locale)/messages.json"),
               let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
-            return [:]
+            return ([:], [:])
         }
         var out: [String: String] = [:]
         for (key, value) in json {
@@ -177,7 +178,7 @@ final class WebExtensionPageSession {
                 out[key] = message
             }
         }
-        return out
+        return (out, WebExtensionLocalizer.extractPlaceholders(fromMessagesJSON: json))
     }
 
     // MARK: - storage.onChanged / cookies / notifications push

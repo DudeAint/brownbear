@@ -155,6 +155,8 @@
   })();
 
   var messages = data.messages || {};
+  // messageKey → { placeholderName(lowercased): content } for chrome.i18n named placeholders.
+  var i18nPlaceholders = data.placeholders || {};
   var manifest = {};
   try {
     // Chrome substitutes __MSG_<key>__ in the manifest that getManifest() returns (name, description,
@@ -456,9 +458,26 @@
 
   function i18nGetMessage(key, substitutions) {
     var text = messages[key] || "";
+    // 1. Named placeholders: a message may be "$NAME$ $VERSION$ is available" with a declared
+    //    placeholders map {name:{content:"$1"}, version:{content:"$2"}}. Chrome substitutes $name$ with
+    //    its content (case-insensitive name) BEFORE positional args; without this the literal "$version$"
+    //    leaks into the UI (Tampermonkey's options/popup version line). Unknown $tokens$ are left as-is.
+    var ph = i18nPlaceholders[key];
+    if (ph) {
+      text = text.replace(/\$([A-Za-z0-9_@]+)\$/g, function (whole, name) {
+        var content = ph[name.toLowerCase()];
+        return (typeof content === "string") ? content : whole;
+      });
+    }
+    // 2. Positional substitutions ($1..$9) + the $$ escape — only when args are supplied, so a message
+    //    containing a literal "$5" with no substitutions is left untouched (matches Chrome).
     if (substitutions != null) {
       var subs = _Array.isArray(substitutions) ? substitutions : [substitutions];
-      text = text.replace(/\$(\d+)\$?/g, function (_, n) { var i = parseInt(n, 10) - 1; return subs[i] != null ? subs[i] : ""; });
+      text = text.replace(/\$([1-9])\$?|\$\$/g, function (m, d) {
+        if (m === "$$") { return "$"; }
+        var i = parseInt(d, 10) - 1;
+        return (i >= 0 && i < subs.length && subs[i] != null) ? subs[i] : "";
+      });
     }
     return text;
   }

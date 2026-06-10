@@ -21,6 +21,9 @@
   var baseURL = (typeof __bbBgBaseURL === 'string') ? __bbBgBaseURL : '';
   var messages = {};
   try { messages = typeof __bbBgMessages === 'string' ? JSON.parse(__bbBgMessages) : {}; } catch (e) {}
+  // messageKey → { placeholderName(lowercased): content } for chrome.i18n named placeholders.
+  var i18nPlaceholders = {};
+  try { i18nPlaceholders = typeof __bbBgPlaceholders === 'string' ? JSON.parse(__bbBgPlaceholders) : {}; } catch (e) {}
   var manifest = {};
   try {
     // Match Chrome: getManifest() returns the manifest with __MSG_<key>__ substituted from the
@@ -1839,11 +1842,23 @@
   function getMessage(key, substitutions) {
     var message = messages[key];
     if (message === null || message === undefined) { return ''; }
+    // Named placeholders ($name$ → declared content, e.g. "$1") resolve BEFORE positional args; without
+    // this a message like "$NAME$ $VERSION$ is available" leaks the literal tokens. Unknown left as-is.
+    var ph = i18nPlaceholders[key];
+    if (ph) {
+      message = message.replace(/\$([A-Za-z0-9_@]+)\$/g, function (whole, name) {
+        var content = ph[name.toLowerCase()];
+        return (typeof content === 'string') ? content : whole;
+      });
+    }
+    // Positional substitutions ($1..$9) + the $$ escape — only when args are supplied (a literal "$5"
+    // with no substitutions stays intact, matching Chrome).
     if (substitutions !== null && substitutions !== undefined) {
       var subs = Array.isArray(substitutions) ? substitutions : [substitutions];
-      message = message.replace(/\$(\d+)/g, function (_, digits) {
-        var index = parseInt(digits, 10) - 1;
-        return (index >= 0 && index < subs.length) ? subs[index] : '';
+      message = message.replace(/\$([1-9])\$?|\$\$/g, function (m, d) {
+        if (m === '$$') { return '$'; }
+        var index = parseInt(d, 10) - 1;
+        return (index >= 0 && index < subs.length && subs[index] != null) ? subs[index] : '';
       });
     }
     return message;

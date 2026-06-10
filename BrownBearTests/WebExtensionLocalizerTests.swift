@@ -79,4 +79,21 @@ final class WebExtensionLocalizerTests: XCTestCase {
         let resolved = resolve("__MSG_scriptcat__", messages: ["scriptcat": "ScriptCat"])
         XCTAssertEqual(resolved, "ScriptCat")
     }
+
+    /// chrome.i18n NAMED placeholders are surfaced to the shims so getMessage can resolve `$version$`
+    /// (Tampermonkey's options/popup showed the literal token). The map is messageKey → name.lower →
+    /// content; messages WITHOUT placeholders are omitted; non-dict / contentless entries are skipped.
+    func testExtractsNamedPlaceholders() {
+        let json: [String: Any] = [
+            "update": ["message": "$NAME$ $VERSION$ is available",
+                       "placeholders": ["name": ["content": "$1"], "version": ["content": "$2"]]],
+            "plain": ["message": "no placeholders here"],
+            "weird": ["message": "x", "placeholders": ["bad": "not-a-dict", "empty": [:]]]
+        ]
+        let out = WebExtensionLocalizer.extractPlaceholders(fromMessagesJSON: json)
+        XCTAssertEqual(out["update"]?["name"], "$1")
+        XCTAssertEqual(out["update"]?["version"], "$2")
+        XCTAssertNil(out["plain"], "a message without placeholders is omitted")
+        XCTAssertNil(out["weird"], "non-dict / contentless placeholder entries leave no usable map")
+    }
 }
