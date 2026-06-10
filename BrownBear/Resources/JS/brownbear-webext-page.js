@@ -755,6 +755,22 @@
       onMessage: makeEvent(messageListeners),
       onConnect: makeEvent(connectListeners),
       onInstalled: { addListener: function () {}, removeListener: function () {}, hasListener: function () { return false; } },
+      // Chrome exposes the full runtime-event surface on EVERY extension page, even a popup that never
+      // receives these. Tampermonkey's popup (extension.js) builds its messaging wrapper at boot with an
+      // UNGUARDED `chrome.runtime.onMessageExternal.addListener(...)` / `onConnectExternal.addListener(...)`,
+      // so a missing property threw "Cannot read properties of undefined (reading 'addListener')" and the
+      // whole popup rendered blank. These events legitimately never fire on a page in our model (external
+      // messaging and userScript ports are routed at the worker), so expose them as inert, spec-shaped
+      // events: listeners register without error and simply never get called.
+      onConnectExternal: makeEvent([]),
+      onMessageExternal: makeEvent([]),
+      onUserScriptConnect: makeEvent([]),
+      onUserScriptMessage: makeEvent([]),
+      onStartup: makeEvent([]),
+      onSuspend: makeEvent([]),
+      onSuspendCanceled: makeEvent([]),
+      onUpdateAvailable: makeEvent([]),
+      onRestartRequired: makeEvent([]),
       sendMessage: function () {
         var args = _Array.prototype.slice.call(arguments);
         var cb = (args.length && typeof args[args.length - 1] === "function") ? args.pop() : null;

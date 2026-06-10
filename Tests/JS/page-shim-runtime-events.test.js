@@ -1,0 +1,121 @@
+//
+//  page-shim-runtime-events.test.js
+//  BrownBear
+//
+//  chrome.runtime event surface of the extension-PAGE shim (brownbear-webext-page.js). A popup or
+//  options page is a WKWebView over chrome-extension://; its own <script> tags run synchronously, so
+//  chrome.runtime must already carry the SAME event surface Chrome puts on every extension page —
+//  including the lifecycle/external/userScript events that never actually FIRE on a page.
+//
+//  Regression: Tampermonkey 5.x's popup (action.html → extension.js) builds its messaging wrapper at
+//  boot with an UNGUARDED `chrome.runtime.onMessageExternal.addListener(...)` and
+//  `chrome.runtime.onConnectExternal.addListener(...)`. The page shim only exposed onMessage/onConnect/
+//  onInstalled, so those reads were `undefined` → "Cannot read properties of undefined (reading
+//  'addListener')" threw during the popup's top-level script → the popup rendered BLANK. Fix: expose the
+//  external / userScript / lifecycle runtime events as inert (spec-shaped) events on the page runtime.
+//
+//  Pure Node, no deps: boots the real page shim in a vm with the minimal document-start contract native
+//  bakes into window.__bbExtPage. Run by CI (globs Tests/JS/*.test.js) and locally with
+//  `node Tests/JS/page-shim-runtime-events.test.js`. Exits non-zero on any failure.
+//
+
+"use strict";
+const fs = require("fs");
+const path = require("path");
+const vm = require("vm");
+const assert = require("assert");
+
+const PAGE_SRC = fs.readFileSync(
+    path.resolve(__dirname, "../../BrownBear/Resources/JS/brownbear-webext-page.js"), "utf8");
+
+let passed = 0, failed = 0;
+function test(name, fn) {
+    try { fn(); console.log("  ok   " + name); passed++; }
+    catch (e) { console.log("  FAIL " + name + "\n       " + (e && e.message ? e.message : e)); failed++; }
+}
+
+/** Boot the page shim over a minimal extension-page window and return the assembled `window.chrome`. */
+function bootPageShim(manifest) {
+    const ID = "dhdgffkkebhmkfjojejmpbldmpobfkfo";   // a real (Tampermonkey) id shape; value is irrelevant
+    const win = {};
+    win.window = win; win.self = win; win.globalThis = win;
+    win.console = console;
+    win.navigator = { language: "en-US", userAgent: "Mozilla/5.0", serviceWorker: undefined };
+    win.location = new URL("chrome-extension://" + ID + "/action.html");
+    win.URL = URL; win.JSON = JSON; win.Object = Object; win.Array = Array;
+    win.Promise = Promise; win.Error = Error;
+    win.structuredClone = (typeof structuredClone === "function") ? structuredClone : (x) => JSON.parse(JSON.stringify(x));
+    win.setTimeout = setTimeout; win.clearTimeout = clearTimeout;
+    win.addEventListener = function () {}; win.removeEventListener = function () {}; win.dispatchEvent = function () { return false; };
+    win.document = { addEventListener: function () {}, removeEventListener: function () {}, readyState: "complete", currentScript: null };
+    win.fetch = undefined;   // skip the privileged cross-origin fetch wrapper (needs a real fetch)
+    win.webkit = { messageHandlers: { brownbearWebext: { postMessage: function () { return Promise.resolve({}); } } } };
+    win.__bbExtPage = {
+        token: "tok-test",
+        extensionId: ID,
+        baseURL: "chrome-extension://" + ID + "/",
+        manifestJSON: JSON.stringify(manifest || { manifest_version: 3, name: "t", version: "1" }),
+        messages: {}
+    };
+    vm.createContext(win);
+    vm.runInContext(PAGE_SRC, win, { filename: "brownbear-webext-page.js" });
+    assert.ok(win.__brownbearExtPageReady === true, "page shim should mark itself ready");
+    assert.ok(win.chrome && win.chrome.runtime, "page shim should expose chrome.runtime");
+    return win.chrome;
+}
+
+function assertEvent(obj, name) {
+    assert.ok(obj && typeof obj === "object", name + " should be an event object");
+    assert.strictEqual(typeof obj.addListener, "function", name + ".addListener should be a function");
+    assert.strictEqual(typeof obj.removeListener, "function", name + ".removeListener should be a function");
+    assert.strictEqual(typeof obj.hasListener, "function", name + ".hasListener should be a function");
+}
+
+console.log("page-shim chrome.runtime event surface tests");
+
+test("page runtime exposes the events the popup actually uses (onMessage/onConnect/onInstalled)", function () {
+    const rt = bootPageShim().runtime;
+    assertEvent(rt.onMessage, "runtime.onMessage");
+    assertEvent(rt.onConnect, "runtime.onConnect");
+    assertEvent(rt.onInstalled, "runtime.onInstalled");
+});
+
+test("page runtime exposes external + userScript events (Tampermonkey reads these unguarded at boot)", function () {
+    const rt = bootPageShim().runtime;
+    assertEvent(rt.onConnectExternal, "runtime.onConnectExternal");
+    assertEvent(rt.onMessageExternal, "runtime.onMessageExternal");
+    assertEvent(rt.onUserScriptConnect, "runtime.onUserScriptConnect");
+    assertEvent(rt.onUserScriptMessage, "runtime.onUserScriptMessage");
+});
+
+test("page runtime exposes the SW-lifecycle events (inert on a page, but must exist)", function () {
+    const rt = bootPageShim().runtime;
+    assertEvent(rt.onStartup, "runtime.onStartup");
+    assertEvent(rt.onSuspend, "runtime.onSuspend");
+    assertEvent(rt.onSuspendCanceled, "runtime.onSuspendCanceled");
+    assertEvent(rt.onUpdateAvailable, "runtime.onUpdateAvailable");
+    assertEvent(rt.onRestartRequired, "runtime.onRestartRequired");
+});
+
+test("Tampermonkey's exact unguarded boot accesses no longer throw (popup boots instead of blanking)", function () {
+    const rt = bootPageShim().runtime;
+    // Verbatim shape of extension.js's wrapper `ot`: `function(e){return ke.runtime.onMessageExternal.addListener(e)}`
+    assert.doesNotThrow(function () { rt.onMessageExternal.addListener(function () {}); },
+        "onMessageExternal.addListener must not throw");
+    assert.doesNotThrow(function () { rt.onConnectExternal.addListener(function () {}); },
+        "onConnectExternal.addListener must not throw");
+});
+
+test("inert page events register listeners without firing them (no spurious popup callbacks)", function () {
+    const rt = bootPageShim().runtime;
+    let fired = false;
+    const fn = function () { fired = true; };
+    rt.onMessageExternal.addListener(fn);
+    assert.ok(rt.onMessageExternal.hasListener(fn), "listener should be tracked");
+    rt.onMessageExternal.removeListener(fn);
+    assert.ok(!rt.onMessageExternal.hasListener(fn), "listener should be removable");
+    assert.strictEqual(fired, false, "inert page event must never invoke its listeners");
+});
+
+console.log("\n" + passed + " passed, " + failed + " failed");
+process.exit(failed === 0 ? 0 : 1);
