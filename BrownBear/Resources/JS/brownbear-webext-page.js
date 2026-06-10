@@ -218,6 +218,133 @@
   // page surface is the Chrome-correct ChromeSetting so the popup reads/writes without throwing.
   var proxyApi = { settings: makePrivacySetting(), onProxyError: makeEvent([]) };
 
+  // ---- page-shim ⇄ background-shim namespace parity ----
+  // A popup/options PAGE carries the SAME chrome.* surface as the background for any namespace the
+  // extension is permitted to use. The page shim historically exposed a SUBSET, so a popup that read a
+  // background-only namespace at boot — in a property access OR a class field initializer — threw and
+  // rendered blank (Tampermonkey: webRequest; VeePN: privacy/proxy). Mirror the remaining page-legitimate
+  // namespaces. Surfaces that need a live SW/native (downloads list, idle state, media capture, OS TTS)
+  // resolve empty/inert on a short-lived popup; the real work runs in the SW. NONE may crash boot.
+  // (chrome.devtools is intentionally NOT here — Chrome exposes it only to a devtools_page context.)
+  function pres(value, cb) { return settle(_Promise.resolve(value), cb); }
+  var idleApi = {
+    queryState: function (interval, cb) { return pres("active", cb); },
+    setDetectionInterval: function () {},
+    getAutoLockDelay: function (cb) { return pres(0, cb); },
+    onStateChanged: makeEvent([])
+  };
+  var downloadsApi = {
+    download: function (opts, cb) { return pres(0, cb); },
+    search: function (q, cb) { return pres([], cb); },
+    cancel: function (id, cb) { return pres(undefined, cb); },
+    pause: function (id, cb) { return pres(undefined, cb); },
+    resume: function (id, cb) { return pres(undefined, cb); },
+    erase: function (q, cb) { return pres([], cb); },
+    removeFile: function (id, cb) { return pres(undefined, cb); },
+    acceptDanger: function (id, cb) { return pres(undefined, cb); },
+    getFileIcon: function (id, opts, cb) { return pres("", (typeof opts === "function") ? opts : cb); },
+    open: function () {}, show: function () {}, showDefaultFolder: function () {}, setShelfEnabled: function () {},
+    onCreated: makeEvent([]), onChanged: makeEvent([]), onErased: makeEvent([]), onDeterminingFilename: makeEvent([])
+  };
+  var bookmarksApi = {
+    get: function (id, cb) { return pres([], cb); },
+    getChildren: function (id, cb) { return pres([], cb); },
+    getRecent: function (n, cb) { return pres([], cb); },
+    getTree: function (cb) { return pres([], cb); },
+    getSubTree: function (id, cb) { return pres([], cb); },
+    search: function (q, cb) { return pres([], cb); },
+    create: function (b, cb) { return pres({ id: "0", title: (b && b.title) || "" }, cb); },
+    move: function (id, dest, cb) { return pres({ id: String(id) }, cb); },
+    update: function (id, changes, cb) { return pres({ id: String(id) }, cb); },
+    remove: function (id, cb) { return pres(undefined, cb); },
+    removeTree: function (id, cb) { return pres(undefined, cb); },
+    MAX_WRITE_OPERATIONS_PER_HOUR: 1000000, MAX_SUSTAINED_WRITE_OPERATIONS_PER_MINUTE: 1000000,
+    onCreated: makeEvent([]), onRemoved: makeEvent([]), onChanged: makeEvent([]), onMoved: makeEvent([]),
+    onChildrenReordered: makeEvent([]), onImportBegan: makeEvent([]), onImportEnded: makeEvent([])
+  };
+  var historyApi = {
+    search: function (q, cb) { return pres([], cb); },
+    getVisits: function (d, cb) { return pres([], cb); },
+    addUrl: function (d, cb) { return pres(undefined, cb); },
+    deleteUrl: function (d, cb) { return pres(undefined, cb); },
+    deleteRange: function (r, cb) { return pres(undefined, cb); },
+    deleteAll: function (cb) { return pres(undefined, cb); },
+    onVisited: makeEvent([]), onVisitRemoved: makeEvent([])
+  };
+  var sessionsApi = {
+    getRecentlyClosed: function (filter, cb) { return pres([], (typeof filter === "function") ? filter : cb); },
+    getDevices: function (filter, cb) { return pres([], (typeof filter === "function") ? filter : cb); },
+    restore: function (sessionId, cb) { return pres({}, (typeof sessionId === "function") ? sessionId : cb); },
+    MAX_SESSION_RESULTS: 25,
+    onChanged: makeEvent([])
+  };
+  var searchApi = { query: function (info, cb) { return pres(undefined, cb); } };
+  var pageActionApi = {
+    show: function (id, cb) { return pres(undefined, cb); },
+    hide: function (id, cb) { return pres(undefined, cb); },
+    setTitle: function (d, cb) { return pres(undefined, cb); },
+    getTitle: function (d, cb) { return pres("", cb); },
+    setIcon: function (d, cb) { return pres(undefined, cb); },
+    setPopup: function (d, cb) { return pres(undefined, cb); },
+    getPopup: function (d, cb) { return pres("", cb); },
+    onClicked: makeEvent([])
+  };
+  var sidePanelApi = {
+    open: function (opts, cb) { return pres(undefined, cb); },
+    setOptions: function (opts, cb) { return pres(undefined, cb); },
+    getOptions: function (opts, cb) { return pres({}, (typeof opts === "function") ? opts : cb); },
+    setPanelBehavior: function (b, cb) { return pres(undefined, cb); },
+    getPanelBehavior: function (cb) { return pres({ openPanelOnActionClick: false }, cb); },
+    onShown: makeEvent([]), onHidden: makeEvent([])
+  };
+  var offscreenApi = {
+    createDocument: function (opts, cb) { return pres(undefined, cb); },
+    closeDocument: function (cb) { return pres(undefined, cb); },
+    hasDocument: function (cb) { return pres(false, cb); },
+    Reason: { TESTING: "TESTING", AUDIO_PLAYBACK: "AUDIO_PLAYBACK", IFRAME_SCRIPTING: "IFRAME_SCRIPTING", DOM_SCRAPING: "DOM_SCRAPING", BLOBS: "BLOBS", DOM_PARSER: "DOM_PARSER", USER_MEDIA: "USER_MEDIA", DISPLAY_MEDIA: "DISPLAY_MEDIA", WEB_RTC: "WEB_RTC", CLIPBOARD: "CLIPBOARD", LOCAL_STORAGE: "LOCAL_STORAGE", WORKERS: "WORKERS", BATTERY_STATUS: "BATTERY_STATUS" }
+  };
+  var systemApi = {
+    cpu: { getInfo: function (cb) { var n = (W.navigator && W.navigator.hardwareConcurrency) || 4; var info = { numOfProcessors: n, archName: "arm64", modelName: "Apple silicon", features: [], processors: [] }; for (var i = 0; i < n; i++) { info.processors.push({ usage: { user: 0, kernel: 0, idle: 0, total: 0 } }); } return pres(info, cb); } },
+    memory: { getInfo: function (cb) { return pres({ capacity: 4 * 1024 * 1024 * 1024, availableCapacity: 2 * 1024 * 1024 * 1024 }, cb); } },
+    display: {
+      getInfo: function (opts, cb) {
+        var w = (W.screen && W.screen.width) || 390, h = (W.screen && W.screen.height) || 844, b = { left: 0, top: 0, width: w, height: h };
+        return pres([{ id: "0", name: "BrownBear Display", isPrimary: true, isEnabled: true, isInternal: true, bounds: b, workArea: b, dpiX: 96, dpiY: 96, rotation: 0, overscan: { left: 0, top: 0, right: 0, bottom: 0 } }], (typeof opts === "function") ? opts : cb);
+      },
+      getDisplayLayout: function (cb) { return pres([], cb); }, onDisplayChanged: makeEvent([])
+    },
+    storage: { getInfo: function (cb) { return pres([], cb); }, onAttached: makeEvent([]), onDetached: makeEvent([]) }
+  };
+  var tabCaptureApi = {
+    capture: function (opts, cb) { if (typeof cb === "function") { cb(null); } return undefined; },
+    getCapturedTabs: function (cb) { return pres([], cb); },
+    getMediaStreamId: function (opts, cb) { return settle(_Promise.reject(new Error("Tab capture is not supported on this platform")), (typeof opts === "function") ? opts : cb); },
+    onStatusChanged: makeEvent([])
+  };
+  var desktopCaptureApi = {
+    chooseDesktopMedia: function (sources, targetOrCb, cb) { var callback = (typeof targetOrCb === "function") ? targetOrCb : cb; if (typeof callback === "function") { callback("", { canRequestAudioTrack: false }); } return 0; },
+    cancelChooseDesktopMedia: function () {}
+  };
+  var ttsApi = {
+    speak: function (utt, opts, cb) {
+      if (typeof opts === "function") { cb = opts; opts = null; }
+      var onEvent = (opts && typeof opts.onEvent === "function") ? opts.onEvent : null;
+      if (onEvent) { try { onEvent({ type: "error", charIndex: 0, errorMessage: "TTS engine unavailable on this platform" }); } catch (e) {} }
+      if (typeof cb === "function") { cb(); return undefined; }
+      return _Promise.resolve();
+    },
+    stop: function () {}, pause: function () {}, resume: function () {},
+    isSpeaking: function (cb) { return pres(false, cb); },
+    getVoices: function (cb) { return pres([], cb); },
+    onEvent: makeEvent([])
+  };
+  var ttsEngineApi = {
+    updateVoices: function () {}, sendTtsEvent: function () {}, sendTtsAudio: function () {},
+    onSpeak: makeEvent([]), onSpeakWithAudioStream: makeEvent([]), onStop: makeEvent([]), onPause: makeEvent([]), onResume: makeEvent([]),
+    onInstallLanguageRequest: makeEvent([]), onUninstallLanguageRequest: makeEvent([]), onLanguageStatusRequest: makeEvent([])
+  };
+  var domApi = { openOrClosedShadowRoot: function (el) { try { return (el && el.shadowRoot) || null; } catch (e) { return null; } } };
+
   // chrome.runtime.connect / onConnect long-lived ports (popup/options page = CONNECTOR). Mirrors the
   // content runtime, adapted to the page's 2-arg bridge(api, payload). A synchronous Port buffers
   // postMessage() until the async native id-mint resolves, then flushes; native pushes the worker's
@@ -767,6 +894,21 @@
     userScripts: userScripts,
     privacy: privacyApi,
     proxy: proxyApi,
+    idle: idleApi,
+    downloads: downloadsApi,
+    bookmarks: bookmarksApi,
+    history: historyApi,
+    sessions: sessionsApi,
+    search: searchApi,
+    pageAction: pageActionApi,
+    sidePanel: sidePanelApi,
+    offscreen: offscreenApi,
+    system: systemApi,
+    tabCapture: tabCaptureApi,
+    desktopCapture: desktopCaptureApi,
+    tts: ttsApi,
+    ttsEngine: ttsEngineApi,
+    dom: domApi,
     // chrome.webRequest — exists on every Chrome extension page even though WKWebView can't intercept
     // requests (so the events are inert here, as in the background). The namespace + enums MUST exist:
     // Tampermonkey's popup reads chrome.webRequest.<...> UNGUARDED at boot (incl. a Firefox feature-detect
@@ -825,7 +967,9 @@
       onDOMContentLoaded: makeEvent(webNavLists["webNavigation.onDOMContentLoaded"]),
       onCompleted: makeEvent(webNavLists["webNavigation.onCompleted"]),
       onHistoryStateUpdated: makeEvent(webNavLists["webNavigation.onHistoryStateUpdated"]),
+      onReferenceFragmentUpdated: makeEvent(webNavLists["webNavigation.onReferenceFragmentUpdated"] || []),
       onErrorOccurred: makeEvent(webNavLists["webNavigation.onErrorOccurred"]),
+      onTabReplaced: makeEvent([]),
       getFrame: function (details, cb) { if (typeof cb === "function") { cb(null); return undefined; } return _Promise.resolve(null); },
       getAllFrames: function (details, cb) { if (typeof cb === "function") { cb([]); return undefined; } return _Promise.resolve([]); }
     },

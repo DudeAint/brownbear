@@ -194,5 +194,50 @@ test("page chrome.proxy.settings is a ChromeSetting (VeePN's VPN popup reads it 
     assert.doesNotThrow(function () { c.proxy.settings.get({}, function () {}); }, "proxy.settings.get must not throw");
 });
 
+// Proactive page-shim ⇄ background-shim PARITY. Every popup-blank this round was a namespace the
+// background shim had but the page shim lacked, read at popup boot. Rather than fix them one device
+// report at a time, the page shim now mirrors every page-legitimate background namespace. This test
+// guards the whole set so a future trim can't silently reintroduce the blank-popup class of bug.
+test("page shim exposes every page-legitimate namespace the background shim has (parity)", function () {
+    const c = bootPageShim();
+    const NS = ["runtime", "tabs", "windows", "storage", "cookies", "i18n", "permissions", "management",
+        "scripting", "action", "contextMenus", "notifications", "webNavigation", "webRequest", "alarms",
+        "commands", "declarativeContent", "declarativeNetRequest", "privacy", "proxy", "idle", "downloads",
+        "bookmarks", "history", "sessions", "search", "pageAction", "sidePanel", "offscreen", "system",
+        "tabCapture", "desktopCapture", "tts", "ttsEngine", "dom", "extension", "identity", "userScripts"];
+    const missing = NS.filter(function (n) { return !c[n]; });
+    assert.strictEqual(missing.length, 0, "page shim missing namespaces: " + missing.join(", "));
+    // chrome.devtools is intentionally absent — Chrome only exposes it in a devtools_page context.
+    assert.strictEqual(c.devtools, undefined, "chrome.devtools must NOT be on a normal page");
+});
+
+test("page-legitimate namespace members resolve without throwing (popup boot reads them)", function () {
+    const c = bootPageShim();
+    assert.doesNotThrow(function () {
+        c.idle.queryState(30, function () {}); c.idle.onStateChanged.addListener(function () {});
+        c.downloads.search({}, function () {}); c.downloads.onChanged.addListener(function () {});
+        c.bookmarks.getTree(function () {}); c.history.search({ text: "" }, function () {});
+        c.sessions.getRecentlyClosed(function () {}); c.search.query({ text: "x" }, function () {});
+        c.system.cpu.getInfo(function () {}); c.system.display.getInfo(function () {});
+        c.tabCapture.getCapturedTabs(function () {}); c.desktopCapture.chooseDesktopMedia(["screen"], function () {});
+        c.tts.getVoices(function () {}); c.tts.speak("x", {}); c.ttsEngine.onSpeak.addListener(function () {});
+        c.sidePanel.getOptions(function () {}); c.offscreen.hasDocument(function () {});
+        c.pageAction.onClicked.addListener(function () {}); c.dom.openOrClosedShadowRoot(null);
+    }, "no page-legitimate namespace member may throw at popup boot");
+});
+
+// Regression for iCloud Passwords (device Logs 2026-06-10): its BACKGROUND reads
+// chrome.webNavigation.onTabReplaced.addListener UNGUARDED at boot. The event was missing from both
+// shims -> "undefined is not an object" aborted its service worker. WKWebView never fires onTabReplaced
+// (no tab-replacement), but the event object must exist. (Tested on the page shim here; the background
+// shim's onTabReplaced is covered by the extension marathon's core webNavigation assertions.)
+test("page chrome.webNavigation has onTabReplaced + onReferenceFragmentUpdated (inert, but must exist)", function () {
+    const c = bootPageShim();
+    assertEvent(c.webNavigation.onTabReplaced, "webNavigation.onTabReplaced");
+    assertEvent(c.webNavigation.onReferenceFragmentUpdated, "webNavigation.onReferenceFragmentUpdated");
+    assert.doesNotThrow(function () { c.webNavigation.onTabReplaced.addListener(function () {}); },
+        "onTabReplaced.addListener must not throw (iCloud Passwords reads it at boot)");
+});
+
 console.log("\n" + passed + " passed, " + failed + " failed");
 process.exit(failed === 0 ? 0 : 1);
