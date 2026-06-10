@@ -1200,6 +1200,24 @@ function runExtensionSpecificTests(ctx, name) {
         });
     }
 
+    if (name === "ublacklist") {
+        // uBlacklist (MV3 search-result blocker, 2MB esbuild SW) drives identity (OAuth cloud sync),
+        // alarms, and declarativeNetRequest. Its launchWebAuthFlow needs a presented web view we don't
+        // have yet, so it rejects cleanly (the surface must exist + return a thenable, not be undefined).
+        test("ublacklist: identity + alarms + DNR surfaces exist", function() {
+            assertFunction(c.identity.getRedirectURL, "identity.getRedirectURL");
+            assertFunction(c.identity.launchWebAuthFlow, "identity.launchWebAuthFlow");
+            assertFunction(c.alarms.create, "alarms.create");
+            assertEvent(c.alarms.onAlarm, "alarms.onAlarm");
+            assertFunction(c.declarativeNetRequest.updateDynamicRules, "declarativeNetRequest.updateDynamicRules");
+        });
+        test("ublacklist: identity.launchWebAuthFlow returns a thenable (degrades, no presented UI yet)", function() {
+            var p = c.identity.launchWebAuthFlow({ url: "https://accounts.google.com/o/oauth2/auth" });
+            assert.strictEqual(typeof p.then, "function", "launchWebAuthFlow should return a Promise");
+            p.then(function () {}, function () {});   // swallow the expected rejection
+        });
+    }
+
     if (name === "browsec") {
         test("browsec: chrome.proxy.settings.get/set/clear/onChange exist", function() {
             assertFunction(c.proxy.settings.get, "proxy.settings.get");
@@ -1289,6 +1307,7 @@ const EXTENSIONS_TO_TEST = [
     // Wave 7
     "evernote",
     "pinterest",
+    "ublacklist",
 ];
 
 console.log("BrownBear Extension Marathon Harness");
