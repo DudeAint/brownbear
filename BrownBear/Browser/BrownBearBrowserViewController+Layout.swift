@@ -55,11 +55,23 @@ extension BrownBearBrowserViewController {
         collapsedBottomBar.addGestureRecognizer(
             UITapGestureRecognizer(target: self, action: #selector(expandBottomBarFromCollapsed)))
         view.addSubview(collapsedBottomBar)
+        // The SSL lock sits just left of the domain, like the omnibox's leading glyph. A fixed symbol
+        // config so it can't grow with Dynamic Type and unbalance the centred pill.
+        collapsedLockGlyph.contentMode = .scaleAspectFit
+        collapsedLockGlyph.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
+        collapsedLockGlyph.setContentHuggingPriority(.required, for: .horizontal)
         collapsedHostLabel.font = .systemFont(ofSize: 13, weight: .medium)
         collapsedHostLabel.textColor = .secondaryLabel
         collapsedHostLabel.textAlignment = .center
-        collapsedHostLabel.translatesAutoresizingMaskIntoConstraints = false
-        collapsedBottomBar.addSubview(collapsedHostLabel)
+        // The domain yields (truncates) before the lock does, so a long host can't push the lock off-centre.
+        collapsedHostLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        collapsedHostStack.axis = .horizontal
+        collapsedHostStack.alignment = .center
+        collapsedHostStack.spacing = 5
+        collapsedHostStack.translatesAutoresizingMaskIntoConstraints = false
+        collapsedHostStack.addArrangedSubview(collapsedLockGlyph)
+        collapsedHostStack.addArrangedSubview(collapsedHostLabel)
+        collapsedBottomBar.addSubview(collapsedHostStack)
 
         // Suggestions overlay the page next to the bar; added last so it sits on top.
         omniboxSuggestions.delegate = self
@@ -104,18 +116,19 @@ extension BrownBearBrowserViewController {
             omniboxSuggestions.trailingAnchor.constraint(equalTo: view.trailingAnchor)
         ])
 
-        // Collapsed bottom strip: fills from ~30pt above the safe-area bottom down to the screen edge
-        // (so the home-indicator strip is chrome-coloured, not bare), with the domain centred above the
-        // safe area. Same in both positions — it's just kept at alpha 0 unless the bottom bar is hidden.
+        // Collapsed bottom strip: fills from ~36pt above the safe-area bottom down to the screen edge
+        // (so the home-indicator strip is chrome-coloured, not bare). The lock + domain sit centred and a
+        // little lower — vertically centred in the band just above the safe area, Safari-style — rather
+        // than hugging the top. Same in both positions; kept at alpha 0 unless the bottom bar is hidden.
         NSLayoutConstraint.activate([
             collapsedBottomBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             collapsedBottomBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             collapsedBottomBar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            collapsedBottomBar.topAnchor.constraint(equalTo: guide.bottomAnchor, constant: -30),
-            collapsedHostLabel.topAnchor.constraint(equalTo: collapsedBottomBar.topAnchor, constant: 6),
-            collapsedHostLabel.centerXAnchor.constraint(equalTo: collapsedBottomBar.centerXAnchor),
-            collapsedHostLabel.leadingAnchor.constraint(greaterThanOrEqualTo: collapsedBottomBar.leadingAnchor, constant: 16),
-            collapsedHostLabel.trailingAnchor.constraint(lessThanOrEqualTo: collapsedBottomBar.trailingAnchor, constant: -16)
+            collapsedBottomBar.topAnchor.constraint(equalTo: guide.bottomAnchor, constant: -36),
+            collapsedHostStack.centerYAnchor.constraint(equalTo: guide.bottomAnchor, constant: -14),
+            collapsedHostStack.centerXAnchor.constraint(equalTo: collapsedBottomBar.centerXAnchor),
+            collapsedHostStack.leadingAnchor.constraint(greaterThanOrEqualTo: collapsedBottomBar.leadingAnchor, constant: 16),
+            collapsedHostStack.trailingAnchor.constraint(lessThanOrEqualTo: collapsedBottomBar.trailingAnchor, constant: -16)
         ])
 
         // Top-position: bar at the top, toolbar fixed at the bottom.
@@ -171,6 +184,7 @@ extension BrownBearBrowserViewController {
         chromeHidden = false
         omnibox.alpha = 1
         collapsedBottomBar.alpha = 0   // fully shown in the new layout → no collapsed strip
+        collapsedHostStack.transform = .identity   // clear any in-flight slide-down offset
         bottomChromeBottomConstraint?.constant = keyboardVisible ? -keyboardLiftOverlap : 0
 
         guard animated else { return }
