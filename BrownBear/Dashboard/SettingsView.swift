@@ -17,6 +17,7 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Key.hideBarsOnScroll) private var hideBarsOnScroll = true
     @AppStorage(AppSettings.Key.addressBarPosition) private var addressBarPositionRaw = AddressBarPosition.top.rawValue
     @AppStorage(AppSettings.Key.userScriptInstallPolicy) private var installPolicyRaw = UserScriptInstallPolicy.ask.rawValue
+    @AppStorage(AppSettings.Key.userScriptWorld) private var userScriptWorldRaw = UserScriptWorld.userScript.rawValue
     @State private var isClearing = false
     @State private var didClear = false
     @State private var confirmingClear = false
@@ -61,6 +62,20 @@ struct SettingsView: View {
                 Text("When you open a userscript and a manager extension (ScriptCat, Violentmonkey, …) is "
                     + "installed: ask each time, always use BrownBear's built-in installer, or always hand off "
                     + "to a userscript extension.")
+                    .font(.caption)
+                    .foregroundStyle(BBTheme.Color.textSecondary)
+
+                Picker("Userscript world", selection: $userScriptWorldRaw) {
+                    ForEach(UserScriptWorld.allCases) { world in
+                        Text(world.title).tag(world.rawValue)
+                    }
+                }
+                Text("Where a manager's userscripts run. User Script World (the default) is an isolated "
+                    + "sandbox — like Violentmonkey — so a userscript keeps working even when the page breaks "
+                    + "its own globals (e.g. a blocked tracker poisoning addEventListener), and GM_* APIs are "
+                    + "available. Page (Main) World gives raw page-variable access but no GM_* and is exposed to "
+                    + "that breakage. Manager's choice honors each script's @inject-into/@grant, like Chrome. "
+                    + "Reload pages after changing this.")
                     .font(.caption)
                     .foregroundStyle(BBTheme.Color.textSecondary)
             }
