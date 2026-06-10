@@ -138,7 +138,16 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
             context.evaluateScript(runtimeJS, withSourceURL: URL(string: "brownbear://webext/\(extensionID)/runtime.js"))
             BrownBearIDBStore.shared.rehydrate(into: context, namespace: .ext(extensionID))
             if let moduleEntry, let esmRuntimeJS, let moduleSource {
-                // MV3 module service worker: link the module graph in-context (no native ESM loader).
+                // An MV2 background PAGE (uBlock Origin's background.html) can carry classic <script>s
+                // BEFORE its module entry (lz4 codec, vapi.js before start.js). Evaluate them first, in
+                // document order — exactly the load order the page's HTML parser would give — then link
+                // the module graph. MV3 module workers pass an empty source, so nothing changes for them.
+                if !backgroundSource.isEmpty {
+                    let preludeURL = URL(string: "brownbear://webext/\(extensionID)/background-prelude.js")
+                    context.evaluateScript(backgroundSource, withSourceURL: preludeURL)
+                    context.exception = nil   // a prelude throw is logged by the handler; don't bleed into the link
+                }
+                // MV3 module service worker (or an MV2 page's module entry): link the graph in-context.
                 runModuleWorker(in: context, esmRuntimeJS: esmRuntimeJS,
                                 entryPath: moduleEntry, moduleSource: moduleSource)
             } else {
