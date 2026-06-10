@@ -60,7 +60,10 @@ struct MenuExtensionAction {
     let badgeText: String
     let badgeColor: UIColor
     let badgeTextColor: UIColor
-    let iconPath: String?   // resolved relative to the extension package; nil = generic glyph
+    let iconPath: String?   // action-resolved icon (honours runtime setIcon); nil = none chosen
+    var fallbackIconPath: String?  // the static manifest icon (action default_icon → top-level icons),
+                                   // tried when iconPath is nil or its file can't be loaded, so the row
+                                   // shows the same real icon the dashboard list does — not the glyph
     var hasPopup: Bool = false     // the action declares a default_popup
     var hasOptions: Bool = false   // the manifest declares an options page
 }
@@ -511,15 +514,24 @@ final class BrowserMenuViewController: UIViewController {
         icon.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([icon.widthAnchor.constraint(equalToConstant: 28),
                                      icon.heightAnchor.constraint(equalToConstant: 28)])
-        // Load the extension's own action icon from its package, if it declared one.
-        if let path = action.iconPath {
+        // Load the extension's own icon from its package. Try the action-resolved path first (honours a
+        // runtime setIcon), then the static manifest icon — the exact path the dashboard list loads — so a
+        // stale/absent action icon falls back to the real branded icon here too, not the puzzle glyph.
+        var candidatePaths: [String] = []
+        for path in [action.iconPath, action.fallbackIconPath] {
+            if let path, !path.isEmpty, !candidatePaths.contains(path) { candidatePaths.append(path) }
+        }
+        if !candidatePaths.isEmpty {
             let extensionID = action.extensionID
             Task { @MainActor in
-                if let data = await BrownBearServices.shared.webExtensionStore.file(extensionID: extensionID, path: path),
-                   let image = UIImage(data: data) {
-                    icon.image = image
-                    icon.contentMode = .scaleAspectFit
-                    icon.backgroundColor = .clear
+                for path in candidatePaths {
+                    if let data = await BrownBearServices.shared.webExtensionStore.file(extensionID: extensionID, path: path),
+                       let image = UIImage(data: data) {
+                        icon.image = image
+                        icon.contentMode = .scaleAspectFit
+                        icon.backgroundColor = .clear
+                        break
+                    }
                 }
             }
         }
