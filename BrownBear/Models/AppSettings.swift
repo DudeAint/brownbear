@@ -152,6 +152,16 @@ enum AppSettings {
         static let addressBarPosition = "bbAddressBarPosition"
         static let userScriptInstallPolicy = "bbUserScriptInstallPolicy"
         static let userScriptWorld = "bbUserScriptWorld"
+        static let keepVideosInline = "bbKeepVideosInline"
+    }
+
+    /// Keep <video> playing inline by neutralizing scripted/auto fullscreen (the Focus/Player-style
+    /// "player" behavior — handy for automation that needs the page visible while a video plays). Default
+    /// OFF. Read at injection setup; takes effect on the next app launch (the page-world shim is installed
+    /// on the shared content controller at boot).
+    static var keepVideosInline: Bool {
+        get { UserDefaults.standard.bool(forKey: Key.keepVideosInline) }
+        set { UserDefaults.standard.set(newValue, forKey: Key.keepVideosInline) }
     }
 
     /// How a `.user.js` open is routed when userscript-manager extensions are installed. Default `.ask`
