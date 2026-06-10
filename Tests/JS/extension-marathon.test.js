@@ -1349,6 +1349,18 @@ const EXTENSIONS_TO_TEST = [
     "volume-master",
     "boomerang-gmail",
     "json-viewer",
+    // Wave 9 (batch)
+    "modheader",
+    "cookie-editor",
+    "octotree",
+    "sponsorblock",
+    "return-youtube-dislike",
+    "vue-devtools",
+    "redux-devtools",
+    "window-resizer",
+    "save-to-google-drive",
+    "checker-plus-gmail",
+    "postman-interceptor",
 ];
 
 console.log("BrownBear Extension Marathon Harness");
