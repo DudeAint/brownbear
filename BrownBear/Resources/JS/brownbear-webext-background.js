@@ -1204,6 +1204,40 @@
       return s;
     };
 
+    // DOMException — a Web/DOM global JSC does NOT provide (it's not an ECMAScript builtin). The shim
+    // already reaches for `globalThis.DOMException` in several places (AbortError, structuredClone's
+    // DataCloneError) and falls back to Error, but bundles that REFERENCE the constructor directly —
+    // core-js's web.dom-exception module does `DOMException.prototype` at install (Proton Pass) — throw
+    // "Cannot read properties of undefined (reading 'prototype')" when it's absent. Provide a spec-ish
+    // DOMException with the legacy error-code table so `e.code`/`e.name`/`instanceof Error` all hold.
+    if (typeof globalThis.DOMException !== 'function') {
+      var DOM_EXC_CODES = {
+        IndexSizeError: 1, HierarchyRequestError: 3, WrongDocumentError: 4, InvalidCharacterError: 5,
+        NoModificationAllowedError: 7, NotFoundError: 8, NotSupportedError: 9, InUseAttributeError: 10,
+        InvalidStateError: 11, SyntaxError: 12, InvalidModificationError: 13, NamespaceError: 14,
+        InvalidAccessError: 15, SecurityError: 18, NetworkError: 19, AbortError: 20, URLMismatchError: 21,
+        QuotaExceededError: 22, TimeoutError: 23, InvalidNodeTypeError: 24, DataCloneError: 25
+      };
+      var BBDOMException = function (message, name) {
+        var err = Error.call(this, message === undefined ? '' : String(message));
+        this.message = message === undefined ? '' : String(message);
+        this.name = name === undefined ? 'Error' : String(name);
+        this.code = DOM_EXC_CODES[this.name] || 0;
+        if (err && err.stack) { this.stack = err.stack; }
+      };
+      BBDOMException.prototype = Object.create(Error.prototype);
+      BBDOMException.prototype.constructor = BBDOMException;
+      BBDOMException.prototype.name = 'Error';
+      // Legacy numeric code constants live on both the constructor and its prototype (Chrome shape).
+      Object.keys(DOM_EXC_CODES).forEach(function (k) {
+        var constName = k.replace(/Error$/, '').replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase() + '_ERR';
+        BBDOMException[constName] = DOM_EXC_CODES[k];
+        BBDOMException.prototype[constName] = DOM_EXC_CODES[k];
+      });
+      try { Object.defineProperty(BBDOMException, 'name', { value: 'DOMException' }); } catch (e) { /* non-writable in some engines */ }
+      globalThis.DOMException = BBDOMException;
+    }
+
     if (typeof globalThis.Blob !== 'function') {
       var BBBlob = function (parts, options) {
         var opts = options || {};
@@ -1930,11 +1964,13 @@
     // before any message handlers are installed, leaving the background unable to receive messages.
     onConnectExternal: makeEvent([]),
     onMessageExternal: makeEvent([]),
-    // chrome.runtime.onBrowserUpdateAvailable / onRestartRequired — Chrome-specific lifecycle events
-    // that fire when a browser update is pending or a restart is required. No iOS analog (the app
-    // updates through the App Store, not a background browser process), so these never fire — but
-    // they must exist so extensions that register handlers (e.g. Tampermonkey's update watchdog)
-    // don't throw "Cannot read properties of undefined (reading 'addListener')".
+    // chrome.runtime.onUpdateAvailable — fires when an update to THIS extension is staged, letting a SW
+    // delay the reload until idle. onBrowserUpdateAvailable/onRestartRequired are the browser-update
+    // twins. No iOS analog (the app updates through the App Store, not a background process), so none of
+    // these fire — but they must exist so a background that registers a handler unguarded (Speechify,
+    // Mate Translate: runtime.onUpdateAvailable.addListener at boot; Tampermonkey's update watchdog)
+    // doesn't throw "Cannot read properties of undefined (reading 'addListener')".
+    onUpdateAvailable: makeEvent([]),
     onBrowserUpdateAvailable: makeEvent([]),
     onRestartRequired: makeEvent([]),
     onSuspend: makeEvent([]),
@@ -2512,7 +2548,14 @@
     onUpdated: makeEvent(tabEventLists['tabs.onUpdated']),
     onActivated: makeEvent(tabEventLists['tabs.onActivated']),
     onRemoved: makeEvent(tabEventLists['tabs.onRemoved']),
-    onReplaced: makeEvent([])
+    onReplaced: makeEvent([]),
+    // Tab "highlighting" is multi-select, which iOS's single-tab model has no concept of — no native
+    // source ever fires these, but they must EXIST so a background that registers a listener unguarded
+    // (Speechify's tabs.onHighlighted.addListener at boot) doesn't throw on undefined.onHighlighted.
+    // onHighlightChanged is Chrome's deprecated alias for onHighlighted; some older bundles still use it.
+    onHighlighted: makeEvent([]),
+    onHighlightChanged: makeEvent([]),
+    onZoomChange: makeEvent([])
   };
 
   // chrome.tabGroups — iOS has no tab groups, so this is a non-throwing shim (query → [], get → null,

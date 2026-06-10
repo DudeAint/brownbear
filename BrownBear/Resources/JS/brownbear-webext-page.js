@@ -551,7 +551,12 @@
       onUpdated: makeEvent(tabEventLists["tabs.onUpdated"]),
       onActivated: makeEvent(tabEventLists["tabs.onActivated"]),
       onRemoved: makeEvent(tabEventLists["tabs.onRemoved"]),
-      onReplaced: makeEvent([])
+      onReplaced: makeEvent([]),
+      // Multi-select highlighting + zoom have no iOS analog (single-tab model); inert but present so a
+      // page that registers these unguarded doesn't throw. onHighlightChanged is the deprecated alias.
+      onHighlighted: makeEvent([]),
+      onHighlightChanged: makeEvent([]),
+      onZoomChange: makeEvent([])
     };
   }
 

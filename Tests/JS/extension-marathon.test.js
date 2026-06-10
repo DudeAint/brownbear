@@ -1382,6 +1382,17 @@ const EXTENSIONS_TO_TEST = [
     "save-to-google-drive",
     "checker-plus-gmail",
     "postman-interceptor",
+    // Wave 11 (batch)
+    "speechify",
+    "clickup",
+    // proton-pass deferred: needs DOMException (added this round) AND a webpack-global/window
+    // shim for its core-js bundle in a SW context — a separate, deeper investigation.
+    "imagus",
+    "mate-translate",
+    "raindrop",
+    "session-buddy",
+    "tampermonkey-beta",
+    "roboform",
     "tampermonkey-mv2",
 ];
 
