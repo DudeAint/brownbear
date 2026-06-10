@@ -1178,6 +1178,18 @@ function runExtensionSpecificTests(ctx, name) {
         });
     }
 
+    if (name === "evernote") {
+        // Evernote Web Clipper (MV3) is a popular clipper whose 2MB webpack service worker boots clean.
+        // It uses only the standard surface (tabs/cookies/contextMenus/notifications/scripting); covering
+        // it guards that a large, conventional MV3 webpack SW keeps booting without a TypeError.
+        test("evernote: scripting + cookies + contextMenus + notifications surfaces exist", function() {
+            assertFunction(c.scripting.executeScript, "scripting.executeScript");
+            assertFunction(c.cookies.getAll, "cookies.getAll");
+            assertFunction(c.contextMenus.create, "contextMenus.create");
+            assertFunction(c.notifications.create, "notifications.create");
+        });
+    }
+
     if (name === "browsec") {
         test("browsec: chrome.proxy.settings.get/set/clear/onChange exist", function() {
             assertFunction(c.proxy.settings.get, "proxy.settings.get");
@@ -1264,6 +1276,8 @@ const EXTENSIONS_TO_TEST = [
     "readaloud",
     // Wave 6
     "chrome-remote-desktop",
+    // Wave 7
+    "evernote",
 ];
 
 console.log("BrownBear Extension Marathon Harness");
