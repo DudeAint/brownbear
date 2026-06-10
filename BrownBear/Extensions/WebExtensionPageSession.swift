@@ -123,6 +123,11 @@ final class WebExtensionPageSession {
 
         let controller = WKUserContentController()
         controller.addScriptMessageHandler(router, contentWorld: contentWorld, name: WebExtensionMessageRouter.handlerName)
+        // requestIdleCallback polyfill FIRST (all frames — the dashboard loads its panes in iframes), before
+        // any page script. WebKit ships none; a page that calls it during init (uBlock Origin Lite's
+        // dashboard) would otherwise throw a bare ReferenceError and render blank.
+        controller.addUserScript(WKUserScript(source: Self.idlePolyfillSource,
+                                              injectionTime: .atDocumentStart, forMainFrameOnly: false))
         controller.addUserScript(WKUserScript(source: "window.__bbExtPage = \(dataJSON);",
                                               injectionTime: .atDocumentStart, forMainFrameOnly: true))
         controller.addUserScript(WKUserScript(source: Self.pageRuntimeSource,
@@ -247,6 +252,19 @@ final class WebExtensionPageSession {
                 ?? Bundle.main.url(forResource: "brownbear-webext-page", withExtension: "js", subdirectory: "JS"),
               let source = try? String(contentsOf: url, encoding: .utf8) else {
             return "/* brownbear-webext-page.js missing */"
+        }
+        return source
+    }()
+
+    /// The requestIdleCallback/cancelIdleCallback polyfill. Extension pages (popup/options/dashboard) run
+    /// in their own WKWebView config — NOT the shared content controller — so they need their own copy, or
+    /// a page that calls requestIdleCallback during init (uBlock Origin Lite's dashboard does) throws a bare
+    /// ReferenceError and renders blank. Same shim the page + content worlds get via InjectionOrchestrator.
+    static let idlePolyfillSource: String = {
+        guard let url = Bundle.main.url(forResource: "brownbear-idle-callback", withExtension: "js", subdirectory: nil)
+                ?? Bundle.main.url(forResource: "brownbear-idle-callback", withExtension: "js", subdirectory: "JS"),
+              let source = try? String(contentsOf: url, encoding: .utf8) else {
+            return "/* brownbear-idle-callback.js missing */"
         }
         return source
     }()
