@@ -104,6 +104,42 @@ enum UserScriptInstallPolicy: String, CaseIterable, Identifiable {
     }
 }
 
+/// Which JS world an installed userscript-manager extension's userscripts run in. Managers (ScriptCat,
+/// Tampermonkey) default a script to the page's MAIN world unless it declares `@inject-into content`. In
+/// the MAIN world a userscript shares the page's globals — so a page that breaks its OWN globals (a
+/// blocked analytics agent poisoning `window.addEventListener`, say) takes the userscript down with it.
+/// The isolated "user script" world is a separate JS realm that shares only the DOM: immune to that, and
+/// where the `GM_*` APIs live. Most userscripts work there; only one that must read/override the page's
+/// own JS needs MAIN. (Same axis Violentmonkey gets right by sandboxing GM scripts by default.)
+enum UserScriptWorld: String, CaseIterable, Identifiable {
+    /// Force every manager userscript into the isolated user-script world (immune to page breakage). Default.
+    case userScript
+    /// Force every manager userscript into the page's real MAIN world (raw page access; no `GM_*` there).
+    case main
+    /// Honor the manager's per-script choice (`@inject-into` / `@grant`), exactly like Chrome.
+    case managerChoice
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .userScript: return "User Script World (isolated)"
+        case .main: return "Page (Main) World"
+        case .managerChoice: return "Manager's choice"
+        }
+    }
+
+    /// Map a manager-registered world ("MAIN" / "USER_SCRIPT" / "ISOLATED" / "") to the world BrownBear
+    /// should actually run the script in, per this setting. Pure — unit-tested.
+    func effectiveWorld(registered: String) -> String {
+        switch self {
+        case .userScript: return registered.uppercased() == "MAIN" ? "USER_SCRIPT" : registered
+        case .main: return "MAIN"
+        case .managerChoice: return registered
+        }
+    }
+}
+
 /// Namespaced UserDefaults-backed app preferences. The SwiftUI Settings screen uses `@AppStorage`
 /// on the same keys, so reads here and edits there stay in sync.
 enum AppSettings {
@@ -115,6 +151,7 @@ enum AppSettings {
         static let hideBarsOnScroll = "bbHideBarsOnScroll"
         static let addressBarPosition = "bbAddressBarPosition"
         static let userScriptInstallPolicy = "bbUserScriptInstallPolicy"
+        static let userScriptWorld = "bbUserScriptWorld"
     }
 
     /// How a `.user.js` open is routed when userscript-manager extensions are installed. Default `.ask`
@@ -122,6 +159,15 @@ enum AppSettings {
     static var userScriptInstallPolicy: UserScriptInstallPolicy {
         get { UserScriptInstallPolicy(rawValue: UserDefaults.standard.string(forKey: Key.userScriptInstallPolicy) ?? "") ?? .ask }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.userScriptInstallPolicy) }
+    }
+
+    /// Which world a userscript-manager extension's userscripts run in. Default `.userScript` (isolated),
+    /// so a userscript is immune to a page that breaks its own globals; the Settings picker uses
+    /// @AppStorage on the same key. Read by the content-script router when it hands a manager's scripts
+    /// to the page.
+    static var userScriptWorld: UserScriptWorld {
+        get { UserScriptWorld(rawValue: UserDefaults.standard.string(forKey: Key.userScriptWorld) ?? "") ?? .userScript }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.userScriptWorld) }
     }
 
     /// Where the address bar sits. Default `.top`. Changing it posts `.brownBearChromeLayoutChanged`

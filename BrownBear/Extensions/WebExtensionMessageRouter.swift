@@ -774,7 +774,9 @@ extension WebExtensionMessageRouter {
                     // `world` drives where the loader runs it: MAIN → the page's real main world (injected
                     // as a <script> element); USER_SCRIPT/ISOLATED → our isolated bridge world. MV3
                     // userScript managers (ScriptCat, Tampermonkey) register page-world scripts as MAIN.
-                    "world": userScript.world,
+                    // The user's "Userscript world" setting can override this — default is the isolated
+                    // user-script world, so a userscript is immune to a page breaking its own globals.
+                    "world": AppSettings.userScriptWorld.effectiveWorld(registered: userScript.world),
                     "userScriptMessaging": userScriptMessaging,
                     "manifestJSON": ext.manifestJSON,
                     "baseURL": ext.baseURLString,
