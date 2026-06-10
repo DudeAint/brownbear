@@ -1129,8 +1129,17 @@
         this.host = this.hostname + (this.port ? ':' + this.port : '');
         this.pathname = m[8] || (this.host ? '/' : '');
         this.hash = m[10] || '';
-        var hier = ['http:', 'https:', 'ws:', 'wss:', 'ftp:'].indexOf(this.protocol) >= 0;
-        this.origin = (hier && this.host) ? (this.protocol + '//' + this.host) : 'null';
+        // Origin-bearing schemes. The URL spec gives only http/https/ws/wss/ftp/file a tuple origin and
+        // makes every other scheme opaque ("null") — but Chrome registers chrome-extension (Firefox
+        // moz-extension, Safari safari-web-extension) as a scheme WITH a tuple origin, so an extension
+        // page's `location.origin` is "chrome-extension://<id>", not "null". Extensions rely on this:
+        // Tampermonkey's background message gate rejects any sender whose `origin` doesn't equal the
+        // worker's own `self.location.origin`, so a "null" origin here fails the gate and the popup's
+        // loadTree returns empty → blank popup / "unable to load tree". Match Chrome: give the extension
+        // schemes a real origin too. (`file:` keeps its spec origin behavior — left out deliberately.)
+        var originScheme = ['http:', 'https:', 'ws:', 'wss:', 'ftp:',
+          'chrome-extension:', 'moz-extension:', 'safari-web-extension:'].indexOf(this.protocol) >= 0;
+        this.origin = (originScheme && this.host) ? (this.protocol + '//' + this.host) : 'null';
         this._search = m[9] || '';
         this.searchParams = new globalThis.URLSearchParams(this._search);
       };
@@ -1464,6 +1473,15 @@
         globalThis.location = new globalThis.URL((baseURL || 'chrome-extension://invalid/')
           + String(__bbBgEntry).replace(/^\//, ''));
       } catch (e) { /* leave undefined */ }
+    }
+
+    // WorkerGlobalScope.origin — a real service worker exposes `origin` as a bare global (=== the
+    // tuple location.origin, e.g. "chrome-extension://<id>"), not only as location.origin. Bundled
+    // libraries read `self.origin` directly (origin checks, URL construction); without it they see
+    // `undefined` and either throw or compare against the literal "undefined". Mirror Chrome.
+    if (typeof globalThis.origin === 'undefined' && globalThis.location
+        && typeof globalThis.location.origin === 'string') {
+      try { globalThis.origin = globalThis.location.origin; } catch (e) { /* leave undefined */ }
     }
 
     // performance.now() — high-res-ish via Date (JSC has Date). timeOrigin anchors at boot.
