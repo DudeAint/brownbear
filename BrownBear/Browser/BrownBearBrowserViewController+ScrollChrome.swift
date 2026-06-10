@@ -90,6 +90,7 @@ extension BrownBearBrowserViewController: UIScrollViewDelegate {
                                                : view.safeAreaInsets.top + omniboxBarHeight
             animateChrome(animated) {
                 self.omnibox.alpha = hidden ? 0 : 1   // clipped omnibox fades as the bar rolls away
+                self.collapsedBottomBar.alpha = 0     // the collapsed domain strip is a bottom-mode affordance
                 self.view.layoutIfNeeded()
             }
         case .bottom:
@@ -98,9 +99,16 @@ extension BrownBearBrowserViewController: UIScrollViewDelegate {
             // showChrome / new-page load mid-edit must not drop the omnibox behind the keyboard).
             // Otherwise slide the omnibox + toolbar fully below the screen (bar + toolbar + inset).
             bottomConstraint.constant = keyboardVisible ? -keyboardLiftOverlap : (hidden ? chromeHideDistance : 0)
-            animateChrome(animated) { self.view.layoutIfNeeded() }
+            animateChrome(animated) {
+                // Fade the Safari-style collapsed domain strip in as the bar slides away (never while editing).
+                self.collapsedBottomBar.alpha = (hidden && !self.keyboardVisible) ? 1 : 0
+                self.view.layoutIfNeeded()
+            }
         }
     }
+
+    /// Tap on the collapsed bottom strip → bring the full bottom bar back (Safari behavior).
+    @objc func expandBottomBarFromCollapsed() { showChrome(animated: true) }
 
     /// How far the chrome travels when hidden in the current position: the top bar's collapsible height,
     /// or the full bottom chrome (omnibox + toolbar + home-indicator inset). Also the minimum extra page
