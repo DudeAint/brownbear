@@ -1091,6 +1091,9 @@ const EXTENSIONS_TO_TEST = [
     "ublock-origin",
     "violentmonkey",
     "vimium",
+    // Wave 3
+    "google-translate",
+    "keepa",
 ];
 
 console.log("BrownBear Extension Marathon Harness");
