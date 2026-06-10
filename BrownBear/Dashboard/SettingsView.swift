@@ -18,7 +18,7 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Key.addressBarPosition) private var addressBarPositionRaw = AddressBarPosition.top.rawValue
     @AppStorage(AppSettings.Key.userScriptInstallPolicy) private var installPolicyRaw = UserScriptInstallPolicy.ask.rawValue
     @AppStorage(AppSettings.Key.userScriptWorld) private var userScriptWorldRaw = UserScriptWorld.userScript.rawValue
-    @AppStorage(AppSettings.Key.keepVideosInline) private var keepVideosInline = false
+    @AppStorage(AppSettings.Key.keepVideosInline) private var keepVideosInline = true
     @State private var isClearing = false
     @State private var didClear = false
     @State private var confirmingClear = false
