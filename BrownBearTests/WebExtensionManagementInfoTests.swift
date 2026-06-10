@@ -143,6 +143,45 @@ final class WebExtensionManagementInfoTests: XCTestCase {
                        .init(permissions: ["bookmarks"]))
     }
 
+    // MARK: - chrome.permissions origin containment (uBlock Origin Lite slider regression)
+
+    func testRequestSpecificOriginUnderBroadOptionalAllUrls() throws {
+        // uBOL: declares a broad optional_host_permissions, then requests ONE site when you raise that
+        // site's filtering mode. Must NOT be rejected — Chrome matches by pattern containment.
+        let m = try manifest(["optional_host_permissions": ["<all_urls>"]])
+        XCTAssertEqual(WebExtensionManagementInfo.resolveRequest(.init(origins: ["*://example.com/*"]), manifest: m),
+                       .init(origins: ["*://example.com/*"]))
+    }
+
+    func testRequestSpecificOriginUnderBroadOptionalStarPattern() throws {
+        let m = try manifest(["optional_host_permissions": ["*://*/*"]])
+        XCTAssertEqual(WebExtensionManagementInfo.resolveRequest(.init(origins: ["https://example.com/*"]), manifest: m),
+                       .init(origins: ["https://example.com/*"]))
+        // https-only optional must NOT cover a wildcard-scheme request (that would include http).
+        let httpsOnly = try manifest(["optional_host_permissions": ["https://*/*"]])
+        XCTAssertNil(WebExtensionManagementInfo.resolveRequest(.init(origins: ["*://example.com/*"]), manifest: httpsOnly))
+    }
+
+    func testOriginsCoveredSubdomainAndPathRules() {
+        // *.foo.com covers foo.com itself and any subdomain, but not a sibling domain.
+        XCTAssertTrue(WebExtensionManagementInfo.originsCovered(["https://foo.com/*"], by: ["https://*.foo.com/*"]))
+        XCTAssertTrue(WebExtensionManagementInfo.originsCovered(["https://a.b.foo.com/*"], by: ["https://*.foo.com/*"]))
+        XCTAssertFalse(WebExtensionManagementInfo.originsCovered(["https://foobar.com/*"], by: ["https://*.foo.com/*"]))
+        // A specific declared host does NOT cover a broader requested wildcard host.
+        XCTAssertFalse(WebExtensionManagementInfo.originsCovered(["*://*/*"], by: ["https://foo.com/*"]))
+        // Empty request is trivially covered.
+        XCTAssertTrue(WebExtensionManagementInfo.originsCovered([], by: []))
+    }
+
+    func testContainsHonorsBroadHeldPattern() throws {
+        // After granting <all_urls>, contains() for a specific site is true (held pattern covers it).
+        let m = try manifest(["optional_host_permissions": ["<all_urls>"]])
+        XCTAssertTrue(WebExtensionManagementInfo.contains(.init(origins: ["*://example.com/*"]),
+                                                          manifest: m, granted: .init(origins: ["<all_urls>"])))
+        XCTAssertFalse(WebExtensionManagementInfo.contains(.init(origins: ["*://example.com/*"]),
+                                                           manifest: m, granted: .init()))
+    }
+
     func testRemoveRejectsRequiredPermission() throws {
         let m = try manifest(["permissions": ["tabs"], "optional_permissions": ["bookmarks"]])
         let granted = WebExtensionManagementInfo.PermissionSet(permissions: ["bookmarks"])
