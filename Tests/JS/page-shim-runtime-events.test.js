@@ -117,5 +117,46 @@ test("inert page events register listeners without firing them (no spurious popu
     assert.strictEqual(fired, false, "inert page event must never invoke its listeners");
 });
 
+// Regression for the SECOND Tampermonkey blank-popup cause (device Logs 2026-06-10, post-#224):
+// "undefined is not an object (evaluating 'ye.webRequest.filterResponseData')" — the page shim had no
+// chrome.webRequest, so the popup's unguarded read threw and the popup rendered blank again. The page
+// shim must carry the namespaces every Chrome extension page has, not just the background's.
+test("page chrome.webRequest exists with inert events + enums (popup reads it unguarded at boot)", function () {
+    const c = bootPageShim();
+    assert.ok(c.webRequest && typeof c.webRequest === "object", "chrome.webRequest must exist on the page");
+    assertEvent(c.webRequest.onBeforeRequest, "webRequest.onBeforeRequest");
+    assertEvent(c.webRequest.onHeadersReceived, "webRequest.onHeadersReceived");
+    assertEvent(c.webRequest.onErrorOccurred, "webRequest.onErrorOccurred");
+    assert.strictEqual(c.webRequest.OnBeforeSendHeadersOptions.EXTRA_HEADERS, "extraHeaders",
+        "webRequest enums must be present (managers read them)");
+    assert.strictEqual(c.webRequest.ResourceType.MAIN_FRAME, "main_frame");
+});
+
+test("chrome.webRequest.filterResponseData is undefined (the correct 'not Firefox' signal) and never throws", function () {
+    const c = bootPageShim();
+    // The EXACT device crash: reading chrome.webRequest.filterResponseData. It must read as undefined
+    // (Chrome has no such API — that's how managers detect they're NOT on Firefox), not throw.
+    let value, threw = false;
+    try { value = c.webRequest.filterResponseData; } catch (e) { threw = true; }
+    assert.strictEqual(threw, false, "reading filterResponseData must not throw");
+    assert.strictEqual(value, undefined, "filterResponseData must be undefined (Firefox-only)");
+});
+
+test("page shim carries the rest of the namespaces Tampermonkey's popup reads (alarms/commands/declarativeContent)", function () {
+    const c = bootPageShim();
+    // alarms — page reads !chrome.alarms unguarded; the object must exist.
+    assert.ok(c.alarms && typeof c.alarms.create === "function", "chrome.alarms must exist");
+    assertEvent(c.alarms.onAlarm, "alarms.onAlarm");
+    assert.doesNotThrow(function () { c.alarms.getAll(function () {}); }, "alarms.getAll must not throw");
+    // commands — getAll + events.
+    assert.ok(c.commands && typeof c.commands.getAll === "function", "chrome.commands must exist");
+    assertEvent(c.commands.onCommand, "commands.onCommand");
+    // declarativeContent — onPageChanged (declarative event) + the rule-class constructors.
+    assert.ok(c.declarativeContent && c.declarativeContent.onPageChanged, "chrome.declarativeContent must exist");
+    assert.strictEqual(typeof c.declarativeContent.PageStateMatcher, "function", "PageStateMatcher constructor present");
+    assert.doesNotThrow(function () { c.declarativeContent.onPageChanged.addListener(function () {}); },
+        "declarativeContent.onPageChanged.addListener must not throw");
+});
+
 console.log("\n" + passed + " passed, " + failed + " failed");
 process.exit(failed === 0 ? 0 : 1);
