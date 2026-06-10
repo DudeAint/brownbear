@@ -99,9 +99,15 @@ extension BrownBearBrowserViewController: UIScrollViewDelegate {
             // showChrome / new-page load mid-edit must not drop the omnibox behind the keyboard).
             // Otherwise slide the omnibox + toolbar fully below the screen (bar + toolbar + inset).
             bottomConstraint.constant = keyboardVisible ? -keyboardLiftOverlap : (hidden ? chromeHideDistance : 0)
+            let revealStrip = hidden && !keyboardVisible
+            // Seed a small upward offset so the lock + domain TRAVEL DOWN into place with the collapsing
+            // bar, rather than just popping in. The animation below settles them to rest (.identity).
+            if revealStrip { collapsedHostStack.transform = CGAffineTransform(translationX: 0, y: -10) }
             animateChrome(animated) {
-                // Fade the Safari-style collapsed domain strip in as the bar slides away (never while editing).
-                self.collapsedBottomBar.alpha = (hidden && !self.keyboardVisible) ? 1 : 0
+                // Fade the Safari-style collapsed domain strip in as the bar slides away (never while
+                // editing), sliding the lock + domain down to their resting spot.
+                self.collapsedBottomBar.alpha = revealStrip ? 1 : 0
+                self.collapsedHostStack.transform = revealStrip ? .identity : CGAffineTransform(translationX: 0, y: -10)
                 self.view.layoutIfNeeded()
             }
         }

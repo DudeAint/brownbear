@@ -43,6 +43,12 @@ final class BrownBearBrowserViewController: UIViewController {
     /// Built in +Layout, shown/hidden in +ScrollChrome, its host text refreshed in refreshChrome.
     let collapsedBottomBar = UIView()
     let collapsedHostLabel = UILabel()
+    /// The SSL lock / insecure-warning glyph shown to the LEFT of the domain in the collapsed strip,
+    /// mirroring the omnibox's leading security glyph (lock.fill when secure, warning triangle when not).
+    let collapsedLockGlyph = UIImageView()
+    /// Lock + domain in one horizontal group, so +ScrollChrome can slide the whole identity DOWN into
+    /// place as the bar collapses (rather than the domain just popping in).
+    let collapsedHostStack = UIStackView()
 
     /// The top-chrome's HEIGHT constraint, whose constant the scroll-hide animation drives: full
     /// (safe-area + omnibox) when shown, collapsed to just the safe-area inset when hidden — so the bar
@@ -226,7 +232,12 @@ final class BrownBearBrowserViewController: UIViewController {
     func refreshChrome() {
         let state = tabManager.activeTab?.state ?? NavigationState()
         omnibox.update(with: state)
-        collapsedHostLabel.text = state.displayHost   // shown in the bottom-mode collapsed strip
+        // Bottom-mode collapsed strip: the domain + its SSL lock (same secure/insecure cue as the omnibox).
+        collapsedHostLabel.text = state.displayHost
+        let secure = state.hasOnlySecureContent
+        collapsedLockGlyph.image = UIImage(systemName: secure ? "lock.fill" : "exclamationmark.triangle.fill")
+        collapsedLockGlyph.tintColor = secure ? BrownBearTheme.Palette.secure : BrownBearTheme.Palette.insecure
+        collapsedLockGlyph.isHidden = (state.url == nil)   // no lock on the New Tab page (no URL)
         toolbar.update(canGoBack: state.canGoBack,
                        canGoForward: state.canGoForward,
                        tabCount: tabManager.count)
