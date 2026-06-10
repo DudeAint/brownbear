@@ -369,7 +369,10 @@ class WebExtensionRuntime {
 
     private static func hasBackground(_ ext: WebExtension) -> Bool {
         guard let background = ext.manifest?.background else { return false }
-        return background.serviceWorker != nil || !background.scripts.isEmpty
+        // MV2 `background.page` (uBlock Origin's background.html) boots too: its <script> tags are the
+        // background source, extracted in startContext. Ignoring it left such extensions with NO
+        // background at all — a dead chrome.* surface and a popup waiting forever on a worker.
+        return background.serviceWorker != nil || !background.scripts.isEmpty || background.page != nil
     }
 
     /// Record that an extension's background worker failed to boot (missing/mis-pathed source), so a broken
@@ -401,6 +404,27 @@ class WebExtensionRuntime {
             } else {
                 source = await store.text(extensionID: ext.id, path: serviceWorker) ?? ""
             }
+        } else if let page = background.page, !page.isEmpty {
+            // MV2 background PAGE (uBlock Origin's background.html): the page's <script> tags ARE the
+            // background, in document order. Classic scripts concatenate into the prelude source; a
+            // `type="module"` script becomes the ESM-linker entry (evaluated AFTER the classic prelude —
+            // exactly the order the page's HTML parser would give a deferred module). DOM bits the page
+            // would provide are covered by the worker shim's MV2 document emulation.
+            guard let html = await store.text(extensionID: ext.id, path: page) else {
+                logBootFailure(ext, "background page not found: \(page)")
+                return
+            }
+            let scripts = Self.scriptTags(inBackgroundPage: html, pagePath: page)
+            for tag in scripts {
+                if tag.isModule {
+                    if moduleEntry == nil { moduleEntry = tag.path }
+                    else { logBootFailure(ext, "background page has multiple module scripts; only \(moduleEntry ?? "") is linked") }
+                } else if let text = await store.text(extensionID: ext.id, path: tag.path) {
+                    source += text + "\n;\n"
+                } else {
+                    logBootFailure(ext, "background page script not found: \(tag.path)")
+                }
+            }
         } else {
             for path in background.scripts {
                 if let text = await store.text(extensionID: ext.id, path: path) { source += text + "\n;\n" }
@@ -408,8 +432,8 @@ class WebExtensionRuntime {
         }
         // A declared background that resolves to no source never boots — the extension's whole chrome.*
         // surface is dead. Previously a SILENT return; now logged so "extension X never started" is visible.
-        guard isModuleWorker || !source.isEmpty else {
-            let what = background.serviceWorker ?? background.scripts.joined(separator: ", ")
+        guard isModuleWorker || moduleEntry != nil || !source.isEmpty else {
+            let what = background.serviceWorker ?? background.page ?? background.scripts.joined(separator: ", ")
             logBootFailure(ext, "background source missing/empty: \(what)")
             return
         }
@@ -458,6 +482,33 @@ class WebExtensionRuntime {
                      moduleEntry: moduleEntry,
                      esmRuntimeJS: moduleEntry != nil ? Self.esmRuntimeJS : nil,
                      moduleSource: moduleSource)
+    }
+
+    /// A background page's `<script>` tags, in document order: package path + whether `type="module"`.
+    /// Tolerant tag-level extraction (attribute order varies between builds); `src` resolves against the
+    /// page's directory (root-relative `/x` stands alone), matching how the HTML would load. Inline
+    /// scripts (no src) are skipped — Chrome extension pages under default CSP can't run them anyway.
+    /// Pure — unit-tested (nonisolated: no actor state touched, callable from sync test code).
+    nonisolated static func scriptTags(inBackgroundPage html: String, pagePath: String) -> [(path: String, isModule: Bool)] {
+        var results: [(path: String, isModule: Bool)] = []
+        guard let tagRegex = try? NSRegularExpression(pattern: "<script\\b[^>]*>", options: [.caseInsensitive]),
+              let srcRegex = try? NSRegularExpression(pattern: "src\\s*=\\s*[\"']([^\"']+)[\"']", options: [.caseInsensitive]),
+              let moduleRegex = try? NSRegularExpression(pattern: "type\\s*=\\s*[\"']module[\"']", options: [.caseInsensitive])
+        else { return results }
+        let dir = (pagePath as NSString).deletingLastPathComponent
+        tagRegex.enumerateMatches(in: html, range: NSRange(html.startIndex..., in: html)) { match, _, _ in
+            guard let match, let tagRange = Range(match.range, in: html) else { return }
+            let tag = String(html[tagRange])
+            let tagNSRange = NSRange(tag.startIndex..., in: tag)
+            guard let srcMatch = srcRegex.firstMatch(in: tag, range: tagNSRange),
+                  let srcRange = Range(srcMatch.range(at: 1), in: tag) else { return }
+            var src = String(tag[srcRange])
+            if src.hasPrefix("/") { src.removeFirst() }
+            else if !dir.isEmpty { src = dir + "/" + src }
+            let isModule = moduleRegex.firstMatch(in: tag, range: tagNSRange) != nil
+            results.append((src, isModule))
+        }
+        return results
     }
 
     /// The chrome.runtime.onInstalled detail for this boot, by comparing the stored last-booted version
