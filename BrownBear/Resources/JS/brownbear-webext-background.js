@@ -2980,6 +2980,17 @@
       });
     });
   }
+  // Warn ONCE per worker when an extension toggles individual static rules — iOS compiles packaged static
+  // rulesets into a WKContentRuleList wholesale, so a per-rule disable isn't honored yet. Surfacing it
+  // turns a silent divergence into a diagnosable Logs line (mirrors the blocking-webRequest note above).
+  var __bbWarnedStaticRuleDegrade = false;
+  function __bbNoteStaticRuleDegrade() {
+    if (__bbWarnedStaticRuleDegrade) { return; }
+    __bbWarnedStaticRuleDegrade = true;
+    __bb_log('warn', 'chrome.declarativeNetRequest.updateStaticRules (per-rule enable/disable within a ' +
+      'packaged static ruleset) is not yet honored on iOS — static rulesets compile to a WKContentRuleList ' +
+      'wholesale. Ruleset-level toggling (updateEnabledRulesets) and dynamic/session rules work normally.');
+  }
   var declarativeNetRequest = {
     // Chrome exposes these enums + limits as constants on chrome.declarativeNetRequest; extensions read
     // them directly (e.g. ResourceType.MAIN_FRAME). Their absence throws "undefined is not an object".
@@ -2991,6 +3002,7 @@
     DYNAMIC_RULESET_ID: '_dynamic', SESSION_RULESET_ID: '_session',
     MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES: 30000, MAX_NUMBER_OF_REGEX_RULES: 1000,
     MAX_NUMBER_OF_STATIC_RULESETS: 100, MAX_NUMBER_OF_ENABLED_STATIC_RULESETS: 50,
+    GUARANTEED_MINIMUM_STATIC_RULES: 30000,
     GETMATCHEDRULES_QUOTA_INTERVAL: 600, MAX_GETMATCHEDRULES_CALLS_PER_INTERVAL: 20,
     updateDynamicRules: function (options, cb) { return settleBg(dnrCall('updateDynamicRules', options || {}).then(function () { return undefined; }), cb); },
     getDynamicRules: function (filter, cb) {
@@ -3010,6 +3022,28 @@
     },
     setExtensionActionOptions: function (options, cb) { return settleBg(Promise.resolve(undefined), cb); },
     isRegexSupported: function (regexOptions, cb) { return settleBg(Promise.resolve({ isSupported: true }), cb); },
+    // chrome 120+ static-ruleset management. Adblock Plus / AdBlock (MV3) drive their per-filter
+    // allowlisting through these; the methods were absent, so the FIRST call threw "...is not a function"
+    // inside the SW's async init and broke ruleset configuration. iOS enforces packaged static rulesets
+    // wholesale via a compiled WKContentRuleList — ruleset-level toggling (updateEnabledRulesets) and
+    // dynamic/session rules are honored natively; per-RULE enable/disable within a static ruleset would
+    // require recompiling that list without the disabled IDs (a native follow-up).
+    //
+    // updateStaticRules routes to native (so it works automatically once native gains the method) and,
+    // until then, degrades to a no-op with a single diagnostic rather than rejecting — boot and
+    // ruleset-level blocking are unaffected. The two reads answer locally with Chrome-correct shapes:
+    // nothing is per-rule-disabled yet, and the available static-rule budget is Chrome's guaranteed floor.
+    updateStaticRules: function (options, cb) {
+      return settleBg(dnrCall('updateStaticRules', options || {}).then(function () { return undefined; },
+        function () { __bbNoteStaticRuleDegrade(); return undefined; }), cb);
+    },
+    getDisabledRuleIds: function (options, cb) {
+      if (typeof options === 'function') { cb = options; options = null; }
+      return settleBg(Promise.resolve([]), cb);
+    },
+    getAvailableStaticRuleCount: function (cb) {
+      return settleBg(Promise.resolve(declarativeNetRequest.GUARANTEED_MINIMUM_STATIC_RULES), cb);
+    },
     onRuleMatchedDebug: makeEvent([]),
     MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES: 30000,
     MAX_NUMBER_OF_ENABLED_STATIC_RULESETS: 50,
