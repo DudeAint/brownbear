@@ -37,6 +37,12 @@ final class BrownBearBrowserViewController: UIViewController {
     let contentContainer = UIView()
     // Not `private`: the +Zoom extension (separate file) anchors the zoom HUD above this toolbar.
     let toolbar = BrowserToolbar()
+    /// Bottom-mode only: when the bottom bar hides on scroll, this chrome-coloured strip stays put above
+    /// the home indicator showing just the site's domain (Safari-style), so the bar doesn't vanish into
+    /// the home-indicator area and you still know where you are. Tapping it brings the full bar back.
+    /// Built in +Layout, shown/hidden in +ScrollChrome, its host text refreshed in refreshChrome.
+    let collapsedBottomBar = UIView()
+    let collapsedHostLabel = UILabel()
 
     /// The top-chrome's HEIGHT constraint, whose constant the scroll-hide animation drives: full
     /// (safe-area + omnibox) when shown, collapsed to just the safe-area inset when hidden — so the bar
@@ -220,6 +226,7 @@ final class BrownBearBrowserViewController: UIViewController {
     func refreshChrome() {
         let state = tabManager.activeTab?.state ?? NavigationState()
         omnibox.update(with: state)
+        collapsedHostLabel.text = state.displayHost   // shown in the bottom-mode collapsed strip
         toolbar.update(canGoBack: state.canGoBack,
                        canGoForward: state.canGoForward,
                        tabCount: tabManager.count)

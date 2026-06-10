@@ -45,6 +45,22 @@ extension BrownBearBrowserViewController {
         toolbar.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(toolbar)
 
+        // Bottom-mode collapsed strip: a chrome-coloured bar that fills the home-indicator area with the
+        // site's domain shown above the safe area. Hidden (alpha 0) until the bottom bar scroll-hides;
+        // tapping it brings the full bar back. Added before the suggestions so those still overlay it.
+        collapsedBottomBar.backgroundColor = BrownBearTheme.Palette.chrome
+        collapsedBottomBar.alpha = 0
+        collapsedBottomBar.isUserInteractionEnabled = true
+        collapsedBottomBar.translatesAutoresizingMaskIntoConstraints = false
+        collapsedBottomBar.addGestureRecognizer(
+            UITapGestureRecognizer(target: self, action: #selector(expandBottomBarFromCollapsed)))
+        view.addSubview(collapsedBottomBar)
+        collapsedHostLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        collapsedHostLabel.textColor = .secondaryLabel
+        collapsedHostLabel.textAlignment = .center
+        collapsedHostLabel.translatesAutoresizingMaskIntoConstraints = false
+        collapsedBottomBar.addSubview(collapsedHostLabel)
+
         // Suggestions overlay the page next to the bar; added last so it sits on top.
         omniboxSuggestions.delegate = self
         omniboxSuggestions.translatesAutoresizingMaskIntoConstraints = false
@@ -86,6 +102,20 @@ extension BrownBearBrowserViewController {
 
             omniboxSuggestions.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             omniboxSuggestions.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+        ])
+
+        // Collapsed bottom strip: fills from ~30pt above the safe-area bottom down to the screen edge
+        // (so the home-indicator strip is chrome-coloured, not bare), with the domain centred above the
+        // safe area. Same in both positions — it's just kept at alpha 0 unless the bottom bar is hidden.
+        NSLayoutConstraint.activate([
+            collapsedBottomBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            collapsedBottomBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            collapsedBottomBar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            collapsedBottomBar.topAnchor.constraint(equalTo: guide.bottomAnchor, constant: -30),
+            collapsedHostLabel.topAnchor.constraint(equalTo: collapsedBottomBar.topAnchor, constant: 6),
+            collapsedHostLabel.centerXAnchor.constraint(equalTo: collapsedBottomBar.centerXAnchor),
+            collapsedHostLabel.leadingAnchor.constraint(greaterThanOrEqualTo: collapsedBottomBar.leadingAnchor, constant: 16),
+            collapsedHostLabel.trailingAnchor.constraint(lessThanOrEqualTo: collapsedBottomBar.trailingAnchor, constant: -16)
         ])
 
         // Top-position: bar at the top, toolbar fixed at the bottom.
@@ -140,6 +170,7 @@ extension BrownBearBrowserViewController {
         // the bar would drop back behind the keyboard).
         chromeHidden = false
         omnibox.alpha = 1
+        collapsedBottomBar.alpha = 0   // fully shown in the new layout → no collapsed strip
         bottomChromeBottomConstraint?.constant = keyboardVisible ? -keyboardLiftOverlap : 0
 
         guard animated else { return }
