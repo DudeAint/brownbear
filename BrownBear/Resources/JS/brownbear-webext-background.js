@@ -3311,6 +3311,55 @@
     cancelChooseDesktopMedia: function (id) { /* nothing in flight to cancel */ }
   };
 
+  // Warn ONCE when an extension drives chrome.tts — the MV3 background is a JSContext with no Web Speech
+  // API, so synthesizing audio from the worker would need native AVSpeechSynthesizer (a host follow-up).
+  var __bbWarnedTtsUnavailable = false;
+  function __bbNoteTtsUnavailable() {
+    if (__bbWarnedTtsUnavailable) { return; }
+    __bbWarnedTtsUnavailable = true;
+    __bb_log('warn', 'chrome.tts.speak — the platform speech engine is not wired to the extension service ' +
+      'worker on iOS (no Web Speech API in a JSContext). TTS via chrome.tts fails closed; an extension with ' +
+      'other engines (cloud/in-tab speechSynthesis) falls back to those.');
+  }
+  // chrome.tts — text-to-speech CONSUMER surface (ReadAloud calls speak/stop/pause/resume/isSpeaking/
+  // getVoices via its `brapi = chrome` wrapper). An undefined namespace throws the moment the extension
+  // builds its engine list. getVoices reports none (the OS engine has no JS-enumerable voices here, so the
+  // extension's other engines take over); speak fails closed via an 'error' tts event + one diagnostic.
+  var ttsNS = {
+    speak: function (utterance, options, cb) {
+      if (typeof options === 'function') { cb = options; options = null; }
+      __bbNoteTtsUnavailable();
+      var onEvent = (options && typeof options.onEvent === 'function') ? options.onEvent : null;
+      if (onEvent) {
+        try { onEvent({ type: 'error', charIndex: 0, errorMessage: 'TTS engine unavailable on this platform' }); } catch (e) {}
+      }
+      if (typeof cb === 'function') { cb(); return undefined; }
+      return Promise.resolve();
+    },
+    stop: function () {},
+    pause: function () {},
+    resume: function () {},
+    isSpeaking: function (cb) { if (typeof cb === 'function') { cb(false); return undefined; } return Promise.resolve(false); },
+    getVoices: function (cb) { if (typeof cb === 'function') { cb([]); return undefined; } return Promise.resolve([]); },
+    onEvent: makeEvent([])
+  };
+  // chrome.ttsEngine — for extensions that PROVIDE voices to chrome.tts. We can't route the OS speech
+  // engine to a JS provider, so the registration is inert (events never fire), but the surface must exist
+  // so an engine-provider extension's addListener calls don't throw at boot. updateVoices is a no-op.
+  var ttsEngineNS = {
+    updateVoices: function () {},
+    sendTtsEvent: function () {},
+    sendTtsAudio: function () {},
+    onSpeak: makeEvent([]),
+    onSpeakWithAudioStream: makeEvent([]),
+    onStop: makeEvent([]),
+    onPause: makeEvent([]),
+    onResume: makeEvent([]),
+    onInstallLanguageRequest: makeEvent([]),
+    onUninstallLanguageRequest: makeEvent([]),
+    onLanguageStatusRequest: makeEvent([])
+  };
+
   var chrome = {
     runtime: runtime,
     identity: identity,
@@ -3337,6 +3386,8 @@
     system: systemNS,
     tabCapture: tabCaptureNS,
     desktopCapture: desktopCaptureNS,
+    tts: ttsNS,
+    ttsEngine: ttsEngineNS,
     downloads: downloads,
     contextMenus: contextMenus,
     menus: contextMenus,

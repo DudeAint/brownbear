@@ -1114,6 +1114,46 @@ function runExtensionSpecificTests(ctx, name) {
         });
     }
 
+    if (name === "readaloud") {
+        // Read Aloud (MV3 TTS) calls the full chrome.tts consumer surface via its `brapi = chrome` wrapper
+        // (speak/stop/pause/resume/isSpeaking/getVoices). The namespace was absent → throws the moment it
+        // builds its engine list. The JSContext SW has no speech engine, so getVoices reports none (the
+        // extension's other engines take over) and speak fails closed via an 'error' tts event.
+        test("readaloud: chrome.tts consumer surface exists", function() {
+            assertFunction(c.tts.speak, "tts.speak");
+            assertFunction(c.tts.stop, "tts.stop");
+            assertFunction(c.tts.pause, "tts.pause");
+            assertFunction(c.tts.resume, "tts.resume");
+            assertFunction(c.tts.isSpeaking, "tts.isSpeaking");
+            assertFunction(c.tts.getVoices, "tts.getVoices");
+            assertEvent(c.tts.onEvent, "tts.onEvent");
+        });
+        test("readaloud: tts.getVoices reports none + speak fails closed via an 'error' event", function() {
+            var voices = "unset";
+            c.tts.getVoices(function(v) { voices = v; });
+            assert.ok(Array.isArray(voices) && voices.length === 0, "getVoices yields an empty array");
+            var evt = null;
+            c.tts.speak("hello", { onEvent: function(e) { evt = e; } });
+            assert.ok(evt && evt.type === "error", "speak should fire an 'error' tts event (unavailable)");
+            assert.doesNotThrow(function() { c.tts.stop(); c.tts.pause(); c.tts.resume(); }, "transport no-ops must not throw");
+        });
+        test("readaloud: chrome.ttsEngine provider surface exists (inert, engine can't be routed)", function() {
+            assertEvent(c.ttsEngine.onSpeak, "ttsEngine.onSpeak");
+            assertEvent(c.ttsEngine.onStop, "ttsEngine.onStop");
+            assertFunction(c.ttsEngine.updateVoices, "ttsEngine.updateVoices");
+        });
+    }
+
+    if (name === "colorzilla") {
+        // ColorZilla (MV3 eyedropper) is a minimal tabs/scripting/storage/offscreen extension; it boots
+        // clean and validates the offscreen-document surface a color-picker relies on.
+        test("colorzilla: chrome.offscreen.createDocument/hasDocument exist", function() {
+            assertFunction(c.offscreen.createDocument, "offscreen.createDocument");
+            assertFunction(c.offscreen.hasDocument, "offscreen.hasDocument");
+            assertObject(c.offscreen.Reason, "offscreen.Reason");
+        });
+    }
+
     if (name === "browsec") {
         test("browsec: chrome.proxy.settings.get/set/clear/onChange exist", function() {
             assertFunction(c.proxy.settings.get, "proxy.settings.get");
@@ -1195,6 +1235,9 @@ const EXTENSIONS_TO_TEST = [
     "adblock",
     "dashlane",
     "loom",
+    // Wave 5
+    "colorzilla",
+    "readaloud",
 ];
 
 console.log("BrownBear Extension Marathon Harness");
