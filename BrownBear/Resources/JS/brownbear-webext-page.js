@@ -285,7 +285,10 @@
       return _Promise.resolve();
     }
     return { get: get, set: set, remove: remove, clear: clear,
-             getBytesInUse: getBytesInUse, setAccessLevel: setAccessLevel };
+             getBytesInUse: getBytesInUse, setAccessLevel: setAccessLevel,
+             // Per-area StorageArea.onChanged (Chrome 73+): listener gets (changes) for THIS area only.
+             // uBO Lite's dashboard calls storage.local.onChanged.addListener — its absence threw.
+             onChanged: makeEvent(areaStorageListeners[area] || (areaStorageListeners[area] = [])) };
   }
 
   function getURL(path) {
@@ -416,6 +419,9 @@
   }
 
   var storageListeners = [];
+  // Per-area StorageArea.onChanged listeners (local/sync/session/managed), fanned from the same native
+  // push as the global storage.onChanged — Chrome's per-area listener receives (changes) only.
+  var areaStorageListeners = {};
   var messageListeners = [];
   // Browser-pushed chrome.tabs.* / chrome.webNavigation.* event lists, driven by native via
   // window.__brownbearExtPage.dispatchExtEvent (extension pages DO receive these events).
@@ -804,6 +810,11 @@
       });
       for (var i = 0; i < storageListeners.length; i++) {
         try { storageListeners[i](changes, areaName); } catch (e) {}
+      }
+      // Fan to the matching per-area StorageArea.onChanged listeners (signature: (changes) only).
+      var areaLs = areaStorageListeners[areaName] || [];
+      for (var j = 0; j < areaLs.length; j++) {
+        try { areaLs[j](changes); } catch (e) {}
       }
     },
     dispatchCookieChanged: function (changeJSON) {

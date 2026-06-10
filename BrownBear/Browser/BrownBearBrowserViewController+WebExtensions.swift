@@ -304,16 +304,20 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
 
     // MARK: - chrome.scripting
 
-    func webExtExecuteScript(extTabId: Int?, world: String, code: String) async -> [[String: Any]] {
+    func webExtExecuteScript(extensionID: String, extTabId: Int?, world: String, code: String,
+                             frameIds: [Int]?, allFrames: Bool) async -> [[String: Any]] {
         guard let tab = resolveTab(extTabId) else { return [] }
         let contentWorld: WKContentWorld = (world.uppercased() == "MAIN") ? .page : injection.contentWorld
-        let value: Any? = await withCheckedContinuation { continuation in
-            BBEvaluateJavaScriptForResult(tab.webView, code, contentWorld) { result, _ in
-                continuation.resume(returning: result)
-            }
-        }
-        // One frame on iOS (the main frame); chrome's shape is an array of InjectionResult.
-        return [["result": value ?? NSNull(), "frameId": 0]]
+        // Frame targeting lives in the shared router (it owns the per-frame content sessions): the main
+        // frame plus whichever subframes the extension's content scripts registered in. uBO Lite's
+        // injectCSSProceduralAPI targets the requesting subframe — main-frame-only left every iframe's
+        // cosmetic filterer waiting on a class that never arrived ("Promise is not a constructor").
+        return await injection.webExtEvaluateInContentFrames(extensionID: extensionID,
+                                                             webView: tab.webView,
+                                                             world: contentWorld,
+                                                             code: code,
+                                                             frameIds: frameIds,
+                                                             allFrames: allFrames)
     }
 
     func webExtInsertCSS(extTabId: Int?, css: String) {

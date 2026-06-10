@@ -31,4 +31,12 @@ void BBEvaluateJavaScriptForResult(WKWebView *webView, NSString *script, WKConte
                                    void (^_Nullable completion)(id _Nullable result,
                                                                 NSError *_Nullable error));
 
+/// Evaluate `script` in a SPECIFIC frame (nil = main frame) and return its result via `completion`,
+/// called on the main thread. Used by chrome.scripting.executeScript's frameIds/allFrames targeting,
+/// which must run code in the exact iframe a content script asked for and report per-frame results.
+void BBEvaluateJavaScriptInFrameForResult(WKWebView *webView, NSString *script,
+                                          WKFrameInfo *_Nullable frame, WKContentWorld *world,
+                                          void (^_Nullable completion)(id _Nullable result,
+                                                                       NSError *_Nullable error));
+
 NS_ASSUME_NONNULL_END

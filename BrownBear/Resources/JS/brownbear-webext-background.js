@@ -1576,10 +1576,16 @@
       setAccessLevel: function (_opts, cb) {
         if (typeof cb === 'function') { cb(); return undefined; }
         return Promise.resolve();
-      }
+      },
+      // Per-area StorageArea.onChanged (Chrome 73+): listener gets (changes) for THIS area only —
+      // fanned from the same native push as the global storage.onChanged (see dispatchStorageChanged).
+      // The content world has had this since #174; the worker needs it too (uBO Lite reads it).
+      onChanged: makeEvent(areaStorageListeners[areaName] || (areaStorageListeners[areaName] = []))
     };
   }
 
+  // Per-area StorageArea.onChanged listeners (local/sync/session/managed).
+  var areaStorageListeners = {};
   var storageChangedListeners = [];
   var storage = {
     local: storageArea('local'),
@@ -2227,7 +2233,9 @@
       var p = scriptingCall('executeScript', {
         tabId: id, code: details.code,
         files: details.file ? [details.file] : undefined,
-        world: details.world
+        world: details.world,
+        allFrames: details.allFrames === true,
+        frameId: (typeof details.frameId === 'number') ? details.frameId : undefined
       }).then(function (r) {
         if (!Array.isArray(r)) { return r; }
         return r.map(function (x) {
@@ -2938,6 +2946,11 @@
       }
       for (var i = 0; i < storageChangedListeners.length; i++) {
         try { storageChangedListeners[i](changes, areaName); } catch (e) { __bb_log('error', 'storage.onChanged listener threw: ' + (e && e.message ? e.message : e)); }
+      }
+      // Fan to the matching per-area StorageArea.onChanged listeners (signature: (changes) only).
+      var areaLs = areaStorageListeners[areaName] || [];
+      for (var j = 0; j < areaLs.length; j++) {
+        try { areaLs[j](changes); } catch (e) { __bb_log('error', 'storage.' + areaName + '.onChanged listener threw: ' + (e && e.message ? e.message : e)); }
       }
     },
 

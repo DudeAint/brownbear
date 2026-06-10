@@ -83,8 +83,12 @@ protocol WebExtensionBridgeHost: AnyObject {
 
     /// chrome.scripting.executeScript / chrome.tabs.executeScript — run `code` in a tab (`nil` ext id =
     /// active) and return one `{result, frameId}` per frame. `world` is "MAIN" (page) or "ISOLATED"
-    /// (the extension content world). Main frame only on iOS.
-    func webExtExecuteScript(extTabId: Int?, world: String, code: String) async -> [[String: Any]]
+    /// (the extension content world). `frameIds` targets specific extension frame ids (0 = main frame);
+    /// `allFrames` evaluates in the main frame plus every frame where `extensionID`'s content scripts
+    /// run (resolved through the shared router's content sessions). nil frameIds + !allFrames = main
+    /// frame only (Chrome's default).
+    func webExtExecuteScript(extensionID: String, extTabId: Int?, world: String, code: String,
+                             frameIds: [Int]?, allFrames: Bool) async -> [[String: Any]]
     /// chrome.scripting.insertCSS / chrome.tabs.insertCSS — inject CSS into a tab.
     func webExtInsertCSS(extTabId: Int?, css: String)
     /// chrome.scripting.removeCSS — remove CSS previously inserted (matched by its exact text).
