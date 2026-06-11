@@ -147,6 +147,18 @@ extension BrownBearBrowserViewController: UIScrollViewDelegate {
             guard let self else { return }
             self.handleKeyboardFrameChange(note)
         }
+        // A presented surface (e.g. the dashboard's "Browse the stores" rows) asked to open a URL: dismiss
+        // it, then load the URL in a new tab.
+        openURLObserver = NotificationCenter.default.addObserver(
+            forName: .brownBearOpenURL, object: nil, queue: .main) { [weak self] note in
+            guard let self, let url = note.userInfo?["url"] as? URL else { return }
+            let open = { self.handleExternalURL(url) }
+            if self.presentedViewController != nil {
+                self.dismiss(animated: true, completion: open)
+            } else {
+                open()
+            }
+        }
     }
 
     /// Lift the BOTTOM chrome above the keyboard while editing (so the omnibox isn't behind it). No-op in

@@ -282,4 +282,9 @@ extension Notification.Name {
     /// window's interface style and re-themes its UIKit chrome (whose family-driven colors don't change
     /// on a pure light/dark trait cycle). SwiftUI surfaces observe `ThemeStore` instead.
     static let brownBearThemeChanged = Notification.Name("brownBearThemeChanged")
+
+    /// Posted (with userInfo["url"] = URL) when a surface wants the browser to open a URL in a new tab —
+    /// e.g. the dashboard's "Browse the stores" rows. The browser dismisses any presented sheet and loads
+    /// it, so the dashboard doesn't need a reference to the browser controller.
+    static let brownBearOpenURL = Notification.Name("brownBearOpenURL")
 }

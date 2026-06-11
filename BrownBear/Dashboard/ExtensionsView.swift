@@ -168,14 +168,57 @@ struct ExtensionsView: View {
                 }
             }
         }
+        Section {
+            ForEach(Self.stores) { store in storeRow(store) }
+        } header: {
+            Text("Browse the stores").foregroundStyle(BBTheme.Color.textSecondary)
+        } footer: {
+            Text("Opens the store in BrownBear, where the Add to BrownBear button installs any extension in one tap.")
+                .font(.caption).foregroundStyle(BBTheme.Color.textSecondary)
+        }
+    }
+
+    /// A row that opens an extension store's homepage in BrownBear (the browser handles the
+    /// notification, dismisses this dashboard, and loads it in a new tab).
+    private func storeRow(_ store: ExtensionStoreLink) -> some View {
+        Button {
+            NotificationCenter.default.post(name: .brownBearOpenURL, object: nil,
+                                            userInfo: ["url": store.url])
+        } label: {
+            HStack(spacing: 12) {
+                AsyncImage(url: store.iconURL) { phase in
+                    if case .success(let image) = phase {
+                        image.resizable().scaledToFit().padding(7)
+                    } else {
+                        Image(systemName: "bag.fill").font(.system(size: 15))
+                            .foregroundStyle(BBTheme.Color.textSecondary)
+                    }
+                }
+                .frame(width: 40, height: 40)
+                .background(BBTheme.Color.fieldFill, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                Text(store.name).font(.body.weight(.semibold)).foregroundStyle(BBTheme.Color.textPrimary)
+                Spacer(minLength: 8)
+                Image(systemName: "arrow.up.right")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(BBTheme.Color.textSecondary)
+            }
+        }
+        .listRowBackground(BBTheme.Color.card)
     }
 
     private func recommendedRow(_ rec: RecommendedExtension) -> some View {
         HStack(spacing: 12) {
-            Text(rec.emoji)
-                .font(.title2)
-                .frame(width: 40, height: 40)
-                .background(BBTheme.Color.fieldFill, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            AsyncImage(url: rec.iconURL) { phase in
+                if case .success(let image) = phase {
+                    image.resizable().scaledToFit().padding(7)
+                } else {
+                    Image(systemName: "puzzlepiece.extension.fill")
+                        .font(.system(size: 16))
+                        .foregroundStyle(BBTheme.Color.textSecondary)
+                }
+            }
+            .frame(width: 40, height: 40)
+            .background(BBTheme.Color.fieldFill, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(rec.name).font(.body.weight(.semibold)).foregroundStyle(BBTheme.Color.textPrimary)
@@ -305,39 +348,128 @@ struct ExtensionIconView: View {
 // MARK: - Recommended extensions (curated one-tap installs)
 
 /// A curated extension the Extensions tab offers to install in one tap. `id` is the Chrome Web Store
-/// id, which the existing `installFromStore` flow accepts directly.
+/// id (which `installFromStore` accepts directly); `iconDomain` is the project's site, used to fetch a
+/// real icon via Google's favicon service so the row shows the extension's actual logo, not an emoji.
 struct RecommendedExtension: Identifiable {
     let id: String
     let name: String
     let category: String
-    let emoji: String
+    let iconDomain: String
     let blurb: String
     let openSource: Bool
+
+    var iconURL: URL? { URL(string: "https://www.google.com/s2/favicons?domain=\(iconDomain)&sz=64") }
+}
+
+/// A link to an extension store's homepage, opened in BrownBear so the in-page installer can take over.
+struct ExtensionStoreLink: Identifiable {
+    let id: String
+    let name: String
+    let iconDomain: String
+    let urlString: String
+
+    var url: URL { URL(string: urlString) ?? URL(string: "https://chromewebstore.google.com/")! }
+    var iconURL: URL? { URL(string: "https://www.google.com/s2/favicons?domain=\(iconDomain)&sz=64") }
 }
 
 extension ExtensionsView {
     /// Category display order for the recommended sections (small, non-intrusive labels).
-    static let recommendedCategories = ["Userscripts", "Ad blocking", "Appearance"]
+    static let recommendedCategories = ["Userscripts", "Ad blocking & privacy", "Productivity", "Media", "Appearance"]
 
-    /// The curated set. Store ids should be device-verified; an install that fails surfaces the normal
-    /// error alert, so a stale id is non-fatal. (ScriptCat / uBO-full can be added once their store
-    /// ids are confirmed, or installed via the "From a web store…" option.)
+    /// Direct links to the three extension stores (Chrome, Edge, Firefox) for browsing anything not listed.
+    static let stores: [ExtensionStoreLink] = [
+        ExtensionStoreLink(id: "chrome", name: "Chrome Web Store", iconDomain: "chromewebstore.google.com",
+                           urlString: "https://chromewebstore.google.com/category/extensions"),
+        ExtensionStoreLink(id: "edge", name: "Edge Add-ons", iconDomain: "microsoftedge.microsoft.com",
+                           urlString: "https://microsoftedge.microsoft.com/addons/category/Productivity"),
+        ExtensionStoreLink(id: "firefox", name: "Firefox Add-ons", iconDomain: "addons.mozilla.org",
+                           urlString: "https://addons.mozilla.org/firefox/extensions/")
+    ]
+
+    /// The curated set — popular, useful extensions across categories. Store ids should be
+    /// device-verified; an install that fails surfaces the normal error alert, so a stale id is
+    /// non-fatal (and the store links above cover anything not listed).
     static let recommended: [RecommendedExtension] = [
+        // Userscripts
         RecommendedExtension(id: "dhdgffkkebhmkfjojejmpbldmpobfkfo", name: "Tampermonkey",
-                             category: "Userscripts", emoji: "🐵",
-                             blurb: "The most popular userscript manager — run scripts that customize any site.",
+                             category: "Userscripts", iconDomain: "tampermonkey.net",
+                             blurb: "The most popular userscript manager. Run scripts that customize any site.",
                              openSource: false),
         RecommendedExtension(id: "jinjaccalgkegednnccohejagnlnfdag", name: "Violentmonkey",
-                             category: "Userscripts", emoji: "🐒",
+                             category: "Userscripts", iconDomain: "violentmonkey.github.io",
                              blurb: "Open-source userscript manager with a clean, privacy-minded design.",
                              openSource: true),
-        RecommendedExtension(id: "ddkjiahejlhfcafbddmgiahcphecmpfh", name: "uBlock Origin Lite",
-                             category: "Ad blocking", emoji: "🛡️",
-                             blurb: "Efficient, open-source content blocker — blocks ads and trackers with low overhead.",
+        RecommendedExtension(id: "ndcooeababalnlpkfedmmbbbgkljhpjf", name: "ScriptCat",
+                             category: "Userscripts", iconDomain: "scriptcat.org",
+                             blurb: "Open-source script manager that also runs scripts in the background, on a schedule.",
                              openSource: true),
+        RecommendedExtension(id: "clngdbkpkpeebahjckkjfobafhncgmne", name: "Stylus",
+                             category: "Userscripts", iconDomain: "github.com",
+                             blurb: "Open-source user-styles manager. Restyle any site with custom CSS themes.",
+                             openSource: true),
+        // Ad blocking & privacy
+        RecommendedExtension(id: "ddkjiahejlhfcafbddmgiahcphecmpfh", name: "uBlock Origin Lite",
+                             category: "Ad blocking & privacy", iconDomain: "ublockorigin.com",
+                             blurb: "Efficient, open-source content blocker. Blocks ads and trackers with low overhead.",
+                             openSource: true),
+        RecommendedExtension(id: "bgnkhhnnamicmpeenaelnjfhikgbkllg", name: "AdGuard AdBlocker",
+                             category: "Ad blocking & privacy", iconDomain: "adguard.com",
+                             blurb: "Blocks ads, pop-ups, and trackers across the web with rich filtering.",
+                             openSource: true),
+        RecommendedExtension(id: "pkehgijcmpdhfbdbbnkijodmdjhbjlgp", name: "Privacy Badger",
+                             category: "Ad blocking & privacy", iconDomain: "eff.org",
+                             blurb: "The EFF's open-source tracker blocker. Learns and stops hidden trackers.",
+                             openSource: true),
+        RecommendedExtension(id: "lckanjgmijmafbedllaakclkaicjfmnk", name: "ClearURLs",
+                             category: "Ad blocking & privacy", iconDomain: "clearurls.xyz",
+                             blurb: "Open-source. Strips tracking parameters from links automatically.",
+                             openSource: true),
+        RecommendedExtension(id: "mnjggcdmjocbbbhaepdhchncahnbgone", name: "SponsorBlock",
+                             category: "Ad blocking & privacy", iconDomain: "sponsor.ajay.app",
+                             blurb: "Open-source. Skips sponsored segments in YouTube videos automatically.",
+                             openSource: true),
+        // Productivity
+        RecommendedExtension(id: "nngceckbapebfimnlniiiahkandclblb", name: "Bitwarden",
+                             category: "Productivity", iconDomain: "bitwarden.com",
+                             blurb: "Open-source password manager. Autofill logins securely across sites.",
+                             openSource: true),
+        RecommendedExtension(id: "aapbdbdomjkkjkaonfhkkikfgjllcleb", name: "Google Translate",
+                             category: "Productivity", iconDomain: "translate.google.com",
+                             blurb: "Translate selected text or a whole page in a click.",
+                             openSource: false),
+        RecommendedExtension(id: "kbfnbcaeplbcioakkpcpgfkobkghlhen", name: "Grammarly",
+                             category: "Productivity", iconDomain: "grammarly.com",
+                             blurb: "Spelling and grammar checking as you type, in any text field.",
+                             openSource: false),
+        RecommendedExtension(id: "gppongmhjkpfnbhagpmjfkannfbllamg", name: "Wappalyzer",
+                             category: "Productivity", iconDomain: "wappalyzer.com",
+                             blurb: "Reveals the technologies, frameworks, and tools a website is built with.",
+                             openSource: false),
+        RecommendedExtension(id: "chphlpgkkbolifaimnlloiipkdnihall", name: "OneTab",
+                             category: "Productivity", iconDomain: "one-tab.com",
+                             blurb: "Collapse all your tabs into one list to save memory and clear clutter.",
+                             openSource: false),
+        // Media
+        RecommendedExtension(id: "nffaoalbilbmmfgbnbgppjihopabppdk", name: "Video Speed Controller",
+                             category: "Media", iconDomain: "github.com",
+                             blurb: "Open-source. Speed up, slow down, and step through any HTML5 video.",
+                             openSource: true),
+        RecommendedExtension(id: "ponfpcnoihfmfllpaingbgckeeldkhle", name: "Enhancer for YouTube",
+                             category: "Media", iconDomain: "mrfdev.com",
+                             blurb: "Cinema mode, custom speed, volume control, and ad controls for YouTube.",
+                             openSource: false),
+        RecommendedExtension(id: "lpcaedmchfhocbbapmcbpinfpgnhiddi", name: "Google Keep",
+                             category: "Media", iconDomain: "keep.google.com",
+                             blurb: "Save pages, images, and quotes to Keep notes as you browse.",
+                             openSource: false),
+        // Appearance
         RecommendedExtension(id: "eimadpbcbfnmbkopoojfekhnkhdbieeh", name: "Dark Reader",
-                             category: "Appearance", emoji: "🌙",
+                             category: "Appearance", iconDomain: "darkreader.org",
                              blurb: "Open-source dark mode for every website, with per-site controls.",
-                             openSource: true)
+                             openSource: true),
+        RecommendedExtension(id: "laookkfknpbbblfpciffpaejjkokdgca", name: "Momentum",
+                             category: "Appearance", iconDomain: "momentumdash.com",
+                             blurb: "A calm, beautiful new-tab dashboard with photos, focus, and to-dos.",
+                             openSource: false)
     ]
 }
