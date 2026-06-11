@@ -1,15 +1,15 @@
 name: "Setup iOS build"
-description: "Restore source mtimes, install XcodeGen (prebuilt binary), generate the project, and restore the SwiftPM cache."
+description: "Install XcodeGen (prebuilt binary), generate the project, and restore the SwiftPM cache."
 
-# A reusable composite action so every workflow (CI, nightly, release) shares one FAST, consistent
-# setup. Two things dominated CI time and both are fixed here:
-#   1. `brew install xcodegen` updated Homebrew's formula index and resolved a dependency tree first —
-#      minutes per macOS job. We download XcodeGen's pinned prebuilt binary instead (a few seconds).
-#   2. `git checkout` stamps every file with the CURRENT time, so Xcode saw the whole tree as "changed"
-#      every run and rebuilt the world — the cached DerivedData bought nothing. `git-restore-mtime`
-#      stamps each file with its LAST-COMMIT time, so unchanged files keep a stable mtime across runs
-#      and only what actually changed recompiles. That is what turns the DerivedData cache into real
-#      incremental builds. It needs full history, so callers must check out with `fetch-depth: 0`.
+# A reusable composite action so every workflow (CI, nightly, release) shares one consistent setup.
+# The safe speedup: download XcodeGen's pinned prebuilt binary instead of `brew install xcodegen`
+# (brew updates its formula index + resolves a dependency tree first — minutes per macOS job).
+#
+# NOTE: we deliberately do NOT reuse compiled output across commits. An earlier attempt cached
+# DerivedData + restored source mtimes (git-restore-mtime) for "incremental" builds — it produced
+# STALE binaries (Xcode trusted the cached objects and skipped recompiling changed files, so the
+# nightly shipped without the latest fixes). Correctness beats speed: every build is clean. Only the
+# SwiftPM package CLONE (not build products) is cached, which is safe.
 
 inputs:
   xcodegen-version:
@@ -19,23 +19,6 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Restore source mtimes from git history (enables incremental builds)
-      shell: bash
-      run: |
-        set -uo pipefail
-        if [ "$(git rev-list --count HEAD 2>/dev/null || echo 1)" -le 1 ]; then
-          echo "Shallow checkout — skipping mtime restore (check out with fetch-depth: 0 for incremental builds)."
-          exit 0
-        fi
-        if curl -fsSL --retry 5 --retry-all-errors -o "${RUNNER_TEMP}/git-restore-mtime" \
-             "https://raw.githubusercontent.com/MestreLion/git-tools/main/git-restore-mtime"; then
-          python3 "${RUNNER_TEMP}/git-restore-mtime" --skip-missing --quiet \
-            && echo "Restored source mtimes from git." \
-            || echo "mtime restore failed — continuing with a full build."
-        else
-          echo "Could not fetch git-restore-mtime — continuing with a full build."
-        fi
-
     - name: Show selected Xcode
       shell: bash
       run: xcodebuild -version
