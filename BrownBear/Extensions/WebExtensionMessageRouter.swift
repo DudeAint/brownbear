@@ -552,14 +552,28 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
     }
 
     /// Push one message into the content script registered under `token` and await its sendResponse.
+    /// The eval returns `1` when a live onMessage handler ran (a sendResponse — synchronous or async —
+    /// will arrive over the bridge and resolve this push), or `0` when no handler is reachable. A `0`
+    /// (or an eval error) means the content world is gone: a removed/stale iframe whose content session
+    /// lingers, or a token that never registered. Nothing will ever answer, so we resolve the push NOW
+    /// instead of stranding the caller for the full 30s timeout — otherwise one dead frame serial-blocks
+    /// a whole tabs.sendMessage broadcast (e.g. Stylus fires `urlChanged` to every frame on each in-page
+    /// navigation) and trips the worker's boot-stall watchdog. We early-resolve ONLY on `0`/error, never
+    /// on `1`, so a synchronous sendResponse's real value (still in flight over the bridge) is never
+    /// clobbered; resolve() is idempotent and the timeout stays the backstop.
     private func pushMessage(token: String, webView: WKWebView, frame: WKFrameInfo?,
                              message: Any, sender: [String: Any]) async -> Any? {
         await responseTable.wait { responseId in
-            let js = "window.__bbExtContent&&window.__bbExtContent['\(token)']&&"
-                + "window.__bbExtContent['\(token)'].onMessage("
-                + "\(Self.jsonString(message)),\(Self.jsonString(sender)),'\(responseId)');"
+            let js = "(function(){var h=window.__bbExtContent&&window.__bbExtContent['\(token)'];"
+                + "if(!h||typeof h.onMessage!=='function'){return 0;}"
+                + "h.onMessage(\(Self.jsonString(message)),\(Self.jsonString(sender)),'\(responseId)');return 1;})()"
             // Into the EXACT frame this content script runs in, in the isolated content world.
-            BBEvaluateJavaScriptInFrame(webView, js, frame, contentWorld)
+            BBEvaluateJavaScriptInFrameForResult(webView, js, frame, contentWorld) { result, error in
+                let ran = (result as? NSNumber)?.intValue ?? 0
+                if error != nil || ran == 0 {
+                    Task { @MainActor in self.responseTable.resolve(responseId, value: nil) }
+                }
+            }
             self.schedulePushTimeout(responseId)
         }
     }
