@@ -984,22 +984,100 @@
         if (idx >= 0) { arr.splice(idx, 1); }
       };
       globalThis.dispatchEvent = function (event) {
-        var arr = swListeners[event && event.type];
-        if (!arr) { return true; }
-        arr.slice().forEach(function (l) {
-          try { l(event); } catch (e) {
-            __bb_log('error', 'event listener (' + (event && event.type) + ') threw: ' + (e && e.message ? e.message : e));
+        var type = event && event.type;
+        var arr = swListeners[type];
+        if (arr) {
+          arr.slice().forEach(function (l) {
+            try { l(event); } catch (e) {
+              __bb_log('error', 'event listener (' + type + ') threw: ' + (e && e.message ? e.message : e));
+            }
+          });
+        }
+        // Also honor the property form (self.oninstall/onactivate/onfetch/onmessage) — many MV3 workers
+        // (e.g. Stylus) assign self.onfetch directly instead of addEventListener('fetch', …).
+        var on = globalThis['on' + type];
+        if (typeof on === 'function') {
+          try { on(event); } catch (e) {
+            __bb_log('error', 'on' + type + ' threw: ' + (e && e.message ? e.message : e));
           }
-        });
+        }
         return !(event && event.defaultPrevented);
       };
       var fireLifecycle = function () {
         ['install', 'activate'].forEach(function (type) {
-          globalThis.dispatchEvent({ type: type, waitUntil: function () {}, preventDefault: function () {} });
+          // addRoutes/registerRouter: the SW Static Routing API. We don't honor routes natively (every
+          // request already tries the package file first, then the SW fetch handler), but the install
+          // handler calls e.addRoutes(...) synchronously — it must exist or the handler throws.
+          globalThis.dispatchEvent({
+            type: type, waitUntil: function () {}, preventDefault: function () {},
+            addRoutes: function () {}, registerRouter: function () {}
+          });
         });
       };
       // Runs after the synchronous boot (runtime + background source) completes.
       setTimeout(fireLifecycle, 0);
+
+      // Service-worker FETCH interception. An MV3 worker can serve its OWN extension-scheme requests by
+      // handling the 'fetch' event and calling respondWith (Stylus serves chrome-extension://<id>/data?…
+      // — the data its popup/content pages read — entirely from the worker). BrownBear's background is a
+      // JSContext, not a real SW, so WebKit never fires a fetch event; instead the URL scheme handler,
+      // when a request has no packaged file, calls this to give the worker its chance. Returns a JSON
+      // string: {matched:false} → fall through to the normal not-found, or the synthesized response.
+      globalThis.__bbDispatchFetch = function (urlStr, method, headersJSON, nativeCallback) {
+        var settle = function (json) {
+          if (typeof nativeCallback === 'function') { try { nativeCallback(json); } catch (e) {} }
+          return json;
+        };
+        return new Promise(function (resolve0) {
+          var resolve = function (json) { resolve0(settle(json)); };
+          var handlers = (swListeners['fetch'] || []).slice();
+          if (typeof globalThis.onfetch === 'function') { handlers.push(globalThis.onfetch); }
+          if (!handlers.length) { resolve('{"matched":false}'); return; }
+          var reqInit = { method: method || 'GET' };
+          try { if (headersJSON) { reqInit.headers = JSON.parse(headersJSON); } } catch (e) {}
+          var request;
+          try { request = new globalThis.Request(urlStr, reqInit); }
+          catch (e) { request = { url: urlStr, method: reqInit.method, headers: new globalThis.Headers(reqInit.headers || {}) }; }
+          var responded = false, responsePromise = null;
+          var event = {
+            type: 'fetch', request: request, clientId: '', resultingClientId: '', isReload: false,
+            respondWith: function (r) { if (!responded) { responded = true; responsePromise = Promise.resolve(r); } },
+            waitUntil: function () {}, preventDefault: function () {}
+          };
+          for (var i = 0; i < handlers.length && !responded; i++) {
+            try { handlers[i](event); } catch (e) {
+              __bb_log('error', 'fetch handler threw: ' + (e && e.message ? e.message : e));
+            }
+          }
+          if (!responded || !responsePromise) { resolve('{"matched":false}'); return; }
+          function bodyToB64(resp) {
+            if (resp && resp._b64 !== undefined) { return Promise.resolve(resp._b64); }
+            if (resp && typeof resp.arrayBuffer === 'function') {
+              return resp.arrayBuffer().then(function (buf) { return base64FromBytes(new Uint8Array(buf)); });
+            }
+            if (resp && typeof resp.text === 'function') {
+              return resp.text().then(function (t) { return base64FromBytes(new TextEncoder().encode(String(t))); });
+            }
+            return Promise.resolve('');
+          }
+          responsePromise.then(function (resp) {
+            if (!resp) { resolve('{"matched":false}'); return; }
+            var headersObj = {};
+            try { if (resp.headers && typeof resp.headers.forEach === 'function') { resp.headers.forEach(function (v, k) { headersObj[k] = v; }); } } catch (e) {}
+            bodyToB64(resp).then(function (b64) {
+              resolve(JSON.stringify({
+                matched: true,
+                status: (resp.status === undefined ? 200 : resp.status),
+                statusText: resp.statusText || '',
+                headers: headersObj,
+                bodyBase64: b64 || ''
+              }));
+            }, function () { resolve('{"matched":true,"status":500,"statusText":"body read failed","headers":{},"bodyBase64":""}'); });
+          }, function (err) {
+            resolve(JSON.stringify({ matched: true, status: 500, statusText: 'fetch handler error', headers: {}, bodyBase64: '', error: String(err && err.message || err) }));
+          });
+        });
+      };
     }
     if (typeof globalThis.skipWaiting !== 'function') { globalThis.skipWaiting = function () { return Promise.resolve(); }; }
 

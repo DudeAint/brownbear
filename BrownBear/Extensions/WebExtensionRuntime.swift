@@ -193,6 +193,16 @@ class WebExtensionRuntime {
         await logStore.append(entry)
     }
 
+    /// Give an extension's background worker the chance to serve an unpackaged extension-scheme request
+    /// from its `fetch` event handler (e.g. Stylus's `chrome-extension://<id>/data?…`). Called by the
+    /// URL scheme handler only after a packaged file lookup misses. Returns nil if the extension has no
+    /// running worker or the worker doesn't claim the request — the scheme handler then 404s as before.
+    func serviceWorkerFetch(extensionID: String, urlString: String, method: String,
+                            headersJSON: String) async -> WebExtensionBackgroundContext.ServiceWorkerFetchResponse? {
+        guard let context = contexts[extensionID] else { return nil }
+        return await context.serviceWorkerFetch(urlString: urlString, method: method, headersJSON: headersJSON)
+    }
+
     /// Deliver chrome.action.onClicked to an extension's background worker (when the action has no
     /// popup). No-op if the extension has no running background context. `tab` is a chrome.tabs Tab
     /// record (or nil if there's no active tab).
