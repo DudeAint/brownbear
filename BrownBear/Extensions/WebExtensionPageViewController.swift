@@ -73,6 +73,16 @@ final class WebExtensionPageViewController: UIViewController {
         }
         let configuration = await session.makeConfiguration()
         let webView = WKWebView(frame: view.bounds, configuration: configuration)
+        // Extension pages run browser-detection that keys off UA tokens — Bitwarden's getDevice needs
+        // " Chrome/" (Chrome build) or " Firefox/" (Firefox build); the default WKWebView UA carries
+        // neither, so its DeviceType resolved to undefined and `device.toString()` threw, crashing the
+        // Angular popup before it rendered (the "stuck on the loading spinner" symptom). Present a UA
+        // matching the extension's build so detection lands on the right ChromeExtension/FirefoxExtension.
+        let firefoxBuild = session.ext.scheme == WebExtensionSchemeHandler.firefoxScheme
+        webView.customUserAgent = firefoxBuild
+            ? "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X; rv:121.0) Gecko/121.0 Firefox/121.0"
+            : "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 "
+                + "(KHTML, like Gecko) Chrome/121.0.0.0 Mobile/15E148 Safari/604.1"
         webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         webView.isOpaque = false
         // Clear over the glass so any transparent popup areas reveal the frosted backdrop; opaque popups
