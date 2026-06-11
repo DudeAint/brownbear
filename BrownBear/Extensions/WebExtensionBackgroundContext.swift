@@ -901,6 +901,11 @@ extension WebExtensionBackgroundContext {
             return state.badgeColorBytes(extensionID: extensionID, tabId: tabId)
         case "getBadgeTextColor":
             return state.badgeTextColorBytes(extensionID: extensionID, tabId: tabId)
+        case "openPopup":
+            // Present the extension's popup over the browser — the same toolbar-anchored glassy popover a
+            // user tap opens. Routed to the live browser via the bridge host; a no-op if it has no popup.
+            BrownBearServices.shared.webExtensionRuntime.host?.webExtTriggerAction(extensionID: extensionID)
+            return NSNull()
         default:
             return NSNull()
         }

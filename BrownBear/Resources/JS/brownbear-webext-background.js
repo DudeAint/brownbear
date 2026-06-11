@@ -2488,7 +2488,14 @@
     getPopup: actionLocalResolve(''),
     isEnabled: actionLocalResolve(true),
     getUserSettings: actionLocalResolve({ isOnToolbar: true }),
-    openPopup: actionLocalResolve(undefined),
+    // chrome.action.openPopup([options], cb) — actually present the extension's popup over the page (the
+    // toolbar-anchored glassy popover), via the native action bridge, instead of the old silent no-op.
+    // Extensions like Grammarly call this to surface their UI programmatically.
+    openPopup: function (options, cb) {
+      if (typeof options === 'function') { cb = options; options = undefined; }
+      var args = (options && typeof options === 'object') ? options : {};
+      return settleBg(actionCall('openPopup', args).then(function () { return undefined; }), cb);
+    },
     onClicked: makeEvent(actionClickedListeners)
   };
 
