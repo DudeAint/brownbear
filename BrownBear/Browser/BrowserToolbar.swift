@@ -76,6 +76,13 @@ final class BrowserToolbar: UIView {
                           options: [.transitionCrossDissolve, .beginFromCurrentState]) {
             self.tabsCountLabel.text = text
         }
+        // A small spring pop on the square draws the eye to the change (new/closed tab).
+        tabsSquare.transform = CGAffineTransform(scaleX: 0.78, y: 0.78)
+        UIView.animate(withDuration: 0.40, delay: 0,
+                       usingSpringWithDamping: 0.5, initialSpringVelocity: 0.4,
+                       options: [.allowUserInteraction, .beginFromCurrentState]) {
+            self.tabsSquare.transform = .identity
+        }
     }
 
     // MARK: - Build

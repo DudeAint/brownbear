@@ -31,10 +31,23 @@ final class ToolbarButton: UIButton {
     convenience init() { self.init(frame: .zero) }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-    // Re-tint on every interactive state change.
-    override var isHighlighted: Bool { didSet { refreshTint() } }
+    // Re-tint on every interactive state change; the press also springs the glyph for a tactile feel.
+    override var isHighlighted: Bool { didSet { refreshTint(); animatePress(isHighlighted) } }
     override var isSelected: Bool { didSet { refreshTint() } }
     override var isEnabled: Bool { didSet { refreshTint() } }
+
+    /// A premium press feel: a quick, taut shrink on touch-down and a lightly springy settle on
+    /// release. Transform-only, so it never disturbs layout or the hit area. (`beginFromCurrentState`
+    /// keeps a fast double-tap from snapping.)
+    private func animatePress(_ pressed: Bool) {
+        UIView.animate(withDuration: pressed ? 0.10 : 0.34,
+                       delay: 0,
+                       usingSpringWithDamping: pressed ? 1.0 : 0.52,
+                       initialSpringVelocity: 0,
+                       options: [.allowUserInteraction, .beginFromCurrentState]) {
+            self.transform = pressed ? CGAffineTransform(scaleX: 0.86, y: 0.86) : .identity
+        }
+    }
 
     /// Set the SF Symbol; no-ops if unchanged so rapid state updates don't rebuild the image.
     func setSymbol(_ name: String, pointSize: CGFloat = 17) {
