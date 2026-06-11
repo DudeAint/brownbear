@@ -61,6 +61,45 @@ enum AddressBarPosition: String, CaseIterable, Identifiable {
     var title: String { self == .top ? "Top" : "Bottom" }
 }
 
+/// Which COLOR FAMILY the design tokens resolve to. `clean` is the default white/graphite look (it
+/// still has light + dark variants); `og` is the original warm "BrownBear" amber/brown look (also
+/// light + dark). Orthogonal to the OS light/dark axis — `BrownBearTheme` picks a hex by (family ×
+/// light-or-dark). Kept Foundation-only here so any layer can read it; the UIKit mapping lives in
+/// `BrownBearTheme`/`ThemeController`.
+enum ThemeFamily {
+    case clean
+    case og
+}
+
+/// The user's chosen appearance. The clean Light/Dark family is the default and follows the OS; the
+/// original warm look is preserved as an opt-in "OG BrownBear" theme (which also follows the OS
+/// light/dark). The Settings picker uses `@AppStorage` on `Key.theme`; changing it posts
+/// `.brownBearThemeChanged` so the open browser re-themes immediately.
+enum AppTheme: String, CaseIterable, Identifiable {
+    /// Clean family, follows the OS light/dark. The default.
+    case system
+    /// Clean family, forced light.
+    case light
+    /// Clean family, forced dark.
+    case dark
+    /// The original warm look (amber/brown), following the OS light/dark.
+    case ogBrown
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .system: return "System"
+        case .light: return "Light"
+        case .dark: return "Dark"
+        case .ogBrown: return "OG BrownBear"
+        }
+    }
+
+    /// The color family this theme resolves tokens from.
+    var family: ThemeFamily { self == .ogBrown ? .og : .clean }
+}
+
 /// What happens when a `.user.js` is opened and one or more installed userscript-manager extensions
 /// (ScriptCat, Violentmonkey, Tampermonkey, …) claim it. The user keeps the power: BrownBear's own
 /// installer and any extension are both available.
@@ -153,6 +192,15 @@ enum AppSettings {
         static let userScriptInstallPolicy = "bbUserScriptInstallPolicy"
         static let userScriptWorld = "bbUserScriptWorld"
         static let keepVideosInline = "bbKeepVideosInline"
+        static let theme = "bbTheme"
+    }
+
+    /// The app's appearance. Default `.system` (clean Light/Dark following the OS); the Settings picker
+    /// uses @AppStorage on the same key. Changing it posts `.brownBearThemeChanged` (from the Settings
+    /// screen / ThemeController) so the open browser re-themes without relaunch.
+    static var theme: AppTheme {
+        get { AppTheme(rawValue: UserDefaults.standard.string(forKey: Key.theme) ?? "") ?? .system }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.theme) }
     }
 
     /// Keep <video> playing inline by neutralizing scripted/auto fullscreen (the Focus/Player-style
@@ -229,4 +277,9 @@ extension Notification.Name {
     /// Posted when a chrome-layout preference (e.g. the address-bar position) changes, so the open
     /// browser controller re-applies its layout immediately instead of only on next launch.
     static let brownBearChromeLayoutChanged = Notification.Name("brownBearChromeLayoutChanged")
+
+    /// Posted when the appearance (`AppSettings.theme`) changes, so the open browser re-applies the
+    /// window's interface style and re-themes its UIKit chrome (whose family-driven colors don't change
+    /// on a pure light/dark trait cycle). SwiftUI surfaces observe `ThemeStore` instead.
+    static let brownBearThemeChanged = Notification.Name("brownBearThemeChanged")
 }

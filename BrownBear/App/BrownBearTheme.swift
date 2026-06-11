@@ -18,62 +18,92 @@ import UIKit
 /// a token here so the look stays consistent and is tunable in one place.
 enum BrownBearTheme {
 
+    // MARK: - Theme family
+
+    /// The color family the tokens currently resolve from, derived from `AppSettings.theme`. `clean` is
+    /// the default white/graphite look; `og` is the original warm amber/brown look. Both still carry
+    /// light + dark variants — `themed(...)` picks a hex by (this family × the trait's light/dark).
+    static var activeFamily: ThemeFamily { AppSettings.theme.family }
+
+    /// Build a token that resolves by BOTH the active family (clean/og) AND the appearance (light/dark).
+    /// The dynamic provider re-runs on a light/dark trait change automatically; a family change at the
+    /// SAME light/dark is picked up because `ThemeController` re-applies colors on `.brownBearThemeChanged`
+    /// (and forces a trait cycle for the forced Light/Dark cases).
+    /// `alphas` is (cleanLight, cleanDark, ogLight, ogDark), defaulting to opaque.
+    static func themed(cleanLight: UInt32, cleanDark: UInt32, ogLight: UInt32, ogDark: UInt32,
+                       alphas: (CGFloat, CGFloat, CGFloat, CGFloat) = (1, 1, 1, 1)) -> UIColor {
+        UIColor { traits in
+            let dark = traits.userInterfaceStyle == .dark
+            switch activeFamily {
+            case .clean:
+                return dark ? UIColor(hex: cleanDark, alpha: alphas.1) : UIColor(hex: cleanLight, alpha: alphas.0)
+            case .og:
+                return dark ? UIColor(hex: ogDark, alpha: alphas.3) : UIColor(hex: ogLight, alpha: alphas.2)
+            }
+        }
+    }
+
     // MARK: - Palette (semantic roles)
 
+    // CLEAN family = the white/graphite default (color comes from content, not chrome). OG family =
+    // the original warm amber/brown look, preserved byte-for-byte so the "OG BrownBear" theme is
+    // identical to the old app. Status hues (secure/insecure/destructive) are shared across families.
     enum Palette {
 
-        // Accent / actions — amber is the action color.
-        /// Primary brand accent — cursor, active/selected glyphs, links, primary CTA fill.
-        static let accent = UIColor(dynamicLight: UIColor(hex: 0xE0832F), dark: UIColor(hex: 0xFFB454))
-        /// A brighter amber for glows and the progress-bar head.
-        static let accentBright = UIColor(hex: 0xFFB454)
+        // Accent / actions.
+        //   clean → graphite (near-black on light, near-white on dark): the monochrome action color.
+        //   og    → amber, exactly as before.
+        /// Primary accent — cursor, active/selected glyphs, links, primary CTA fill.
+        static let accent = themed(cleanLight: 0x1C1C1E, cleanDark: 0xF2F2F7, ogLight: 0xE0832F, ogDark: 0xFFB454)
+        /// A brighter pop for glows and the progress-bar head.
+        static let accentBright = themed(cleanLight: 0x000000, cleanDark: 0xFFFFFF, ogLight: 0xFFB454, ogDark: 0xFFB454)
         /// Pressed/highlighted state of an accent fill.
-        static let accentPressed = UIColor(dynamicLight: UIColor(hex: 0xC56E1F), dark: UIColor(hex: 0xE0832F))
+        static let accentPressed = themed(cleanLight: 0x000000, cleanDark: 0xD1D1D6, ogLight: 0xC56E1F, ogDark: 0xE0832F)
         /// Soft accent wash — selected tiles, badges, hover backings.
-        static let accentSoft = UIColor(dynamicLight: UIColor(hex: 0xE0832F, alpha: 0.14),
-                                        dark: UIColor(hex: 0xFFB454, alpha: 0.18))
+        static let accentSoft = themed(cleanLight: 0x1C1C1E, cleanDark: 0xF2F2F7, ogLight: 0xE0832F, ogDark: 0xFFB454,
+                                       alphas: (0.08, 0.16, 0.14, 0.18))
         /// Text/glyph drawn on top of an accent fill.
-        static let onAccent = UIColor(dynamicLight: UIColor(hex: 0xFFFFFF), dark: UIColor(hex: 0x1A140E))
-        /// Deep brown brand mark color.
-        static let brandBrown = UIColor(hex: 0x3A2417)
+        static let onAccent = themed(cleanLight: 0xFFFFFF, cleanDark: 0x1C1C1E, ogLight: 0xFFFFFF, ogDark: 0x1A140E)
+        /// Deep brand mark color (used by the brand glyph; OG brown / clean near-black).
+        static let brandBrown = themed(cleanLight: 0x1C1C1E, cleanDark: 0xF2F2F7, ogLight: 0x3A2417, ogDark: 0x3A2417)
 
         // Surfaces (layered elevation).
         /// Window background.
-        static let surfaceBase = UIColor(dynamicLight: UIColor(hex: 0xF7F5F2), dark: UIColor(hex: 0x14110E))
+        static let surfaceBase = themed(cleanLight: 0xF2F2F7, cleanDark: 0x000000, ogLight: 0xF7F5F2, ogDark: 0x14110E)
         /// Elevated chrome (top bar, bottom toolbar).
-        static let surfaceRaised = UIColor(dynamicLight: UIColor(hex: 0xFFFFFF), dark: UIColor(hex: 0x1F1A15))
+        static let surfaceRaised = themed(cleanLight: 0xFFFFFF, cleanDark: 0x1C1C1E, ogLight: 0xFFFFFF, ogDark: 0x1F1A15)
         /// Omnibox pill fill.
-        static let surfaceField = UIColor(dynamicLight: UIColor(hex: 0xEFEAE4), dark: UIColor(hex: 0x2A231C))
+        static let surfaceField = themed(cleanLight: 0xEEEEF0, cleanDark: 0x2C2C2E, ogLight: 0xEFEAE4, ogDark: 0x2A231C)
         /// Cards (tab cells, menu list container, install card).
-        static let surfaceCard = UIColor(dynamicLight: UIColor(hex: 0xFFFFFF), dark: UIColor(hex: 0x241D17))
+        static let surfaceCard = themed(cleanLight: 0xFFFFFF, cleanDark: 0x1C1C1E, ogLight: 0xFFFFFF, ogDark: 0x241D17)
         /// Sunken backing (tab thumbnail area, NTP tiles).
-        static let surfaceCardSunken = UIColor(dynamicLight: UIColor(hex: 0xF0ECE6), dark: UIColor(hex: 0x1A150F))
+        static let surfaceCardSunken = themed(cleanLight: 0xE9E9EE, cleanDark: 0x161618, ogLight: 0xF0ECE6, ogDark: 0x1A150F)
         /// Dimming scrim behind sheets / the tab grid.
-        static let surfaceScrim = UIColor(dynamicLight: UIColor(hex: 0x000000, alpha: 0.40),
-                                          dark: UIColor(hex: 0x000000, alpha: 0.50))
+        static let surfaceScrim = themed(cleanLight: 0x000000, cleanDark: 0x000000, ogLight: 0x000000, ogDark: 0x000000,
+                                         alphas: (0.32, 0.55, 0.40, 0.50))
         /// Tint backing for a tab card's blurred header strip.
-        static let surfaceMenuHeader = UIColor(dynamicLight: UIColor(hex: 0xFBF8F4), dark: UIColor(hex: 0x2A231C))
+        static let surfaceMenuHeader = themed(cleanLight: 0xFBFBFD, cleanDark: 0x2C2C2E, ogLight: 0xFBF8F4, ogDark: 0x2A231C)
 
         // Text.
-        static let textPrimary = UIColor(dynamicLight: UIColor(hex: 0x1A140E), dark: UIColor(hex: 0xF5EFE7))
-        static let textSecondary = UIColor(dynamicLight: UIColor(hex: 0x6B6058), dark: UIColor(hex: 0xB6A99C))
-        static let textTertiary = UIColor(dynamicLight: UIColor(hex: 0x9A8E82), dark: UIColor(hex: 0x7E7165))
+        static let textPrimary = themed(cleanLight: 0x1C1C1E, cleanDark: 0xF5F5F7, ogLight: 0x1A140E, ogDark: 0xF5EFE7)
+        static let textSecondary = themed(cleanLight: 0x6C6C70, cleanDark: 0xAEAEB2, ogLight: 0x6B6058, ogDark: 0xB6A99C)
+        static let textTertiary = themed(cleanLight: 0x9A9AA0, cleanDark: 0x7C7C80, ogLight: 0x9A8E82, ogDark: 0x7E7165)
 
         // Icons — resting glyphs are NEUTRAL; accent is reserved for active/selected/pressed.
-        static let iconPrimary = UIColor(dynamicLight: UIColor(hex: 0x4A4038), dark: UIColor(hex: 0xD9CFC4))
+        static let iconPrimary = themed(cleanLight: 0x3A3A3C, cleanDark: 0xE5E5EA, ogLight: 0x4A4038, ogDark: 0xD9CFC4)
         static let iconActive = accent
-        static let iconDisabled = UIColor(dynamicLight: UIColor(hex: 0x4A4038, alpha: 0.4),
-                                          dark: UIColor(hex: 0xD9CFC4, alpha: 0.4))
+        static let iconDisabled = themed(cleanLight: 0x3A3A3C, cleanDark: 0xE5E5EA, ogLight: 0x4A4038, ogDark: 0xD9CFC4,
+                                         alphas: (0.4, 0.4, 0.4, 0.4))
 
         // Borders & dividers.
-        static let borderSubtle = UIColor(dynamicLight: UIColor(hex: 0xE2DBD2), dark: UIColor(hex: 0x322A22))
-        static let borderStrong = UIColor(dynamicLight: UIColor(hex: 0xD2C7BB), dark: UIColor(hex: 0x42382E))
+        static let borderSubtle = themed(cleanLight: 0xE3E3E8, cleanDark: 0x2C2C2E, ogLight: 0xE2DBD2, ogDark: 0x322A22)
+        static let borderStrong = themed(cleanLight: 0xD0D0D5, cleanDark: 0x3A3A3C, ogLight: 0xD2C7BB, ogDark: 0x42382E)
         static let borderSelected = accent
 
-        // Status.
+        // Status (shared across families — these read as themselves regardless of look).
         static let secure = UIColor(hex: 0x3DA639)     // TLS lock — green
         static let insecure = UIColor(hex: 0xC0392B)   // not secure — red
-        static let warning = accent
+        static let warning = themed(cleanLight: 0xC2410C, cleanDark: 0xFB923C, ogLight: 0xE0832F, ogDark: 0xFFB454)
         static let destructive = UIColor(hex: 0xE5484D)
 
         // MARK: Pre-role aliases (migrated away component-by-component)
