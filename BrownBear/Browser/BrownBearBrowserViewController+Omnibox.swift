@@ -36,7 +36,8 @@ extension BrownBearBrowserViewController: OmniboxViewDelegate {
         // Show top sites immediately on focus, before the user types.
         suggestionTask?.cancel()
         suggestionTask = Task { @MainActor in
-            let top = await BrownBearServices.shared.historyStore.topSites(limit: 6)
+            // Fetch more than the card shows so it can offer a "see all → History" footer when there's more.
+            let top = await BrownBearServices.shared.historyStore.topSites(limit: 12)
             guard !Task.isCancelled else { return }
             omniboxSuggestions.update(OmniboxSuggestionEngine.topSites(top))
         }
@@ -52,7 +53,8 @@ extension BrownBearBrowserViewController: OmniboxViewDelegate {
         }
         let template = AppSettings.searchEngine.template
         suggestionTask = Task { @MainActor in
-            let matches = await BrownBearServices.shared.historyStore.search(query, limit: 6)
+            // Fetch more than the card shows so it can offer a "see all → History" footer when there's more.
+            let matches = await BrownBearServices.shared.historyStore.search(query, limit: 12)
             guard !Task.isCancelled else { return }
             omniboxSuggestions.update(OmniboxSuggestionEngine.compose(rawQuery: query,
                                                                       historyMatches: matches,
@@ -85,5 +87,12 @@ extension BrownBearBrowserViewController: OmniboxSuggestionsViewDelegate {
     /// drops (and `omniboxDidEndEditing` clears the card), revealing the page the user tapped toward.
     func suggestionsViewDidRequestDismiss(_ view: OmniboxSuggestionsView) {
         omnibox.endEditing()
+    }
+
+    /// The "see all" footer — end editing and open the full History page so the user can browse it all.
+    func suggestionsViewDidRequestShowHistory(_ view: OmniboxSuggestionsView) {
+        omnibox.endEditing()
+        omniboxSuggestions.dismiss()
+        presentHistory()
     }
 }
