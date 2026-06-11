@@ -283,18 +283,6 @@ final class BrownBearBrowserViewController: UIViewController {
         }
     }
 
-    /// Suggested shortcut tiles shown when the user has no bookmarks yet.
-    private static let suggestedSites: [(title: String, url: String, host: String)] = [
-        ("Google", "https://www.google.com/", "www.google.com"),
-        ("YouTube", "https://www.youtube.com/", "www.youtube.com"),
-        ("Wikipedia", "https://www.wikipedia.org/", "www.wikipedia.org"),
-        ("GitHub", "https://github.com/", "github.com"),
-        ("Reddit", "https://www.reddit.com/", "www.reddit.com"),
-        ("GreasyFork", "https://greasyfork.org/", "greasyfork.org"),
-        ("Hacker News", "https://news.ycombinator.com/", "news.ycombinator.com"),
-        ("DuckDuckGo", "https://duckduckgo.com/", "duckduckgo.com")
-    ]
-
     private static func htmlEscape(_ string: String) -> String {
         var out = string.replacingOccurrences(of: "&", with: "&amp;")
         out = out.replacingOccurrences(of: "<", with: "&lt;")
@@ -304,77 +292,142 @@ final class BrownBearBrowserViewController: UIViewController {
         return out
     }
 
-    /// A branded New Tab page: a search box plus shortcut tiles (the user's bookmarks, or suggested
-    /// sites when there are none). Tiles are plain `<a>` links and the search box is a plain `<form>`,
-    /// so both navigate through the normal load flow — no privileged bridge. First-party content; bookmark
-    /// titles/URLs are HTML-escaped and limited to http(s) before injection (the page runs untrusted-
-    /// adjacent, so we never inject raw user strings).
+    /// A clean New Tab page: a search box, then EITHER the user's bookmarks as tiles OR — when there
+    /// are none yet — a short onboarding guide to what makes BrownBear different (userscripts,
+    /// extensions, themes). Tiles are plain `<a>` links and the search box is a plain `<form>`, so both
+    /// navigate through the normal load flow — no privileged bridge. First-party content; bookmark
+    /// titles/URLs are HTML-escaped and limited to http(s) before injection.
     private static func newTabHTML(bookmarks: [Bookmark]) -> String {
         let web = bookmarks.filter { ["http", "https"].contains($0.url.scheme?.lowercased() ?? "") }
-        let entries: [(title: String, url: String, host: String)] = web.isEmpty
-            ? suggestedSites
-            : web.prefix(12).map { (title: $0.displayTitle, url: $0.url.absoluteString, host: $0.url.host ?? "") }
         let engine = AppSettings.searchEngine
 
-        let tiles = entries.map { entry -> String in
-            let title = htmlEscape(entry.title)
-            let url = htmlEscape(entry.url)
-            let host = htmlEscape(entry.host)
-            let letter = htmlEscape((entry.title.first.map { String($0).uppercased() }) ?? "•")
-            return """
-            <a class="tile" href="\(url)">
-            <span class="ico"><img src="https://\(host)/favicon.ico" onload="this.style.opacity=1" onerror="this.remove()" alt="">
-            <span class="mono">\(letter)</span></span>
-            <span class="lbl">\(title)</span></a>
-            """
-        }.joined(separator: "\n")
+        let content: String
+        if web.isEmpty {
+            content = newTabGuideHTML
+        } else {
+            let tiles = web.prefix(12).enumerated().map { index, bm -> String in
+                let title = htmlEscape(bm.displayTitle)
+                let url = htmlEscape(bm.url.absoluteString)
+                let host = htmlEscape(bm.url.host ?? "")
+                let letter = htmlEscape((bm.displayTitle.first.map { String($0).uppercased() }) ?? "•")
+                let delay = String(format: "%.2f", 0.05 + Double(index) * 0.03)   // staggered entrance
+                return """
+                <a class="tile fade" style="animation-delay:\(delay)s" href="\(url)">
+                <span class="ico"><img src="https://\(host)/favicon.ico" onload="this.style.opacity=1" onerror="this.remove()" alt="">
+                <span class="mono">\(letter)</span></span>
+                <span class="lbl">\(title)</span></a>
+                """
+            }.joined(separator: "\n")
+            content = "<div class=\"grid\">\n\(tiles)\n</div>"
+        }
 
         return """
         <!doctype html><html><head><meta charset="utf-8">
         <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
         <style>
           :root{color-scheme:light dark;
-            --bg:#F7F5F2;--field:#EFEAE4;--text:#1A140E;--sub:#6B6058;--accent:#E0832F;--border:#E2DBD2;}
+            --bg:#F2F2F7;--card:#FFFFFF;--field:#FFFFFF;--text:#1C1C1E;--sub:#6C6C70;--border:#E6E6EB;
+            --hair:rgba(255,255,255,.7);--tile:#EDEDF2;--glyphbg:#F2F2F7;
+            --s1:rgba(0,0,0,.04);--s2:rgba(0,0,0,.07);}
           @media (prefers-color-scheme:dark){:root{
-            --bg:#14110E;--field:#2A231C;--text:#F5EFE7;--sub:#B6A99C;--accent:#FFB454;--border:#322A22;}}
+            --bg:#000000;--card:#1C1C1E;--field:#1C1C1E;--text:#F5F5F7;--sub:#9A9AA0;--border:#2C2C2E;
+            --hair:rgba(255,255,255,.05);--tile:#2C2C2E;--glyphbg:#2C2C2E;
+            --s1:rgba(0,0,0,.5);--s2:rgba(0,0,0,.6);}}
           *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
           html,body{margin:0;height:100%;font-family:-apple-system,system-ui,sans-serif;
-            background:var(--bg);color:var(--text);}
-          .wrap{max-width:680px;margin:0 auto;padding:max(40px,8vh) 20px 40px;}
-          .brand{display:flex;align-items:center;gap:10px;justify-content:center;margin-bottom:26px;}
-          .brand .bear{font-size:30px;}
-          .brand h1{font-size:22px;font-weight:800;margin:0;letter-spacing:-.4px;}
-          .brand h1 b{color:var(--accent);font-weight:800;}
-          form.search{display:flex;align-items:center;gap:10px;background:var(--field);
-            border:1px solid var(--border);border-radius:16px;padding:0 14px;height:52px;
-            margin-bottom:30px;box-shadow:0 4px 16px rgba(0,0,0,.06);}
-          form.search svg{width:20px;height:20px;fill:var(--sub);flex:none;}
-          form.search input{flex:1;border:0;background:transparent;font-size:17px;color:var(--text);outline:none;}
-          .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;}
-          .tile{display:flex;flex-direction:column;align-items:center;gap:8px;
-            text-decoration:none;color:var(--text);}
-          .ico{position:relative;width:60px;height:60px;border-radius:16px;background:var(--accent);
-            display:grid;place-items:center;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.10);}
+            background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased;}
+          .wrap{max-width:600px;margin:0 auto;padding:max(60px,12vh) 22px 48px;}
+          @keyframes up{from{opacity:0;transform:translateY(14px);}to{opacity:1;transform:none;}}
+          .fade{opacity:0;animation:up .55s cubic-bezier(.22,.61,.36,1) both;}
+          @media (prefers-reduced-motion:reduce){.fade{animation:none;opacity:1;}
+            .tile,.row,form.search{transition:none;}}
+          .brand{display:flex;align-items:center;gap:9px;justify-content:center;margin-bottom:26px;}
+          .brand .bear{font-size:25px;}
+          .brand h1{font-size:19px;font-weight:700;margin:0;letter-spacing:-.2px;}
+          form.search{display:flex;align-items:center;gap:11px;background:var(--field);
+            border:.5px solid var(--border);border-radius:16px;padding:0 16px;height:54px;margin-bottom:36px;
+            box-shadow:0 1px 1px var(--s1),0 8px 24px var(--s2);
+            transition:box-shadow .25s ease,transform .25s ease;}
+          form.search:focus-within{box-shadow:0 1px 1px var(--s1),0 12px 30px var(--s2);transform:translateY(-1px);}
+          form.search svg{width:18px;height:18px;fill:var(--sub);flex:none;}
+          form.search input{flex:1;border:0;background:transparent;font-size:17px;color:var(--text);
+            outline:none;font-weight:450;}
+          form.search input::placeholder{color:var(--sub);}
+          .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:18px 16px;}
+          .tile{display:flex;flex-direction:column;align-items:center;gap:9px;
+            text-decoration:none;color:var(--text);transition:transform .14s cubic-bezier(.34,1.56,.64,1);}
+          .tile:active{transform:scale(.9);}
+          .ico{position:relative;width:60px;height:60px;border-radius:17px;background:var(--tile);
+            border:.5px solid var(--border);display:grid;place-items:center;overflow:hidden;
+            box-shadow:inset 0 .5px 0 var(--hair),0 2px 8px var(--s1);}
           .ico img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
-            padding:12px;background:#fff;opacity:0;transition:opacity .12s ease;}
-          .ico .mono{font-size:26px;font-weight:700;color:#fff;}
-          .lbl{font-size:12px;font-weight:500;max-width:72px;white-space:nowrap;overflow:hidden;
-            text-overflow:ellipsis;text-align:center;}
+            padding:14px;background:#fff;opacity:0;transition:opacity .15s ease;}
+          .ico .mono{font-size:24px;font-weight:600;color:var(--text);}
+          .lbl{font-size:12px;font-weight:500;max-width:74px;white-space:nowrap;overflow:hidden;
+            text-overflow:ellipsis;text-align:center;color:var(--sub);}
+          .guide{display:flex;flex-direction:column;gap:12px;}
+          .row{display:flex;align-items:center;gap:15px;background:var(--card);border:.5px solid var(--border);
+            border-radius:20px;padding:17px 18px;text-decoration:none;color:inherit;
+            box-shadow:inset 0 .5px 0 var(--hair),0 1px 1px var(--s1),0 6px 18px var(--s2);
+            transition:transform .16s ease;}
+          a.row:active{transform:scale(.985);}
+          .row .g{font-size:22px;flex:none;width:44px;height:44px;border-radius:13px;background:var(--glyphbg);
+            border:.5px solid var(--border);display:grid;place-items:center;}
+          .row .body{flex:1;min-width:0;}
+          .row .t{font-size:16px;font-weight:600;margin:0 0 3px;letter-spacing:-.1px;}
+          .row .d{font-size:13px;line-height:1.42;color:var(--sub);margin:0;}
+          .row .chev{flex:none;width:9px;height:9px;border-right:2px solid var(--sub);
+            border-bottom:2px solid var(--sub);transform:rotate(-45deg);opacity:.5;margin-right:2px;}
+          .hello{text-align:center;margin:2px 0 24px;}
+          .hello .t{font-size:25px;font-weight:700;letter-spacing:-.5px;margin:0 0 7px;}
+          .hello .d{font-size:15px;line-height:1.4;color:var(--sub);margin:0 auto;max-width:340px;}
           @media (max-width:380px){.grid{grid-template-columns:repeat(3,1fr);}}
         </style></head><body>
           <div class="wrap">
-            <div class="brand"><span class="bear">🐻</span><h1>Brown<b>Bear</b></h1></div>
-            <form class="search" action="\(engine.formAction)" method="GET" autocomplete="off">
+            <div class="brand fade"><span class="bear">🐻</span><h1>BrownBear</h1></div>
+            <form class="search fade" style="animation-delay:.02s" action="\(engine.formAction)" method="GET" autocomplete="off">
               <svg viewBox="0 0 24 24"><path d="M21 20l-5.6-5.6a7 7 0 10-1.4 1.4L20 21zM5 10a5 5 0 1110 0 5 5 0 01-10 0z"/></svg>
               <input name="\(engine.formQueryParam)" placeholder="Search \(engine.title)" autocapitalize="off" autocorrect="off" spellcheck="false">
             </form>
-            <div class="grid">
-        \(tiles)
-            </div>
+        \(content)
           </div>
         </body></html>
         """
     }
+
+    /// The onboarding guide shown on a fresh New Tab page (no bookmarks yet) — what makes BrownBear
+    /// different, in three taps' worth of plain language. Static, first-party HTML (no user strings).
+    private static let newTabGuideHTML = """
+    <div class="hello fade" style="animation-delay:.05s">
+      <p class="t">Make the web yours</p>
+      <p class="d">A power browser that runs userscripts and real extensions — on iOS.</p>
+    </div>
+    <div class="guide">
+      <a class="row fade" style="animation-delay:.12s" href="https://greasyfork.org/">
+        <span class="g">📝</span>
+        <span class="body">
+          <p class="t">Userscripts</p>
+          <p class="d">Install a script to change how any site looks or works. Browse thousands on GreasyFork.</p>
+        </span>
+        <span class="chev"></span>
+      </a>
+      <a class="row fade" style="animation-delay:.18s" href="https://chromewebstore.google.com/">
+        <span class="g">🧩</span>
+        <span class="body">
+          <p class="t">Extensions</p>
+          <p class="d">Add Chrome &amp; Firefox extensions — ad blockers, userscript managers, and more.</p>
+        </span>
+        <span class="chev"></span>
+      </a>
+      <div class="row fade" style="animation-delay:.24s">
+        <span class="g">🎨</span>
+        <span class="body">
+          <p class="t">Make it yours</p>
+          <p class="d">Light, Dark, or the classic OG BrownBear theme — in Settings → Appearance.</p>
+        </span>
+      </div>
+    </div>
+    """
 
     /// The private/incognito New Tab page: a dark, self-explanatory page that makes clear nothing is
     /// being saved. No shortcut tiles (which would leak browsing) — just the search box and the
