@@ -231,6 +231,13 @@ final class ChromeWebStoreTests: XCTestCase {
         // The nested x blob must be percent-encoded so its inner & doesn't split the query.
         XCTAssertFalse(string.contains("x=id="))
         XCTAssertTrue(string.contains(id))
+        // Regression guard: the prodversion must stay arbitrarily high. The update server gates each
+        // item on its manifest minimum_chrome_version; a low version (e.g. 120) makes the server return
+        // 204 for any extension that needs a newer Chrome — the "some extensions fail to get from the
+        // store" bug. Keep it inflated so nothing is ever gated out.
+        XCTAssertTrue(string.contains("prodversion=\(ChromeWebStore.defaultChromeVersion)"))
+        let major = Int(ChromeWebStore.defaultChromeVersion.split(separator: ".").first ?? "0") ?? 0
+        XCTAssertGreaterThanOrEqual(major, 200, "prodversion must stay high so minimum_chrome_version never gates installs")
     }
 }
 
