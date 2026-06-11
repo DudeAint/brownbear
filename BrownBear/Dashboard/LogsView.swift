@@ -63,7 +63,10 @@ struct LogsView: View {
             )
         } else {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
+                // A plain VStack (not Lazy): the log set is capped at 300, and keeping every row rendered
+                // means a text selection survives scrolling — a Lazy stack recycles off-screen rows and
+                // drops the selection the moment it scrolls out of view.
+                VStack(alignment: .leading, spacing: 0) {
                     ForEach(model.filteredLogs) { entry in
                         VStack(alignment: .leading, spacing: 2) {
                             if let name = entry.scriptName {
@@ -78,6 +81,7 @@ struct LogsView: View {
                     }
                 }
                 .padding(.vertical, 8)
+                .textSelection(.enabled)   // select & copy log text directly
             }
         }
     }
