@@ -68,6 +68,9 @@ final class BrownBearBrowserViewController: UIViewController {
     var bottomPositionConstraints: [NSLayoutConstraint] = []
     /// Observes `.brownBearChromeLayoutChanged` so a Settings change re-lays-out the chrome live.
     var chromeLayoutObserver: NSObjectProtocol?
+    /// Observes `.brownBearOpenURL` so a presented surface (e.g. the dashboard's store links) can open a
+    /// URL in a new tab without holding a reference to this controller.
+    var openURLObserver: NSObjectProtocol?
     /// Observes keyboard-frame changes so the BOTTOM address bar lifts above the keyboard while editing.
     var keyboardObserver: NSObjectProtocol?
     /// True while the keyboard is up — scroll-hide is suspended so typing doesn't fight the lift.
@@ -151,6 +154,7 @@ final class BrownBearBrowserViewController: UIViewController {
     deinit {
         if let chromeLayoutObserver { NotificationCenter.default.removeObserver(chromeLayoutObserver) }
         if let keyboardObserver { NotificationCenter.default.removeObserver(keyboardObserver) }
+        if let openURLObserver { NotificationCenter.default.removeObserver(openURLObserver) }
     }
 
     override var preferredStatusBarStyle: UIStatusBarStyle {
