@@ -85,29 +85,20 @@ struct ExtensionsView: View {
     }
 
     var body: some View {
-        Group {
-            if model.extensions.isEmpty {
-                DashboardEmptyState(
-                    systemImage: "puzzlepiece.extension.fill",
-                    title: "No extensions",
-                    message: """
-                    Install a Chrome/Firefox-style extension from a .crx/.zip file or straight from \
-                    the Chrome Web Store. Content scripts, background workers, and declarativeNetRequest \
-                    blocking all run with a chrome.* API surface.
-                    """,
-                    action: { importing = true },
-                    actionTitle: "Install extension"
-                )
-            } else {
-                List {
+        List {
+            if !model.extensions.isEmpty {
+                Section {
                     ForEach(model.extensions) { ext in
                         extensionRow(ext)
                             .listRowBackground(BBTheme.Color.card)
                     }
+                } header: {
+                    Text("Installed").foregroundStyle(BBTheme.Color.textSecondary)
                 }
-                .scrollContentBackground(.hidden)
             }
+            recommendedSections
         }
+        .scrollContentBackground(.hidden)
         .overlay {
             if model.isInstalling {
                 ZStack {
@@ -156,6 +147,62 @@ struct ExtensionsView: View {
             Text(model.errorMessage ?? "")
         }
         .task { await model.load() }
+    }
+
+    // MARK: - Recommended
+
+    /// Curated one-tap installs, grouped by a small category label, hiding any already installed.
+    @ViewBuilder private var recommendedSections: some View {
+        let available = Self.recommended.filter { rec in
+            !model.extensions.contains {
+                $0.id == rec.id || $0.displayName.localizedCaseInsensitiveContains(rec.name)
+            }
+        }
+        ForEach(Self.recommendedCategories, id: \.self) { category in
+            let items = available.filter { $0.category == category }
+            if !items.isEmpty {
+                Section {
+                    ForEach(items) { recommendedRow($0) }
+                } header: {
+                    Text(category).foregroundStyle(BBTheme.Color.textSecondary)
+                }
+            }
+        }
+    }
+
+    private func recommendedRow(_ rec: RecommendedExtension) -> some View {
+        HStack(spacing: 12) {
+            Text(rec.emoji)
+                .font(.title2)
+                .frame(width: 40, height: 40)
+                .background(BBTheme.Color.fieldFill, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(rec.name).font(.body.weight(.semibold)).foregroundStyle(BBTheme.Color.textPrimary)
+                    if rec.openSource {
+                        Text("Open source")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(BBTheme.Color.secure)
+                    }
+                }
+                Text(rec.blurb)
+                    .font(.caption)
+                    .foregroundStyle(BBTheme.Color.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Button {
+                Task { await model.installFromStore(rec.id) }
+            } label: {
+                Text("Get").font(.subheadline.weight(.bold))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .tint(BBTheme.Color.accent)
+            .disabled(model.isInstalling)
+        }
+        .padding(.vertical, 2)
+        .listRowBackground(BBTheme.Color.card)
     }
 
     private func extensionRow(_ ext: WebExtension) -> some View {
@@ -253,4 +300,44 @@ struct ExtensionIconView: View {
             }
         }
     }
+}
+
+// MARK: - Recommended extensions (curated one-tap installs)
+
+/// A curated extension the Extensions tab offers to install in one tap. `id` is the Chrome Web Store
+/// id, which the existing `installFromStore` flow accepts directly.
+struct RecommendedExtension: Identifiable {
+    let id: String
+    let name: String
+    let category: String
+    let emoji: String
+    let blurb: String
+    let openSource: Bool
+}
+
+extension ExtensionsView {
+    /// Category display order for the recommended sections (small, non-intrusive labels).
+    static let recommendedCategories = ["Userscripts", "Ad blocking", "Appearance"]
+
+    /// The curated set. Store ids should be device-verified; an install that fails surfaces the normal
+    /// error alert, so a stale id is non-fatal. (ScriptCat / uBO-full can be added once their store
+    /// ids are confirmed, or installed via the "From a web store…" option.)
+    static let recommended: [RecommendedExtension] = [
+        RecommendedExtension(id: "dhdgffkkebhmkfjojejmpbldmpobfkfo", name: "Tampermonkey",
+                             category: "Userscripts", emoji: "🐵",
+                             blurb: "The most popular userscript manager — run scripts that customize any site.",
+                             openSource: false),
+        RecommendedExtension(id: "jinjaccalgkegednnccohejagnlnfdag", name: "Violentmonkey",
+                             category: "Userscripts", emoji: "🐒",
+                             blurb: "Open-source userscript manager with a clean, privacy-minded design.",
+                             openSource: true),
+        RecommendedExtension(id: "ddkjiahejlhfcafbddmgiahcphecmpfh", name: "uBlock Origin Lite",
+                             category: "Ad blocking", emoji: "🛡️",
+                             blurb: "Efficient, open-source content blocker — blocks ads and trackers with low overhead.",
+                             openSource: true),
+        RecommendedExtension(id: "eimadpbcbfnmbkopoojfekhnkhdbieeh", name: "Dark Reader",
+                             category: "Appearance", emoji: "🌙",
+                             blurb: "Open-source dark mode for every website, with per-site controls.",
+                             openSource: true)
+    ]
 }
