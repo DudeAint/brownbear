@@ -13,8 +13,14 @@ import Foundation
 
 enum ChromeWebStore {
 
-    /// A plausible recent Chrome version — the endpoint requires one to serve a package.
-    static let defaultChromeVersion = "120.0.0.0"
+    /// The Chrome version we tell the CRX endpoint we are. Google's update server gates each item on its
+    /// manifest `minimum_chrome_version`: ask as too OLD a Chrome and a modern extension (e.g. uBlock
+    /// Origin Lite, which needs newer than 120) comes back 204 No Content — the "some extensions just say
+    /// failed to get from the store" bug, while older-requirement ones download fine. We declare an
+    /// arbitrarily-high version so nothing is ever gated out; the server accepts it and still serves the
+    /// latest compatible package. (Verified live: id ddkj… returns 204 at prodversion=120 but 302 to a
+    /// real CRX at 9999, while Tampermonkey/Dark Reader/Bitwarden succeed at both.)
+    static let defaultChromeVersion = "9999.0.0.0"
 
     /// Pull a 32-char extension id (lowercase a–p) out of a store URL or a bare id string.
     static func extensionID(from input: String) -> String? {
@@ -56,8 +62,17 @@ enum ChromeWebStore {
             throw BrownBearError.metadataParseFailed("couldn't build a download URL for \(extensionID)")
         }
         let (data, response) = try await session.data(from: url)
-        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-            throw BrownBearError.navigationFailed("the store returned HTTP \(http.statusCode) for \(extensionID)")
+        if let http = response as? HTTPURLResponse {
+            // 204 No Content = the endpoint has no package for this id. With our high prodversion that's
+            // no longer a "your Chrome is too old" gate, so it means the id is wrong or the item is
+            // unlisted / region-locked / removed — say so plainly instead of a bare "empty package".
+            if http.statusCode == 204 {
+                throw BrownBearError.navigationFailed("the Chrome Web Store has no downloadable package "
+                    + "for \(extensionID). The id may be wrong, or the item may be unlisted or removed.")
+            }
+            if !(200...299).contains(http.statusCode) {
+                throw BrownBearError.navigationFailed("the store returned HTTP \(http.statusCode) for \(extensionID)")
+            }
         }
         guard !data.isEmpty else {
             throw BrownBearError.metadataParseFailed("the store returned an empty package for \(extensionID)")
