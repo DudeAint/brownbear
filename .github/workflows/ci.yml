@@ -92,17 +92,11 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0   # full history so setup-ios-build can restore mtimes → incremental builds
       - name: Setup iOS build (Xcode + XcodeGen + SPM cache)
         uses: ./.github/actions/setup-ios-build
-      - name: Cache DerivedData (incremental builds)
-        uses: actions/cache@v4
-        with:
-          path: .derived-data
-          key: dd-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            dd-${{ runner.os }}-
+      # DerivedData is NOT cached/reused across commits — reusing it shipped stale binaries (Xcode
+      # skipped recompiling changed files). A clean build every run guarantees the tests see the latest
+      # code; only the SwiftPM package cache (safe) is reused.
       - name: Pick and pre-boot an iOS simulator
         id: sim
         run: |

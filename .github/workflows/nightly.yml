@@ -29,20 +29,15 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0   # full history so setup-ios-build can restore mtimes → incremental builds
       - name: Setup iOS build (Xcode + XcodeGen + SPM cache)
         uses: ./.github/actions/setup-ios-build
-      - name: Cache DerivedData
-        uses: actions/cache@v4
-        with:
-          path: .derived-data
-          key: dd-nightly-${{ runner.os }}-${{ github.sha }}
-          restore-keys: dd-nightly-${{ runner.os }}-
+      # DerivedData is NOT cached/reused — reusing it shipped a STALE nightly (Xcode skipped recompiling
+      # changed files, so fixes never made it into the binary). A clean build every run is the only way to
+      # guarantee the nightly contains the latest code; only the SwiftPM package cache (safe) is reused.
       - name: Build unsigned IPA
         # Debug, not Release: the nightly is a bleeding-edge build for on-device testing, and a Debug
-        # build (no whole-module optimization) compiles far faster and benefits from incremental caching,
-        # turning the ~30-minute nightly into a few minutes. Stable vX.Y.Z releases stay Release-built.
+        # build (no whole-module optimization) compiles meaningfully faster than Release. Stable vX.Y.Z
+        # releases stay Release-built.
         run: |
           set -o pipefail
           xcodebuild build \
