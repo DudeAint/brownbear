@@ -1808,6 +1808,52 @@
       };
     }
 
+    // Cache API (CacheStorage). A real service worker has `caches`; the JSContext does not. A worker
+    // that touches it during init (Stylus's execMirror) throws "caches is not defined" — and if that
+    // throw is in the synchronous boot path it aborts BEFORE the worker registers its fetch/message
+    // handlers, so the page's chrome-extension://<id>/data?… requests 404 and the popup renders blank.
+    // Provide an inert, empty CacheStorage so those paths no-op instead of crashing the boot.
+    if (typeof globalThis.caches === 'undefined') {
+      var __bbEmptyCache = {
+        match: function () { return Promise.resolve(undefined); },
+        matchAll: function () { return Promise.resolve([]); },
+        add: function () { return Promise.resolve(); }, addAll: function () { return Promise.resolve(); },
+        put: function () { return Promise.resolve(); }, 'delete': function () { return Promise.resolve(false); },
+        keys: function () { return Promise.resolve([]); }
+      };
+      globalThis.caches = {
+        open: function () { return Promise.resolve(__bbEmptyCache); },
+        match: function () { return Promise.resolve(undefined); }, has: function () { return Promise.resolve(false); },
+        'delete': function () { return Promise.resolve(false); }, keys: function () { return Promise.resolve([]); }
+      };
+    }
+
+    // createImageBitmap / OffscreenCanvas / ImageData. A worker that builds its toolbar icon from an
+    // image (Stylus's setIcon → loadImage → createImageBitmap, then an OffscreenCanvas to read pixels)
+    // throws "createImageBitmap is not defined" in a bare JSContext. Provide minimal shapes so the icon
+    // path degrades (no rendered icon) rather than aborting the worker.
+    if (typeof globalThis.createImageBitmap === 'undefined') {
+      globalThis.createImageBitmap = function () { return Promise.resolve({ width: 0, height: 0, close: function () {} }); };
+    }
+    if (typeof globalThis.ImageData === 'undefined') {
+      globalThis.ImageData = function (data, w, h) {
+        if (typeof data === 'number') { h = w; w = data; data = null; }
+        this.width = w | 0; this.height = h | 0; this.data = data || new Uint8ClampedArray(this.width * this.height * 4);
+      };
+    }
+    if (typeof globalThis.OffscreenCanvas === 'undefined') {
+      globalThis.OffscreenCanvas = function (w, h) {
+        this.width = w | 0; this.height = h | 0;
+        this.getContext = function () {
+          return { canvas: this, drawImage: function () {}, clearRect: function () {}, fillRect: function () {},
+                   getImageData: function () { return new globalThis.ImageData(1, 1); },
+                   putImageData: function () {}, createImageData: function () { return new globalThis.ImageData(1, 1); } };
+        };
+        this.convertToBlob = function () { return Promise.resolve(new globalThis.Blob([])); };
+        this.transferToImageBitmap = function () { return { width: this.width, height: this.height, close: function () {} }; };
+      };
+    }
+
     // BroadcastChannel — uBO's scriptlet-filtering.js does `new self.BroadcastChannel('uBO')` at module
     // eval; its absence ("undefined is not a constructor") aborts the module graph. Same-context
     // loopback: channels with one name reach each other inside THIS worker; cross-context fan-out

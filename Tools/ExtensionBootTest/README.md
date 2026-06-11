@@ -80,3 +80,25 @@ device. Treat the classic-script errors as best-effort; trust the **link-failure
 **missing-`chrome.*`** signals. Bridge calls to the background don't resolve here (the booted page
 has no live background), so a page that merely *awaits* data isn't flagged — only one that *throws*
 or *fails to link* is.
+
+---
+
+## Full offline engine (worker + popup together)
+
+`engine.mjs` is the real thing: it runs an extension's **background worker** (JSContext) AND its
+**popup** (WKWebView) in one process, wired by a faithful re-implementation of BrownBear's native
+layer — **shared `chrome.storage`**, the popup↔worker **runtime-message router**, the **port hub**,
+and the **service-worker fetch** bridge. The popup↔worker handshake actually happens, so deep
+cross-context bugs reproduce here instead of only on device.
+
+```sh
+node Tools/ExtensionBootTest/engine.mjs /tmp/crx/<id>/unpacked <id> [popupHtmlRel]
+```
+
+It boots the worker, fires `onInstalled`+`onStartup`, exercises the SW-fetch path (e.g. Stylus's
+`/data?…`), opens the popup (running its `document.write`-injected scripts through the SW-fetch too),
+then dumps the shared storage + the worker/popup logs.
+
+Honest scope: the popup runs against a permissive DOM (no real layout), so DOM-heavy *rendering* is
+best-effort — but storage, messaging, ports, and the SW-fetch path are **real**, which is where these
+bugs live. It's how the `caches` / `createImageBitmap` worker gaps (Stylus) were found offline.
