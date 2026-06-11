@@ -54,6 +54,13 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
     private var pendingResponses: [String: CheckedContinuation<[String: Any]?, Never>] = [:]
     private var responseCounter = 0
 
+    // Pending service-worker fetch-event results, keyed by a per-request id. The worker's fetch handler
+    // settles asynchronously and reports back through the __bb_sw_fetch_response native (the proven
+    // setObject callback path), which resolves the parked continuation. Internal so +ServiceWorkerFetch
+    // can reach them. Queue-confined.
+    var pendingServiceWorkerFetch: [String: CheckedContinuation<ServiceWorkerFetchResponse?, Never>] = [:]
+    var serviceWorkerFetchCounter = 0
+
     // chrome.alarms — in-memory, foreground-lifetime GCD timers.
     private struct AlarmState { var scheduledTime: Double; var periodInMinutes: Double }
     private var alarms: [String: AlarmState] = [:]
@@ -399,6 +406,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
         installPlatformNatives(into: context)
         installDownloadsNatives(into: context)
         installBrowserDataNatives(into: context)
+        installServiceWorkerFetchNative(into: context)
 
         // chrome.tabs from the background worker. Hop to the main actor (TabManager is MainActor),
         // run the op, then call back onto this context's queue with the JSON result.

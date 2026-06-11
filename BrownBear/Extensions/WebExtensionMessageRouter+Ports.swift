@@ -32,7 +32,14 @@ extension WebExtensionMessageRouter {
             // The sender object the worker's onConnect Port.sender exposes: the extension id and the
             // originating URL (if the endpoint provided one). Frame ids are main-frame on iOS.
             var sender: [String: Any] = ["id": extensionID]
-            if let url = payload["url"] as? String { sender["url"] = url }
+            if let url = payload["url"] as? String, !url.isEmpty {
+                sender["url"] = url
+                // Chrome also sets sender.origin on a port. Bitwarden's BrowserApi DROPS a port message
+                // whose sender has no origin ("Message sender has no origin"), which left its Angular
+                // popup's device service null → this.device.toString() crashed → the popup hung on its
+                // loading spinner. Mirror the message-sender path (WebExtensionMessageRouter.origin).
+                if let origin = Self.origin(ofURLString: url) { sender["origin"] = origin }
+            }
             let portId = hub.connectFromClient(extensionID: extensionID, name: name,
                                                initiatorToken: token, initiatorClient: self,
                                                senderJSON: Self.encodeJSONForJS(sender))
