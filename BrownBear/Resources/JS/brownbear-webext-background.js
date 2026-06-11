@@ -2061,6 +2061,14 @@
     ContextType: { TAB: 'TAB', POPUP: 'POPUP', BACKGROUND: 'BACKGROUND', OFFSCREEN_DOCUMENT: 'OFFSCREEN_DOCUMENT', SIDE_PANEL: 'SIDE_PANEL' },
     getManifest: function () { return deepClone(manifest); },
     getURL: getURL,
+    // chrome.runtime.reload() — Chrome restarts the whole extension (re-evaluates the background).
+    // uBO Lite calls it to apply a hard reset. iOS has no live worker-respawn primitive exposed here,
+    // so route to the optional native re-boot bridge when present; otherwise it's a safe no-op (the
+    // extension keeps running on its current state) rather than an undefined-method throw that aborts
+    // whatever code path triggered the reset.
+    reload: function () {
+      try { if (typeof __bb_runtime_reload === 'function') { __bb_runtime_reload(); } } catch (e) {}
+    },
     onMessage: makeEvent(messageListeners),
     onUserScriptMessage: makeEvent(userScriptMessageListeners),
     onUserScriptConnect: makeEvent(userScriptConnectListeners),
@@ -2541,6 +2549,10 @@
   // extension can react to optional-permission changes exactly as in Chrome (uBO Lite / Dark Reader).
   var permissionsEventLists = { 'permissions.onAdded': [], 'permissions.onRemoved': [] };
   var tabs = {
+    // chrome.tabs.TAB_ID_NONE — the sentinel (-1) for "no tab" (e.g. a SW event not tied to a tab).
+    // ScriptCat and others compare against it directly; its absence reads as undefined and a
+    // `tabId === chrome.tabs.TAB_ID_NONE` guard silently never matches.
+    TAB_ID_NONE: -1,
     query: function (q, cb) { return settleBg(tabsCall('query', { query: q || {} }), cb); },
     // chrome.tabs.detectLanguage([tabId], cb) — Chrome returns the ISO code of the tab's content. iOS has
     // no native page-language detector, so grab a sample of the tab's text via scripting.executeScript and
@@ -2709,7 +2721,13 @@
     // onHighlightChanged is Chrome's deprecated alias for onHighlighted; some older bundles still use it.
     onHighlighted: makeEvent([]),
     onHighlightChanged: makeEvent([]),
-    onZoomChange: makeEvent([])
+    onZoomChange: makeEvent([]),
+    // Tabs moving between windows / reordering. iOS's single-window model rarely fires these, but a
+    // background that registers them at boot (OneTab's onMoved/onAttached/onDetached listeners) must
+    // find the event objects or `undefined.addListener` throws before its handlers are installed.
+    onAttached: makeEvent([]),
+    onDetached: makeEvent([]),
+    onMoved: makeEvent([])
   };
 
   // chrome.tabGroups — iOS has no tab groups, so this is a non-throwing shim (query → [], get → null,
@@ -3228,6 +3246,13 @@
     DomainType: { FIRST_PARTY: 'firstParty', THIRD_PARTY: 'thirdParty' },
     UnsupportedRegexReason: { SYNTAX_ERROR: 'syntaxError', MEMORY_LIMIT_EXCEEDED: 'memoryLimitExceeded' },
     DYNAMIC_RULESET_ID: '_dynamic', SESSION_RULESET_ID: '_session',
+    // Chrome 121+ split the combined dynamic/session cap into per-bucket limits, and adblockers
+    // (uBO/uBO Lite, AdGuard, Ghostery) read these directly to chunk their rule writes. Keeping only
+    // the legacy combined constant left `chrome.declarativeNetRequest.MAX_NUMBER_OF_DYNAMIC_RULES`
+    // undefined, so a `rules.length < MAX_…` guard compared against undefined (NaN) and silently
+    // mis-sized the batch. Values mirror Chrome's documented limits.
+    MAX_NUMBER_OF_DYNAMIC_RULES: 30000, MAX_NUMBER_OF_UNSAFE_DYNAMIC_RULES: 5000,
+    MAX_NUMBER_OF_SESSION_RULES: 5000, MAX_NUMBER_OF_UNSAFE_SESSION_RULES: 5000,
     MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES: 30000, MAX_NUMBER_OF_REGEX_RULES: 1000,
     MAX_NUMBER_OF_STATIC_RULESETS: 100, MAX_NUMBER_OF_ENABLED_STATIC_RULESETS: 50,
     GUARANTEED_MINIMUM_STATIC_RULES: 30000,
