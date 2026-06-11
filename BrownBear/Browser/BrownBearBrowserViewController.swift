@@ -305,19 +305,20 @@ final class BrownBearBrowserViewController: UIViewController {
         if web.isEmpty {
             content = newTabGuideHTML
         } else {
-            let tiles = web.prefix(12).map { bm -> String in
+            let tiles = web.prefix(12).enumerated().map { index, bm -> String in
                 let title = htmlEscape(bm.displayTitle)
                 let url = htmlEscape(bm.url.absoluteString)
                 let host = htmlEscape(bm.url.host ?? "")
                 let letter = htmlEscape((bm.displayTitle.first.map { String($0).uppercased() }) ?? "•")
+                let delay = String(format: "%.2f", 0.05 + Double(index) * 0.03)   // staggered entrance
                 return """
-                <a class="tile" href="\(url)">
+                <a class="tile fade" style="animation-delay:\(delay)s" href="\(url)">
                 <span class="ico"><img src="https://\(host)/favicon.ico" onload="this.style.opacity=1" onerror="this.remove()" alt="">
                 <span class="mono">\(letter)</span></span>
                 <span class="lbl">\(title)</span></a>
                 """
             }.joined(separator: "\n")
-            content = "<div class=\"grid fade\" style=\"animation-delay:.05s\">\n\(tiles)\n</div>"
+            content = "<div class=\"grid\">\n\(tiles)\n</div>"
         }
 
         return """
@@ -325,46 +326,61 @@ final class BrownBearBrowserViewController: UIViewController {
         <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
         <style>
           :root{color-scheme:light dark;
-            --bg:#F2F2F7;--card:#FFFFFF;--field:#FFFFFF;--text:#1C1C1E;--sub:#6C6C70;--border:#E3E3E8;
-            --tile:#EDEDF2;--shadow:rgba(0,0,0,.06);}
+            --bg:#F2F2F7;--card:#FFFFFF;--field:#FFFFFF;--text:#1C1C1E;--sub:#6C6C70;--border:#E6E6EB;
+            --hair:rgba(255,255,255,.7);--tile:#EDEDF2;--glyphbg:#F2F2F7;
+            --s1:rgba(0,0,0,.04);--s2:rgba(0,0,0,.07);}
           @media (prefers-color-scheme:dark){:root{
             --bg:#000000;--card:#1C1C1E;--field:#1C1C1E;--text:#F5F5F7;--sub:#9A9AA0;--border:#2C2C2E;
-            --tile:#2C2C2E;--shadow:rgba(0,0,0,.5);}}
+            --hair:rgba(255,255,255,.05);--tile:#2C2C2E;--glyphbg:#2C2C2E;
+            --s1:rgba(0,0,0,.5);--s2:rgba(0,0,0,.6);}}
           *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
           html,body{margin:0;height:100%;font-family:-apple-system,system-ui,sans-serif;
             background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased;}
-          .wrap{max-width:640px;margin:0 auto;padding:max(56px,11vh) 22px 48px;}
-          @keyframes up{from{opacity:0;transform:translateY(12px);}to{opacity:1;transform:none;}}
-          .fade{opacity:0;animation:up .5s cubic-bezier(.22,.61,.36,1) forwards;}
-          .brand{display:flex;align-items:center;gap:9px;justify-content:center;margin-bottom:24px;}
-          .brand .bear{font-size:26px;}
-          .brand h1{font-size:20px;font-weight:700;margin:0;letter-spacing:-.3px;}
+          .wrap{max-width:600px;margin:0 auto;padding:max(60px,12vh) 22px 48px;}
+          @keyframes up{from{opacity:0;transform:translateY(14px);}to{opacity:1;transform:none;}}
+          .fade{opacity:0;animation:up .55s cubic-bezier(.22,.61,.36,1) both;}
+          @media (prefers-reduced-motion:reduce){.fade{animation:none;opacity:1;}
+            .tile,.row,form.search{transition:none;}}
+          .brand{display:flex;align-items:center;gap:9px;justify-content:center;margin-bottom:26px;}
+          .brand .bear{font-size:25px;}
+          .brand h1{font-size:19px;font-weight:700;margin:0;letter-spacing:-.2px;}
           form.search{display:flex;align-items:center;gap:11px;background:var(--field);
-            border:1px solid var(--border);border-radius:15px;padding:0 16px;height:52px;
-            margin-bottom:34px;box-shadow:0 6px 20px var(--shadow);transition:box-shadow .2s ease;}
-          form.search:focus-within{box-shadow:0 8px 26px var(--shadow);}
-          form.search svg{width:19px;height:19px;fill:var(--sub);flex:none;}
-          form.search input{flex:1;border:0;background:transparent;font-size:17px;color:var(--text);outline:none;}
-          .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;}
-          .tile{display:flex;flex-direction:column;align-items:center;gap:8px;
-            text-decoration:none;color:var(--text);transition:transform .12s ease;}
-          .tile:active{transform:scale(.93);}
-          .ico{position:relative;width:58px;height:58px;border-radius:16px;background:var(--tile);
-            border:1px solid var(--border);display:grid;place-items:center;overflow:hidden;}
+            border:.5px solid var(--border);border-radius:16px;padding:0 16px;height:54px;margin-bottom:36px;
+            box-shadow:0 1px 1px var(--s1),0 8px 24px var(--s2);
+            transition:box-shadow .25s ease,transform .25s ease;}
+          form.search:focus-within{box-shadow:0 1px 1px var(--s1),0 12px 30px var(--s2);transform:translateY(-1px);}
+          form.search svg{width:18px;height:18px;fill:var(--sub);flex:none;}
+          form.search input{flex:1;border:0;background:transparent;font-size:17px;color:var(--text);
+            outline:none;font-weight:450;}
+          form.search input::placeholder{color:var(--sub);}
+          .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:18px 16px;}
+          .tile{display:flex;flex-direction:column;align-items:center;gap:9px;
+            text-decoration:none;color:var(--text);transition:transform .14s cubic-bezier(.34,1.56,.64,1);}
+          .tile:active{transform:scale(.9);}
+          .ico{position:relative;width:60px;height:60px;border-radius:17px;background:var(--tile);
+            border:.5px solid var(--border);display:grid;place-items:center;overflow:hidden;
+            box-shadow:inset 0 .5px 0 var(--hair),0 2px 8px var(--s1);}
           .ico img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
-            padding:13px;background:#fff;opacity:0;transition:opacity .12s ease;}
+            padding:14px;background:#fff;opacity:0;transition:opacity .15s ease;}
           .ico .mono{font-size:24px;font-weight:600;color:var(--text);}
-          .lbl{font-size:12px;font-weight:500;max-width:72px;white-space:nowrap;overflow:hidden;
+          .lbl{font-size:12px;font-weight:500;max-width:74px;white-space:nowrap;overflow:hidden;
             text-overflow:ellipsis;text-align:center;color:var(--sub);}
           .guide{display:flex;flex-direction:column;gap:12px;}
-          .row{display:flex;align-items:center;gap:14px;background:var(--card);border:1px solid var(--border);
-            border-radius:18px;padding:16px 18px;box-shadow:0 4px 16px var(--shadow);text-decoration:none;color:inherit;}
-          .row .g{font-size:26px;flex:none;width:34px;text-align:center;}
-          .row .t{font-size:16px;font-weight:600;margin:0 0 2px;}
-          .row .d{font-size:13px;line-height:1.4;color:var(--sub);margin:0;}
-          .hello{text-align:center;margin:0 0 22px;}
-          .hello .t{font-size:24px;font-weight:700;letter-spacing:-.4px;margin:0 0 6px;}
-          .hello .d{font-size:15px;color:var(--sub);margin:0;}
+          .row{display:flex;align-items:center;gap:15px;background:var(--card);border:.5px solid var(--border);
+            border-radius:20px;padding:17px 18px;text-decoration:none;color:inherit;
+            box-shadow:inset 0 .5px 0 var(--hair),0 1px 1px var(--s1),0 6px 18px var(--s2);
+            transition:transform .16s ease;}
+          a.row:active{transform:scale(.985);}
+          .row .g{font-size:22px;flex:none;width:44px;height:44px;border-radius:13px;background:var(--glyphbg);
+            border:.5px solid var(--border);display:grid;place-items:center;}
+          .row .body{flex:1;min-width:0;}
+          .row .t{font-size:16px;font-weight:600;margin:0 0 3px;letter-spacing:-.1px;}
+          .row .d{font-size:13px;line-height:1.42;color:var(--sub);margin:0;}
+          .row .chev{flex:none;width:9px;height:9px;border-right:2px solid var(--sub);
+            border-bottom:2px solid var(--sub);transform:rotate(-45deg);opacity:.5;margin-right:2px;}
+          .hello{text-align:center;margin:2px 0 24px;}
+          .hello .t{font-size:25px;font-weight:700;letter-spacing:-.5px;margin:0 0 7px;}
+          .hello .d{font-size:15px;line-height:1.4;color:var(--sub);margin:0 auto;max-width:340px;}
           @media (max-width:380px){.grid{grid-template-columns:repeat(3,1fr);}}
         </style></head><body>
           <div class="wrap">
@@ -382,22 +398,24 @@ final class BrownBearBrowserViewController: UIViewController {
     /// The onboarding guide shown on a fresh New Tab page (no bookmarks yet) — what makes BrownBear
     /// different, in three taps' worth of plain language. Static, first-party HTML (no user strings).
     private static let newTabGuideHTML = """
-    <div class="hello fade" style="animation-delay:.04s">
+    <div class="hello fade" style="animation-delay:.05s">
       <p class="t">Make the web yours</p>
       <p class="d">A power browser that runs userscripts and real extensions — on iOS.</p>
     </div>
-    <div class="guide fade" style="animation-delay:.08s">
-      <a class="row" href="https://greasyfork.org/">
+    <div class="guide">
+      <a class="row fade" style="animation-delay:.12s" href="https://greasyfork.org/">
         <span class="g">📝</span>
-        <span><p class="t">Userscripts</p><p class="d">Install a script to change how any site looks or works. Browse thousands on GreasyFork.</p></span>
+        <span class="body"><p class="t">Userscripts</p><p class="d">Install a script to change how any site looks or works. Browse thousands on GreasyFork.</p></span>
+        <span class="chev"></span>
       </a>
-      <a class="row" href="https://chromewebstore.google.com/">
+      <a class="row fade" style="animation-delay:.18s" href="https://chromewebstore.google.com/">
         <span class="g">🧩</span>
-        <span><p class="t">Extensions</p><p class="d">Add Chrome &amp; Firefox extensions — ad blockers, userscript managers, and more.</p></span>
+        <span class="body"><p class="t">Extensions</p><p class="d">Add Chrome &amp; Firefox extensions — ad blockers, userscript managers, and more.</p></span>
+        <span class="chev"></span>
       </a>
-      <div class="row">
+      <div class="row fade" style="animation-delay:.24s">
         <span class="g">🎨</span>
-        <span><p class="t">Make it yours</p><p class="d">Light, Dark, or the classic OG BrownBear theme — in Settings → Appearance.</p></span>
+        <span class="body"><p class="t">Make it yours</p><p class="d">Light, Dark, or the classic OG BrownBear theme — in Settings → Appearance.</p></span>
       </div>
     </div>
     """
