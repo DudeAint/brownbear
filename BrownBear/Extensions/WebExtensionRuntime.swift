@@ -290,9 +290,17 @@ class WebExtensionRuntime {
         return ids
     }
 
-    /// Dispatch a `.user.js` navigation to ONE webRequest-based manager's listener (picker routing).
-    func dispatchUserScript(extensionID: String, url: URL) async -> Bool {
-        await contexts[extensionID]?.dispatchUserScriptWebRequest(url: url.absoluteString) ?? false
+    /// Hand a `.user.js` navigation to ONE userscript manager's worker (picker routing), through BOTH
+    /// detection channels a manager may use — webRequest.onBeforeRequest (Violentmonkey) AND webNavigation
+    /// onBeforeNavigate/onCommitted/onCompleted (Tampermonkey, whose default `scriptUrlDetection:"auto"`
+    /// watches webNavigation, not webRequest). `tabId` is the REAL tab the install was triggered from: a
+    /// manager opens its confirm page in that tab, and a detector that gates on `tabId > 0` (Tampermonkey)
+    /// would otherwise early-return. Generic — no manager-specific knowledge.
+    func dispatchUserScript(extensionID: String, url: URL, tabId: Int) async -> Bool {
+        guard let context = contexts[extensionID] else { return false }
+        let handled = await context.dispatchUserScriptWebRequest(url: url.absoluteString, tabId: tabId)
+        context.dispatchUserScriptWebNavigation(url: url.absoluteString, tabId: tabId)
+        return handled
     }
 
     /// Deliver chrome.contextMenus.onClicked to an extension's background worker. No-op if the
