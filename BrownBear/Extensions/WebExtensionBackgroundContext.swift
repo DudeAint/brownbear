@@ -46,13 +46,15 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
     /// Internal (not private) so +Crypto's importScripts shim can evaluate a loaded chunk in this
     /// worker's GLOBAL scope (shared lexical env), like importScripts in a real service worker.
     var context: JSContext?
-    // Internal (not private) so the +ServiceWorkerFetch extension can gate its queue hop on a live
-    // context, same cross-file-split reason as `context`/`queue` above.
+    // Internal (not private) so +ServiceWorkerFetch can gate its queue hop on a live context.
     var isAlive = true
 
     // Pending content→background message replies, keyed by a per-context response id.
     private var pendingResponses: [String: CheckedContinuation<[String: Any]?, Never>] = [:]
     private var responseCounter = 0
+    // Parked SW fetch-event results by request id; resolved by __bb_sw_fetch_response (+ServiceWorkerFetch).
+    var pendingServiceWorkerFetch: [String: CheckedContinuation<ServiceWorkerFetchResponse?, Never>] = [:]
+    var serviceWorkerFetchCounter = 0
 
     // chrome.alarms — in-memory, foreground-lifetime GCD timers.
     private struct AlarmState { var scheduledTime: Double; var periodInMinutes: Double }
@@ -399,6 +401,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
         installPlatformNatives(into: context)
         installDownloadsNatives(into: context)
         installBrowserDataNatives(into: context)
+        installServiceWorkerFetchNative(into: context)
 
         // chrome.tabs from the background worker. Hop to the main actor (TabManager is MainActor),
         // run the op, then call back onto this context's queue with the JSON result.

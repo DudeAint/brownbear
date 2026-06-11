@@ -234,6 +234,10 @@ final class WebExtensionSchemeHandler: NSObject, WKURLSchemeHandler {
         case "js", "mjs": return "text/javascript; charset=utf-8"
         case "css": return "text/css; charset=utf-8"
         case "json": return "application/json; charset=utf-8"
+        // Bitwarden loads a .wasm via WebAssembly.instantiateStreaming, which REQUIRES the response carry
+        // `application/wasm`; without this case it got octet-stream and fell back to the slower
+        // instantiate() path with a console error.
+        case "wasm": return "application/wasm"
         case "svg": return "image/svg+xml"
         case "png": return "image/png"
         case "jpg", "jpeg": return "image/jpeg"

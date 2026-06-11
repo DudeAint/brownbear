@@ -1023,13 +1023,19 @@
       // JSContext, not a real SW, so WebKit never fires a fetch event; instead the URL scheme handler,
       // when a request has no packaged file, calls this to give the worker its chance. Returns a JSON
       // string: {matched:false} → fall through to the normal not-found, or the synthesized response.
-      globalThis.__bbDispatchFetch = function (urlStr, method, headersJSON, nativeCallback) {
-        var settle = function (json) {
-          if (typeof nativeCallback === 'function') { try { nativeCallback(json); } catch (e) {} }
+      globalThis.__bbDispatchFetch = function (urlStr, method, headersJSON, requestId) {
+        // Report the result to native through the __bb_sw_fetch_response native (the proven setObject
+        // callback path) rather than a passed-in block — JSC doesn't reliably bridge a Swift block given
+        // as a JS call argument, so the previous callback form silently dropped every reply (blank Stylus
+        // popup). The Promise return is kept for the Node regression test (no native; it reads it directly).
+        var deliver = function (json) {
+          if (requestId != null && typeof globalThis.__bb_sw_fetch_response === 'function') {
+            try { globalThis.__bb_sw_fetch_response(requestId, json); } catch (e) {}
+          }
           return json;
         };
         return new Promise(function (resolve0) {
-          var resolve = function (json) { resolve0(settle(json)); };
+          var resolve = function (json) { resolve0(deliver(json)); };
           var handlers = (swListeners['fetch'] || []).slice();
           if (typeof globalThis.onfetch === 'function') { handlers.push(globalThis.onfetch); }
           if (!handlers.length) { resolve('{"matched":false}'); return; }
@@ -1243,6 +1249,12 @@
       USP.prototype.keys = function () { return this._list.map(function (p) { return p[0]; }); };
       USP.prototype.values = function () { return this._list.map(function (p) { return p[1]; }); };
       USP.prototype.entries = function () { return this._list.map(function (p) { return p.slice(); }); };
+      // The default URLSearchParams iterator yields [key, value] pairs (same as entries()). Without it
+      // `[...new URL(u).searchParams]` throws "Spread syntax requires …[Symbol.iterator] to be a
+      // function" — ClearURLs' countFields does exactly that and died at request time on every URL.
+      if (typeof Symbol === 'function' && Symbol.iterator) {
+        USP.prototype[Symbol.iterator] = function () { return this.entries()[Symbol.iterator](); };
+      }
       USP.prototype.toString = function () {
         return this._list.map(function (p) { return encodeURIComponent(p[0]) + '=' + encodeURIComponent(p[1]); }).join('&');
       };
@@ -1776,7 +1788,23 @@
         hardwareConcurrency: 4, maxTouchPoints: 5,
         pdfViewerEnabled: false,
         sendBeacon: function () { return false; },
-        javaEnabled: function () { return false; }
+        javaEnabled: function () { return false; },
+        // navigator.locks (Web Locks API). OneTab's storage init calls navigator.locks.request(...) at
+        // boot; JSC has none, so `self.navigator.locks.request` threw and onStartup aborted (OneTab's
+        // tab list never loaded). A single JSContext is single-threaded, so a lock is always immediately
+        // grantable: run the callback now and resolve when its promise settles. ifAvailable/steal/signal
+        // are accepted and ignored (there's never contention to report).
+        locks: {
+          request: function (name, options, callback) {
+            if (typeof options === 'function') { callback = options; options = {}; }
+            options = options || {};
+            var lock = { name: String(name), mode: options.mode || 'exclusive' };
+            return Promise.resolve().then(function () {
+              return (typeof callback === 'function') ? callback(lock) : undefined;
+            });
+          },
+          query: function () { return Promise.resolve({ held: [], pending: [] }); }
+        }
       };
     }
 

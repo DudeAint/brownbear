@@ -108,6 +108,25 @@ test("a request the worker doesn't claim returns matched:false (fall through to 
     assert.strictEqual(res.matched, false, "unclaimed request must fall through, not be synthesized");
 });
 
+test("result is delivered to native via __bb_sw_fetch_response(requestId, json)", async () => {
+    // The DEVICE path: native parks a continuation by requestId and the shim reports back through the
+    // __bb_sw_fetch_response native (NOT a passed-in block — that silently dropped replies on device,
+    // blanking the Stylus popup). This locks the request-id delivery contract in.
+    const ctx = bootShim();
+    const delivered = {};
+    ctx.__bb_sw_fetch_response = (requestId, json) => { delivered[requestId] = json; };
+    ctx.onfetch = (e) => {
+        if (e.request.url.indexOf("/data?") >= 0) { e.respondWith(new ctx.Response("clientData={}")); }
+    };
+    await delay(30);
+    await ctx.__bbDispatchFetch(ctx.__bbBgBaseURL + "data?x=1", "GET", "{}", "swf-7");
+    await delay(10);
+    assert.ok(delivered["swf-7"], "native must receive the result keyed by the requestId it passed");
+    const parsed = JSON.parse(delivered["swf-7"]);
+    assert.strictEqual(parsed.matched, true);
+    assert.strictEqual(Buffer.from(parsed.bodyBase64, "base64").toString("utf8"), "clientData={}");
+});
+
 test("no fetch handler at all → matched:false", async () => {
     const ctx = bootShim();
     await delay(30);
