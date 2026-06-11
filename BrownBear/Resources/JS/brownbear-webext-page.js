@@ -28,22 +28,47 @@
     catch (e) { return _Promise.reject(e); }
   }
 
-  // navigator.serviceWorker shim. WKWebView does NOT expose Service Workers for the custom
-  // chrome-extension:// scheme, so on a real extension page (e.g. an MV3 offscreen document) any access
-  // to `navigator.serviceWorker.*` throws "undefined is not an object" and aborts the whole bundle —
-  // ScriptCat's offscreen.js does exactly this at load. Provide a spec-shaped, inert surface so the page
-  // degrades gracefully (register() rejects; `ready` stays pending — there is genuinely no SW — and the
-  // event/controller surface no-ops) instead of crashing. Defined at document-start, before page scripts.
+  // navigator.serviceWorker BRIDGE. WKWebView exposes no Service Worker for the custom chrome-/moz-
+  // extension:// scheme, so navigator.serviceWorker.controller is null and `.ready` never resolves.
+  // Some popups talk to their MV3 worker ENTIRELY over SW client messaging — Stylus does
+  // `createPortExec(controller || ready.then(active))`, posting controller.postMessage(data, [port])
+  // and RPCing over the transferred MessageChannel; with an inert controller/ready every invokeAPI call
+  // awaits forever and the popup hangs blank. Present a WORKING surface: controller.postMessage tunnels
+  // the message + the transferred port through a chrome.runtime port (the popup↔worker hub) to the
+  // worker's self.onmessage, relaying the channel both ways. Defined at document-start, before page
+  // scripts. (Also keeps register/getRegistration spec-shaped so a page that only probes the API — e.g.
+  // ScriptCat's offscreen.js — degrades gracefully rather than throwing.)
   (function () {
     try {
-      if ("serviceWorker" in W.navigator && W.navigator.serviceWorker) { return; }
       var swListeners = {};
+      function controllerPostMessage(message, transfer) {
+        var clientPort = (transfer && transfer.length && transfer[0]) || null;   // the page's MessageChannel port
+        var rp;
+        try { rp = runtimeConnect({ name: "__bb_swclient" }); } catch (e) { return; }
+        // First frame carries the client's payload so the worker's onmessage gets event.data; the port
+        // (if any) is relayed frame-by-frame in both directions over the same runtime port.
+        rp.postMessage({ __bbSwInit: true, data: (message === undefined ? null : message) });
+        if (clientPort) {
+          try { clientPort.onmessage = function (e) { rp.postMessage({ __bbSwPort: true, data: e.data }); }; } catch (e) {}
+          rp.onMessage.addListener(function (msg) { if (msg && msg.__bbSwPort) { try { clientPort.postMessage(msg.data); } catch (e) {} } });
+          try { if (clientPort.start) { clientPort.start(); } } catch (e) {}
+        }
+      }
+      var controller = { postMessage: controllerPostMessage, scriptURL: (data.baseURL || "") + "sw.js",
+                         state: "activated", onstatechange: null,
+                         addEventListener: function () {}, removeEventListener: function () {} };
+      var registration = {
+        active: controller, installing: null, waiting: null, scope: data.baseURL || "/",
+        updateViaCache: "none", update: function () { return _Promise.resolve(); },
+        unregister: function () { return _Promise.resolve(false); },
+        addEventListener: function () {}, removeEventListener: function () {}
+      };
       var sw = {
-        controller: null,
-        ready: new _Promise(function () {}),   // no active worker → never resolves (spec-correct)
-        register: function () { return _Promise.reject(new Error("Service workers are unavailable in this context")); },
-        getRegistration: function () { return _Promise.resolve(undefined); },
-        getRegistrations: function () { return _Promise.resolve([]); },
+        controller: controller,
+        ready: _Promise.resolve(registration),
+        register: function () { return _Promise.resolve(registration); },
+        getRegistration: function () { return _Promise.resolve(registration); },
+        getRegistrations: function () { return _Promise.resolve([registration]); },
         startMessages: function () {},
         addEventListener: function (type, fn) { (swListeners[type] = swListeners[type] || []).push(fn); },
         removeEventListener: function (type, fn) {
@@ -54,7 +79,7 @@
         oncontrollerchange: null, onmessage: null, onmessageerror: null
       };
       _Object.defineProperty(W.navigator, "serviceWorker", { value: sw, configurable: true, enumerable: false });
-    } catch (e) { /* navigator may be locked down; nothing we can do, but don't break the page */ }
+    } catch (e) { /* navigator may be a non-configurable native; nothing we can do, but don't break the page */ }
   })();
 
   // Cross-origin fetch from an extension page. Chrome lets an extension page fetch hosts in its
