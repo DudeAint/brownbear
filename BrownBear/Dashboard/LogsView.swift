@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct LogsView: View {
 
@@ -62,27 +63,12 @@ struct LogsView: View {
                     : "No entries match “\(model.logSearch)”."
             )
         } else {
-            ScrollView {
-                // A plain VStack (not Lazy): the log set is capped at 300, and keeping every row rendered
-                // means a text selection survives scrolling — a Lazy stack recycles off-screen rows and
-                // drops the selection the moment it scrolls out of view.
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(model.filteredLogs) { entry in
-                        VStack(alignment: .leading, spacing: 2) {
-                            if let name = entry.scriptName {
-                                Text(name).font(.caption2.weight(.semibold))
-                                    .foregroundStyle(BBTheme.Color.accent)
-                            }
-                            LogLineView(entry: entry)
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 6)
-                        Divider().overlay(BBTheme.Color.separator.opacity(0.5))
-                    }
-                }
-                .padding(.vertical, 8)
-                .textSelection(.enabled)   // select & copy log text directly
-            }
+            // One UITextView holding the whole filtered log, not a SwiftUI Text per row. SwiftUI's
+            // `.textSelection(.enabled)` makes each Text its own selection island — you can only ever
+            // drag-select and copy a single line. A read-only UITextView gives native cross-line
+            // selection, the magnifier, Select All, and Copy, so the user can grab the entire log at
+            // once. The filter Picker stays pinned above (this view scrolls internally).
+            SelectableLogTextView(logs: model.filteredLogs)
         }
     }
 
@@ -92,6 +78,75 @@ struct LogsView: View {
             title: "No logs yet",
             message: "Output from your scripts — GM_log, console.log, and background runs — appears here."
         )
+    }
+}
+
+/// A read-only, fully selectable rendering of the log as a single scrolling text view.
+///
+/// SwiftUI can't select across separate `Text` views, so copying "the logs" really meant copying one
+/// line. This wraps a `UITextView` (non-editable, selectable) whose attributed string is the whole
+/// filtered log — the user can drag across many entries, Select All, and Copy. Colors and the
+/// monospaced typography mirror `LogLineView` so it reads identically to the styled list.
+struct SelectableLogTextView: UIViewRepresentable {
+    let logs: [LogEntry]
+
+    func makeUIView(context: Context) -> UITextView {
+        let view = UITextView()
+        view.isEditable = false
+        view.isSelectable = true
+        view.isScrollEnabled = true
+        view.alwaysBounceVertical = true
+        view.backgroundColor = .clear
+        view.textContainerInset = UIEdgeInsets(top: 8, left: 16, bottom: 8, right: 16)
+        view.textContainer.lineFragmentPadding = 0
+        view.attributedText = Self.render(logs)
+        return view
+    }
+
+    func updateUIView(_ view: UITextView, context: Context) {
+        // Re-render on new logs, but keep the user's current selection if it's still in range so a
+        // background refresh doesn't yank the highlight out from under a copy gesture.
+        let previous = view.selectedRange
+        let rendered = Self.render(logs)
+        view.attributedText = rendered
+        if previous.location + previous.length <= rendered.length {
+            view.selectedRange = previous
+        }
+    }
+
+    /// Build the full attributed log: optional script name, timestamp, then the message in its level
+    /// color — one entry per line, blank-line-free so a Select-All copy is compact.
+    private static func render(_ logs: [LogEntry]) -> NSAttributedString {
+        let out = NSMutableAttributedString()
+        let timeFormatter = DateFormatter()
+        timeFormatter.dateFormat = "HH:mm:ss"
+        let body = UIFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let nameFont = UIFont.monospacedSystemFont(ofSize: 11, weight: .semibold)
+
+        for (index, entry) in logs.enumerated() {
+            if index > 0 { out.append(NSAttributedString(string: "\n")) }
+            if let name = entry.scriptName {
+                out.append(NSAttributedString(
+                    string: name + "\n",
+                    attributes: [.font: nameFont, .foregroundColor: BrownBearTheme.Palette.accent]))
+            }
+            out.append(NSAttributedString(
+                string: timeFormatter.string(from: entry.createdAt) + "  ",
+                attributes: [.font: body, .foregroundColor: BrownBearTheme.Palette.textSecondary]))
+            out.append(NSAttributedString(
+                string: entry.message,
+                attributes: [.font: body, .foregroundColor: levelColor(entry.level)]))
+        }
+        return out
+    }
+
+    private static func levelColor(_ level: LogEntry.Level) -> UIColor {
+        switch level {
+        case .error: return BrownBearTheme.Palette.destructive
+        case .warn: return BrownBearTheme.Palette.accentBright
+        case .info: return BrownBearTheme.Palette.textPrimary
+        case .debug: return BrownBearTheme.Palette.textSecondary
+        }
     }
 }
 
