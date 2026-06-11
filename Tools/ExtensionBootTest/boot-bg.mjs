@@ -38,6 +38,9 @@ function recordError(phase, e) {
 }
 process.on('unhandledRejection', (e) => { unhandled.push(String((e && e.message) || e)); });
 process.on('uncaughtException', (e) => { recordError('uncaught', e); });
+// Capture the harness's own process hooks before we hide `process` from the extension (see runEntries).
+const _exit = process.exit.bind(process);
+const _stdoutWrite = process.stdout.write.bind(process.stdout);
 
 function readExt(p) { try { return readFileSync(path.join(EXT_DIR, p), 'utf8'); } catch { return null; } }
 
@@ -392,6 +395,15 @@ function runEntries() {
     }
 }
 
+// A real MV3 service worker runs in a JSContext with NO Node globals. Node's process/module/global/
+// require being visible makes isomorphic libs take their Node code path — js-sha1 in DuckDuckGo's
+// bundle does `if (NODE_JS) nodeWrap()` → `eval("require('crypto')")` → "require is not defined" (ESM
+// has no require). Hide them so the harness boots the extension the way the device's JSContext does.
+globalThis.process = undefined;
+globalThis.module = undefined;
+globalThis.global = undefined;
+globalThis.require = undefined;
+
 runEntries();
 
 // Let async init settle (registrations, microtasks), then report.
@@ -410,9 +422,9 @@ const verdict = {
 };
 // Sentinel-prefix the verdict so the driver can pick it out even if the extension wrote its own
 // lines to stdout, and flush BEFORE exiting (process.exit can truncate a still-buffered write).
-process.stdout.write('BBVERDICT:' + JSON.stringify(verdict) + '\n', () => {
+_stdoutWrite('BBVERDICT:' + JSON.stringify(verdict) + '\n', () => {
     // Hard-exit so lingering timers/intervals from the ext don't keep the process alive.
-    process.exit(0);
+    _exit(0);
 });
 // Safety net: if the write callback never fires (closed pipe), still exit shortly.
-_setTimeout(() => process.exit(0), 500);
+_setTimeout(() => _exit(0), 500);
