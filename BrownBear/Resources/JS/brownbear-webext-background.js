@@ -2151,6 +2151,40 @@
     return port;
   }
 
+  // SW CLIENT MESSAGING (worker side). A page's navigator.serviceWorker.controller.postMessage(data,
+  // [port]) is tunneled to us as a chrome.runtime port named "__bb_swclient" (WKWebView exposes no real
+  // Service Worker for our scheme, so the page can't reach this JSContext "worker" directly). We present
+  // it to the worker the way a real SW would see it: a 'message' event whose data is the client's
+  // payload and whose ports[0] is a MessagePort wired back over the same runtime port. Stylus's popup
+  // RPCs entirely over this MessageChannel (createPortExec → self.onmessage), so without it every
+  // invokeAPI call awaits forever and the popup never loads.
+  function bindServiceWorkerClientPort(workerPort) {
+    var swPort = {
+      onmessage: null, onmessageerror: null, _ls: [],
+      postMessage: function (x) { workerPort.postMessage({ __bbSwPort: true, data: (x === undefined ? null : x) }); },
+      start: function () {}, close: function () { try { workerPort.disconnect(); } catch (e) {} },
+      addEventListener: function (t, fn) { if (t === 'message' && typeof fn === 'function') { this._ls.push(fn); } },
+      removeEventListener: function (t, fn) { var i = this._ls.indexOf(fn); if (i >= 0) { this._ls.splice(i, 1); } }
+    };
+    function deliverToSwPort(d) {
+      var ev = { data: d, ports: [], type: 'message', origin: '', lastEventId: '', source: null };
+      if (typeof swPort.onmessage === 'function') { try { swPort.onmessage(ev); } catch (e) {} }
+      for (var i = 0; i < swPort._ls.length; i++) { try { swPort._ls[i](ev); } catch (e) {} }
+    }
+    workerPort.onMessage.addListener(function (msg) {
+      if (!msg) { return; }
+      if (msg.__bbSwInit) {
+        // The client's initial postMessage(data, [port]) → a SW 'message' event carrying the port.
+        // dispatchEvent fires both addEventListener('message') and self.onmessage (Stylus uses onmessage).
+        var ev = { type: 'message', data: (msg.data === undefined ? null : msg.data), ports: [swPort],
+                   origin: '', lastEventId: '', source: null };
+        try { globalThis.dispatchEvent(ev); } catch (e) { if (typeof globalThis.onmessage === 'function') { try { globalThis.onmessage(ev); } catch (e2) {} } }
+      } else if (msg.__bbSwPort) {
+        deliverToSwPort(msg.data);
+      }
+    });
+  }
+
   function getURL(path) {
     path = path || '';
     return baseURL + (path.charAt(0) === '/' ? path.slice(1) : path);
@@ -4110,6 +4144,9 @@
       var sender = parseJSON(senderJSON);
       var port = makeWorkerPort(portId, typeof name === 'string' ? name : '', sender || null);
       ports[portId] = port;
+      // A SW-client-messaging channel (navigator.serviceWorker.controller.postMessage) — bridge it to a
+      // 'message' event with a MessagePort instead of firing the extension's chrome.runtime.onConnect.
+      if (name === '__bb_swclient') { bindServiceWorkerClientPort(port); return; }
       for (var i = 0; i < connectListeners.length; i++) {
         try { connectListeners[i](port); }
         catch (e) { __bb_log('error', 'runtime.onConnect listener threw: ' + (e && e.message ? e.message : e)); }
