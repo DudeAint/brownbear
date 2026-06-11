@@ -1767,7 +1767,20 @@
       },
       set: function (items, cb) {
         var enc = {};
-        for (var k in items) { if (Object.prototype.hasOwnProperty.call(items, k)) { enc[k] = JSON.stringify(items[k]); } }
+        var _keys = [];
+        for (var k in items) {
+          if (Object.prototype.hasOwnProperty.call(items, k)) {
+            enc[k] = JSON.stringify(items[k]);
+            // A value that can't round-trip JSON (undefined, a function, a Blob, a circular ref) silently
+            // drops here, which would make a "successful" save persist nothing — flag it.
+            if (enc[k] === undefined) { _keys.push(k + '=UNSERIALIZABLE'); } else { _keys.push(k); }
+          }
+        }
+        // Diagnostic: name the keys a worker writes to persistent storage (local/sync), so a save that
+        // reports success but never appears (Tampermonkey) can be told apart from one that never wrote.
+        if ((areaName === 'local' || areaName === 'sync') && typeof __bb_log === 'function') {
+          __bb_log('debug', '[bb-storage] ' + areaName + '.set [' + _keys.join(',').slice(0, 200) + ']');
+        }
         return new Promise(function (resolve) {
           __bb_storage_set(areaName, JSON.stringify(enc), function () { if (typeof cb === 'function') { cb(); } resolve(); });
         });
