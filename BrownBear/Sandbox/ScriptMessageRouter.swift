@@ -361,66 +361,6 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         return session
     }
 
-    /// Insert a session, evicting once the map exceeds `maxSessions`. Prefer dropping a DEAD session
-    /// (its web view deallocated) over a live one, so the cap can't sever an in-use script's
-    /// identity/grants mid-run.
-    private func registerSession(token: String, session: ScriptSession) {
-        sessions[token] = session
-        tokenOrder.append(token)
-        guard tokenOrder.count > Self.maxSessions else { return }
-        if let deadIndex = tokenOrder.firstIndex(where: { sessions[$0]?.webView == nil }) {
-            let evicted = tokenOrder.remove(at: deadIndex)
-            sessions.removeValue(forKey: evicted)
-        } else {
-            let evicted = tokenOrder.removeFirst()
-            sessions.removeValue(forKey: evicted)
-        }
-    }
-
-    /// Drop every session for a web view — called when its main frame (re)loads, so stale tokens
-    /// from the prior page (and their now-defunct frames) don't linger or receive value broadcasts.
-    /// Purged sessions are TOMBSTONED (web view + frame detached, identity kept), because the prior
-    /// document usually enters WebKit's back-forward cache alive — see `purgedSessions`.
-    private func purgeSessions(for webView: WKWebView) {
-        // Menu commands are bound to the same injections; reap them with the sessions so a stale
-        // "Script commands" entry can't survive a navigation/reload of this web view. Done first and
-        // unconditionally — a main-frame (re)load means the registering page is gone even if its
-        // sessions were already evicted by the FIFO cap.
-        menuStore.purge(webView: webView)
-        let stale = Set(sessions.compactMap { $0.value.webView === webView ? $0.key : nil })
-        guard !stale.isEmpty else { return }
-        for token in stale {
-            guard var session = sessions.removeValue(forKey: token) else { continue }
-            session.webView = nil
-            session.frameInfo = nil
-            purgedSessions[token] = session
-            purgedOrder.append(token)
-        }
-        while purgedOrder.count > Self.maxPurgedSessions {
-            purgedSessions.removeValue(forKey: purgedOrder.removeFirst())
-        }
-        tokenOrder.removeAll { stale.contains($0) }
-    }
-
-    /// Re-register a bfcache-restored document's purged sessions; see the `revalidateSessions` route.
-    /// Returns how many tokens were revived (diagnostic value for the loader, not used for control flow).
-    private func handleRevalidateSessions(payload: [String: Any],
-                                          webView: WKWebView?,
-                                          frameInfo: WKFrameInfo?) -> Int {
-        guard let tokens = payload["tokens"] as? [String], !tokens.isEmpty else { return 0 }
-        var restored = 0
-        for token in tokens.prefix(Self.maxRevalidateTokens) {
-            if sessions[token] != nil { continue }   // never purged (or already revived) — leave it be
-            guard var session = purgedSessions.removeValue(forKey: token) else { continue }
-            session.webView = webView
-            session.frameInfo = frameInfo
-            registerSession(token: token, session: session)
-            restored += 1
-        }
-        if restored > 0 { purgedOrder.removeAll { purgedSessions[$0] == nil } }
-        return restored
-    }
-
     // MARK: - GM value propagation (cross-frame + cross-tab, ScriptCat parity)
 
     /// Push value changes into every OTHER live injection of the same script — its instances in
@@ -756,6 +696,71 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
     func resolvePrivilegedConnectDecision(scriptID: UUID, scriptName: String, host: String) async -> Bool {
         await resolveConnectDecision(scriptID: scriptID, scriptName: scriptName, host: host)
     }
+}
+
+// MARK: - Session lifecycle (split into an extension to keep the class body under type_body_length)
+extension ScriptMessageRouter {
+
+    /// Insert a session, evicting once the map exceeds `maxSessions`. Prefer dropping a DEAD session
+    /// (its web view deallocated) over a live one, so the cap can't sever an in-use script's
+    /// identity/grants mid-run.
+    private func registerSession(token: String, session: ScriptSession) {
+        sessions[token] = session
+        tokenOrder.append(token)
+        guard tokenOrder.count > Self.maxSessions else { return }
+        if let deadIndex = tokenOrder.firstIndex(where: { sessions[$0]?.webView == nil }) {
+            let evicted = tokenOrder.remove(at: deadIndex)
+            sessions.removeValue(forKey: evicted)
+        } else {
+            let evicted = tokenOrder.removeFirst()
+            sessions.removeValue(forKey: evicted)
+        }
+    }
+
+    /// Drop every session for a web view — called when its main frame (re)loads, so stale tokens
+    /// from the prior page (and their now-defunct frames) don't linger or receive value broadcasts.
+    /// Purged sessions are TOMBSTONED (web view + frame detached, identity kept), because the prior
+    /// document usually enters WebKit's back-forward cache alive — see `purgedSessions`.
+    private func purgeSessions(for webView: WKWebView) {
+        // Menu commands are bound to the same injections; reap them with the sessions so a stale
+        // "Script commands" entry can't survive a navigation/reload of this web view. Done first and
+        // unconditionally — a main-frame (re)load means the registering page is gone even if its
+        // sessions were already evicted by the FIFO cap.
+        menuStore.purge(webView: webView)
+        let stale = Set(sessions.compactMap { $0.value.webView === webView ? $0.key : nil })
+        guard !stale.isEmpty else { return }
+        for token in stale {
+            guard var session = sessions.removeValue(forKey: token) else { continue }
+            session.webView = nil
+            session.frameInfo = nil
+            purgedSessions[token] = session
+            purgedOrder.append(token)
+        }
+        while purgedOrder.count > Self.maxPurgedSessions {
+            purgedSessions.removeValue(forKey: purgedOrder.removeFirst())
+        }
+        tokenOrder.removeAll { stale.contains($0) }
+    }
+
+    /// Re-register a bfcache-restored document's purged sessions; see the `revalidateSessions` route.
+    /// Returns how many tokens were revived (diagnostic value for the loader, not used for control flow).
+    private func handleRevalidateSessions(payload: [String: Any],
+                                          webView: WKWebView?,
+                                          frameInfo: WKFrameInfo?) -> Int {
+        guard let tokens = payload["tokens"] as? [String], !tokens.isEmpty else { return 0 }
+        var restored = 0
+        for token in tokens.prefix(Self.maxRevalidateTokens) {
+            if sessions[token] != nil { continue }   // never purged (or already revived) — leave it be
+            guard var session = purgedSessions.removeValue(forKey: token) else { continue }
+            session.webView = webView
+            session.frameInfo = frameInfo
+            registerSession(token: token, session: session)
+            restored += 1
+        }
+        if restored > 0 { purgedOrder.removeAll { purgedSessions[$0] == nil } }
+        return restored
+    }
+
 }
 
 // MARK: - GM_registerMenuCommand / GM_getTab / GM_saveTab / GM_listTabs handlers

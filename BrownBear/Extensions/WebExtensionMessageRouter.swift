@@ -712,6 +712,10 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
         }
         return extensionID
     }
+}
+
+// MARK: - Session lifecycle (split into an extension to keep the class body under type_body_length)
+extension WebExtensionMessageRouter {
 
     /// token → session, with a FIFO cap so the map can't grow unbounded across a long session of
     /// navigations. Prefer evicting a DEAD content session (its web view deallocated) so the cap can't
