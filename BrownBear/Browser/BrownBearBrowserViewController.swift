@@ -89,6 +89,9 @@ final class BrownBearBrowserViewController: UIViewController {
     var chromeHidden = false
     /// The scroll offset at the last direction sample, so +ScrollChrome can detect up vs. down.
     var lastScrollOffsetY: CGFloat = 0
+    /// The deepest top-overscroll reached during the CURRENT drag, so pull-to-refresh only fires on a
+    /// deliberate downward pull (reset at drag start in +ScrollChrome).
+    var pullMaxOverscroll: CGFloat = 0
 
     /// The web view currently installed in the content container.
     /// Internal so the WKNavigationDelegate companion file (BrownBearBrowserViewController+Navigation)
