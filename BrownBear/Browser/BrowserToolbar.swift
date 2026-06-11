@@ -58,6 +58,11 @@ final class BrowserToolbar: UIView {
 
     // MARK: - Public state
 
+    /// The view a toolbar-triggered popover (e.g. an extension's action popup) anchors to. Extensions
+    /// live in the "•••" menu today, so their popup springs from that button — the toolbar is always at
+    /// the bottom, so the popover rises up over the page. (Re-anchors to a dedicated icon if one is added.)
+    var actionAnchorView: UIView { menuButton }
+
     func update(canGoBack: Bool, canGoForward: Bool, tabCount: Int) {
         backButton.isEnabled = canGoBack
         forwardButton.isEnabled = canGoForward

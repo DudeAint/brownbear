@@ -269,7 +269,15 @@ struct ExtensionsView: View {
                 Label("Remove", systemImage: "trash")
             }
         }
-        .contextMenu { pageActions(for: ext) }
+        .contextMenu {
+            pageActions(for: ext)
+            Divider()
+            // Long-press to uninstall (in addition to the swipe action) — the discoverable gesture the
+            // owner asked for. Destructive role styles it red and groups it at the bottom.
+            Button(role: .destructive) { Task { await model.remove(ext) } } label: {
+                Label("Uninstall \(ext.displayName)", systemImage: "trash")
+            }
+        }
     }
 
     /// Open-popup / open-options actions, shown when the extension declares those pages.
