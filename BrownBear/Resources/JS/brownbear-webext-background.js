@@ -1514,8 +1514,9 @@
     if (typeof globalThis.FileReader !== 'function') {
       var BBFileReader = function () {
         this.readyState = 0; this.result = null; this.error = null;
-        this.onload = null; this.onloadend = null; this.onerror = null;
-        this._lst = { load: [], loadend: [], error: [] };
+        this.onloadstart = null; this.onprogress = null; this.onload = null;
+        this.onloadend = null; this.onerror = null; this.onabort = null;
+        this._lst = { loadstart: [], progress: [], load: [], loadend: [], error: [], abort: [] };
       };
       BBFileReader.EMPTY = 0; BBFileReader.LOADING = 1; BBFileReader.DONE = 2;
       BBFileReader.prototype.addEventListener = function (type, fn) {
@@ -1526,24 +1527,38 @@
         var i = a.indexOf(fn); if (i >= 0) { a.splice(i, 1); }
       };
       BBFileReader.prototype._fire = function (type, ev) {
+        // Spec progress events expose `target`/`currentTarget` = the FileReader. The canonical read
+        // pattern is `reader.onload = e => e.target.result`; without `target` that yields undefined.
+        // Tampermonkey's blob→text decoder does exactly `ev.target ? resolve(ev.target.result) : reject(...)`,
+        // so a missing target made every blob decode REJECT → an imported .user.js parsed to an empty
+        // source → "Unable to parse this!". Backfill here so all dispatches (load/error/loadend) carry it.
+        if (ev && ev.target === undefined) { ev.target = this; ev.currentTarget = this; }
         if (typeof this['on' + type] === 'function') { this['on' + type](ev); }
         var a = this._lst[type] || [];
         for (var i = 0; i < a.length; i++) { try { a[i].call(this, ev); } catch (e) { /* listener error */ } }
       };
+      // A ProgressEvent-shaped event whose target is the reader (so `e.target.result`, `e.loaded`,
+      // `e.total` all read correctly).
+      BBFileReader.prototype._event = function (type, total) {
+        var n = total || 0;
+        return { type: type, target: this, currentTarget: this, lengthComputable: true, loaded: n, total: n };
+      };
       BBFileReader.prototype._read = function (blob, produce) {
         var self = this;
         self.readyState = 1;
+        self._fire('loadstart', self._event('loadstart', blob && blob._bbBytes ? blob._bbBytes.length : 0));
         var go = function () {
           try {
             if (!blob || !blob._bbBytes) { throw new TypeError('FileReader: argument is not a Blob'); }
             self.result = produce(blob._bbBytes, blob.type);
             self.readyState = 2;
-            self._fire('load', { type: 'load' });
+            self._fire('progress', self._event('progress', blob._bbBytes.length));
+            self._fire('load', self._event('load', blob._bbBytes.length));
           } catch (e) {
             self.error = e; self.result = null; self.readyState = 2;
-            self._fire('error', { type: 'error' });
+            self._fire('error', self._event('error', 0));
           }
-          self._fire('loadend', { type: 'loadend' });
+          self._fire('loadend', self._event('loadend', self.error ? 0 : (blob && blob._bbBytes ? blob._bbBytes.length : 0)));
         };
         if (typeof queueMicrotask === 'function') { queueMicrotask(go); } else { go(); }
       };
