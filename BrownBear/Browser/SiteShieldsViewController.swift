@@ -78,7 +78,8 @@ final class SiteShieldsViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = BrownBearTheme.Palette.background
+        // Frosted glass backdrop (was a flat warm fill) so the page stays faintly visible behind.
+        GlassBackground.install(in: view)
         buildLayout()
     }
 
@@ -91,9 +92,13 @@ final class SiteShieldsViewController: UIViewController {
         if let popover = popoverPresentationController {
             popover.sourceView = sourceView
             popover.sourceRect = sourceRect
-            popover.permittedArrowDirections = [.up]
+            // The arrow points AT the anchor: a top address bar drops the popover DOWN (arrow up); a
+            // BOTTOM address bar raises it UP (arrow down) — otherwise it renders off the bottom edge
+            // (the reported bug). Allow both as a fallback so UIKit can still fit it if space is tight.
+            popover.permittedArrowDirections = AppSettings.addressBarPosition == .bottom ? [.down, .up] : [.up, .down]
             popover.delegate = self
-            popover.backgroundColor = BrownBearTheme.Palette.background
+            // Clear so UIKit doesn't paint an opaque frame over the glass backdrop.
+            popover.backgroundColor = .clear
         }
         return self
     }
@@ -197,7 +202,9 @@ final class SiteShieldsViewController: UIViewController {
             toggle: .desktopSite)
 
         let container = UIView()
-        container.backgroundColor = BrownBearTheme.Palette.cell
+        // A faint frosted layer on the glass (not the old opaque card) so the backdrop reads through.
+        container.backgroundColor = UIColor(dynamicLight: UIColor.white.withAlphaComponent(0.45),
+                                            dark: UIColor.white.withAlphaComponent(0.06))
         container.layer.cornerRadius = BrownBearTheme.Metrics.cellCornerRadius
         container.layer.cornerCurve = .continuous
         let stack = UIStackView(arrangedSubviews: interleaveSeparators([blocking, scripts, desktop]))
