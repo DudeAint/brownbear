@@ -46,18 +46,13 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
     /// Internal (not private) so +Crypto's importScripts shim can evaluate a loaded chunk in this
     /// worker's GLOBAL scope (shared lexical env), like importScripts in a real service worker.
     var context: JSContext?
-    // Internal (not private) so the +ServiceWorkerFetch extension can gate its queue hop on a live
-    // context, same cross-file-split reason as `context`/`queue` above.
+    // Internal (not private) so +ServiceWorkerFetch can gate its queue hop on a live context.
     var isAlive = true
 
     // Pending content→background message replies, keyed by a per-context response id.
     private var pendingResponses: [String: CheckedContinuation<[String: Any]?, Never>] = [:]
     private var responseCounter = 0
-
-    // Pending service-worker fetch-event results, keyed by a per-request id. The worker's fetch handler
-    // settles asynchronously and reports back through the __bb_sw_fetch_response native (the proven
-    // setObject callback path), which resolves the parked continuation. Internal so +ServiceWorkerFetch
-    // can reach them. Queue-confined.
+    // Parked SW fetch-event results by request id; resolved by __bb_sw_fetch_response (+ServiceWorkerFetch).
     var pendingServiceWorkerFetch: [String: CheckedContinuation<ServiceWorkerFetchResponse?, Never>] = [:]
     var serviceWorkerFetchCounter = 0
 
