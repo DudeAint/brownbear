@@ -92,6 +92,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # full history so setup-ios-build can restore mtimes → incremental builds
       - name: Setup iOS build (Xcode + XcodeGen + SPM cache)
         uses: ./.github/actions/setup-ios-build
       - name: Cache DerivedData (incremental builds)

@@ -1,20 +1,54 @@
 name: "Setup iOS build"
-description: "Select Xcode, install XcodeGen, generate the project, and restore SwiftPM cache."
+description: "Restore source mtimes, install XcodeGen (prebuilt binary), generate the project, and restore the SwiftPM cache."
 
-# A reusable composite action so every workflow (CI, CodeQL, nightly, release) shares one fast,
-# consistent setup. The slow part of iOS CI is resolving/compiling Swift packages — we pin the
-# clone path and cache it, keyed on project.yml (which pins dependency versions).
+# A reusable composite action so every workflow (CI, nightly, release) shares one FAST, consistent
+# setup. Two things dominated CI time and both are fixed here:
+#   1. `brew install xcodegen` updated Homebrew's formula index and resolved a dependency tree first —
+#      minutes per macOS job. We download XcodeGen's pinned prebuilt binary instead (a few seconds).
+#   2. `git checkout` stamps every file with the CURRENT time, so Xcode saw the whole tree as "changed"
+#      every run and rebuilt the world — the cached DerivedData bought nothing. `git-restore-mtime`
+#      stamps each file with its LAST-COMMIT time, so unchanged files keep a stable mtime across runs
+#      and only what actually changed recompiles. That is what turns the DerivedData cache into real
+#      incremental builds. It needs full history, so callers must check out with `fetch-depth: 0`.
+
+inputs:
+  xcodegen-version:
+    description: "Pinned XcodeGen release whose prebuilt binary is downloaded."
+    default: "2.45.4"
 
 runs:
   using: composite
   steps:
+    - name: Restore source mtimes from git history (enables incremental builds)
+      shell: bash
+      run: |
+        set -uo pipefail
+        if [ "$(git rev-list --count HEAD 2>/dev/null || echo 1)" -le 1 ]; then
+          echo "Shallow checkout — skipping mtime restore (check out with fetch-depth: 0 for incremental builds)."
+          exit 0
+        fi
+        if curl -fsSL --retry 5 --retry-all-errors -o "${RUNNER_TEMP}/git-restore-mtime" \
+             "https://raw.githubusercontent.com/MestreLion/git-tools/main/git-restore-mtime"; then
+          python3 "${RUNNER_TEMP}/git-restore-mtime" --skip-missing --quiet \
+            && echo "Restored source mtimes from git." \
+            || echo "mtime restore failed — continuing with a full build."
+        else
+          echo "Could not fetch git-restore-mtime — continuing with a full build."
+        fi
+
     - name: Show selected Xcode
       shell: bash
       run: xcodebuild -version
 
-    - name: Install XcodeGen
+    - name: Install XcodeGen (pinned prebuilt binary)
       shell: bash
-      run: brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+      run: |
+        set -euo pipefail
+        curl -fsSL --retry 6 --retry-delay 5 --retry-all-errors -o "${RUNNER_TEMP}/xcodegen.zip" \
+          "https://github.com/yonaskolb/XcodeGen/releases/download/${{ inputs.xcodegen-version }}/xcodegen.zip"
+        unzip -q -o "${RUNNER_TEMP}/xcodegen.zip" -d "${RUNNER_TEMP}"
+        chmod +x "${RUNNER_TEMP}/xcodegen/bin/xcodegen"
+        echo "${RUNNER_TEMP}/xcodegen/bin" >> "${GITHUB_PATH}"
 
     - name: Generate Xcode project
       shell: bash
