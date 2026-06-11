@@ -88,6 +88,7 @@ extension BrownBearBrowserViewController: UIScrollViewDelegate {
             guard let heightConstraint = topChromeHeightConstraint else { return }
             heightConstraint.constant = hidden ? view.safeAreaInsets.top
                                                : view.safeAreaInsets.top + omniboxBarHeight
+            applyCollapsedStripInset(reveal: false)   // top mode never overlays the page bottom
             animateChrome(animated) {
                 self.omnibox.alpha = hidden ? 0 : 1   // clipped omnibox fades as the bar rolls away
                 self.collapsedBottomBar.alpha = 0     // the collapsed domain strip is a bottom-mode affordance
@@ -100,6 +101,8 @@ extension BrownBearBrowserViewController: UIScrollViewDelegate {
             // Otherwise slide the omnibox + toolbar fully below the screen (bar + toolbar + inset).
             bottomConstraint.constant = keyboardVisible ? -keyboardLiftOverlap : (hidden ? chromeHideDistance : 0)
             let revealStrip = hidden && !keyboardVisible
+            // Inset the page so its bottom rows scroll clear of the collapsed strip overlaying them.
+            applyCollapsedStripInset(reveal: revealStrip)
             // Seed a small upward offset so the lock + domain TRAVEL DOWN into place with the collapsing
             // bar, rather than just popping in. The animation below settles them to rest (.identity).
             if revealStrip { collapsedHostStack.transform = CGAffineTransform(translationX: 0, y: -10) }
@@ -111,6 +114,21 @@ extension BrownBearBrowserViewController: UIScrollViewDelegate {
                 self.view.layoutIfNeeded()
             }
         }
+    }
+
+    /// The chrome-coloured collapsed domain strip's band height above the safe area (matches the
+    /// `collapsedBottomBar` top inset in +Layout). With the safe-area bottom it is the page region the
+    /// strip overlays when the bottom bar is hidden.
+    private static let collapsedStripBand: CGFloat = 36
+
+    /// Give the active page a bottom content inset matching the collapsed strip (when it's revealed) so
+    /// the last rows can scroll above it instead of hiding behind it; clear it when the strip is gone.
+    private func applyCollapsedStripInset(reveal: Bool) {
+        guard let scrollView = tabManager.activeTab?.webView.scrollView else { return }
+        let cover: CGFloat = reveal ? (Self.collapsedStripBand + view.safeAreaInsets.bottom) : 0
+        guard scrollView.contentInset.bottom != cover else { return }
+        scrollView.contentInset.bottom = cover
+        scrollView.verticalScrollIndicatorInsets.bottom = cover
     }
 
     /// Tap on the collapsed bottom strip → bring the full bottom bar back (Safari behavior).
