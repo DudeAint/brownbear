@@ -3691,7 +3691,15 @@
         if (responded) { return; }
         responded = true;
         _doneTrack();
-        __bb_message_response(responseId, JSON.stringify({ value: (value === undefined ? null : value) }));
+        var _payload = JSON.stringify({ value: (value === undefined ? null : value) });
+        // Diagnostic: a worker reply that tells a page to close itself (Tampermonkey's install-confirmation
+        // "ask" page does `please_close → window.close` when its askCom hits an error such as unknown_id —
+        // i.e. the in-memory install-dialog state was lost). Surfacing it names WHY an install popup
+        // "loads for a second then disappears" instead of leaving it invisible in the message stream.
+        if (_payload.indexOf('please_close') >= 0 || _payload.indexOf('unknown_id') >= 0) {
+          __bb_log('error', '[dispatchMessage] ' + _mwhat + ' reply asks page to close (please_close/unknown_id) — dialog/handshake state missing in this worker: ' + _payload.slice(0, 200));
+        }
+        __bb_message_response(responseId, _payload);
       }
 
       for (var i = 0; i < messageListeners.length; i++) {
@@ -3912,4 +3920,14 @@
       }
     }
   };
+
+  // Boot-instance marker: a fresh tag every time this worker source is (re)evaluated. Two different tags
+  // for the same extension in the device log mean the background JSContext was TORN DOWN AND RESTARTED —
+  // which wipes all in-memory state (e.g. Tampermonkey's install-dialog registry, keyed by an ask-id),
+  // making an install-confirmation popup vanish ("unknown_id"). One stable tag across an install = the
+  // worker survived and the bug is elsewhere.
+  try {
+    var __bbBootTag = ((typeof Date !== 'undefined' && Date.now) ? Date.now() : 0).toString(36).slice(-6);
+    __bb_log('info', '[bb-bg] worker boot ' + __bbBootTag + ' ext=' + extId);
+  } catch (e) { /* logging is best-effort */ }
 })();
