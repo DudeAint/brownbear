@@ -2535,6 +2535,43 @@
   var permissionsEventLists = { 'permissions.onAdded': [], 'permissions.onRemoved': [] };
   var tabs = {
     query: function (q, cb) { return settleBg(tabsCall('query', { query: q || {} }), cb); },
+    // chrome.tabs.detectLanguage([tabId], cb) — Chrome returns the ISO code of the tab's content. iOS has
+    // no native page-language detector, so grab a sample of the tab's text via scripting.executeScript and
+    // run it through the same NLLanguageRecognizer that backs i18n.detectLanguage, returning the top code
+    // ('und' when undetectable). Google Translate calls this; an unguarded call must not throw.
+    detectLanguage: function (tabId, cb) {
+      if (typeof tabId === 'function') { cb = tabId; tabId = undefined; }
+      var p = new Promise(function (resolve) {
+        function detect(text) {
+          __bb_i18n_detect(String(text || ''), function (resJSON) {
+            var r = parseJSON(resJSON);
+            var langs = (r && r.languages) || [];
+            resolve(langs.length && langs[0].language ? langs[0].language : 'und');
+          });
+        }
+        if (tabId == null) { detect(''); return; }
+        try {
+          scripting.executeScript({
+            target: { tabId: tabId },
+            func: function () {
+              try { return (document.body && document.body.innerText || '').slice(0, 4000); } catch (e) { return ''; }
+            }
+          }, function (results) {
+            var text = (results && results[0] && typeof results[0].result === 'string') ? results[0].result : '';
+            detect(text);
+          });
+        } catch (e) { detect(''); }
+      });
+      if (typeof cb === 'function') { p.then(function (v) { cb(v); }); return undefined; }
+      return p;
+    },
+    // chrome.tabs.discard([tabId], cb) — Chrome frees a background tab's memory. iOS/WKWebView has no
+    // per-tab suspend, so resolve as a graceful no-op (returning the tab record when we have its id) so
+    // tab-managers like OneTab don't throw on an unguarded call.
+    discard: function (tabId, cb) {
+      if (typeof tabId === 'function') { cb = tabId; tabId = undefined; }
+      return settleBg(Promise.resolve(undefined), cb);
+    },
     captureVisibleTab: function () {
       // (windowId?, options?, callback?) — windowId is ignored (single window on iOS). Returns a data URL.
       var args = Array.prototype.slice.call(arguments);
@@ -3126,6 +3163,13 @@
     getSelf: function (cb) { return settleBg(managementCall('getSelf', {}), cb); },
     get: function (id, cb) { return settleBg(managementCall('get', { id: id }), cb); },
     getAll: function (cb) { return settleBg(managementCall('getAll', {}), cb); },
+    // chrome.management.uninstallSelf([options], cb) — iOS has no programmatic self-uninstall (the user
+    // removes an extension via long-press in BrownBear), so resolve as a graceful no-op rather than let an
+    // unguarded call (e.g. Grammarly's "remove extension" flow) throw.
+    uninstallSelf: function (options, cb) {
+      if (typeof options === 'function') { cb = options; }
+      return settleBg(Promise.resolve(undefined), cb);
+    },
     onInstalled: makeEvent([]), onUninstalled: makeEvent([]), onEnabled: makeEvent([]), onDisabled: makeEvent([])
   };
 
@@ -3555,9 +3599,21 @@
     onLanguageStatusRequest: makeEvent([])
   };
 
+  // chrome.readingList — Chrome's MV3 reading list. iOS has no reading-list store; an inert query→[] (and
+  // no-op mutators) keeps optional callers — e.g. OneTab's "import from Reading List" source — from
+  // throwing on `chrome.readingList is undefined` when the user picks that path.
+  var readingList = {
+    query: function (info, cb) { return settleBg(Promise.resolve([]), cb); },
+    addEntry: function (entry, cb) { return settleBg(Promise.resolve(undefined), cb); },
+    removeEntry: function (info, cb) { return settleBg(Promise.resolve(undefined), cb); },
+    updateEntry: function (info, cb) { return settleBg(Promise.resolve(undefined), cb); },
+    onEntryAdded: makeEvent([]), onEntryRemoved: makeEvent([]), onEntryUpdated: makeEvent([])
+  };
+
   var chrome = {
     runtime: runtime,
     identity: identity,
+    readingList: readingList,
     storage: storage,
     cookies: cookies,
     notifications: notifications,
