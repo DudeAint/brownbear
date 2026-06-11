@@ -31,6 +31,18 @@ final class WebExtensionPageSession {
             case .offscreen: return "Offscreen document"
             }
         }
+
+        /// A stable token the page runtime reads from `window.__bbExtPage.kind`. The offscreen document
+        /// uses it to register itself as a service-worker client, so the DOM-less worker can reach it via
+        /// `clients.matchAll()` + `client.postMessage` (Stylus offloads usercss parsing, blob URLs and
+        /// prefers-color-scheme to its offscreen document over that channel).
+        var configValue: String {
+            switch self {
+            case .popup: return "popup"
+            case .options: return "options"
+            case .offscreen: return "offscreen"
+            }
+        }
     }
 
     let ext: WebExtension
@@ -119,7 +131,8 @@ final class WebExtensionPageSession {
             "manifestJSON": ext.manifestJSON,
             "baseURL": ext.baseURLString,
             "messages": loaded.messages,
-            "placeholders": loaded.placeholders
+            "placeholders": loaded.placeholders,
+            "kind": kind.configValue
         ]
         let dataJSON = Self.jsonString(bootstrapData)
 
