@@ -405,17 +405,26 @@ final class BrownBearBrowserViewController: UIViewController {
     <div class="guide">
       <a class="row fade" style="animation-delay:.12s" href="https://greasyfork.org/">
         <span class="g">📝</span>
-        <span class="body"><p class="t">Userscripts</p><p class="d">Install a script to change how any site looks or works. Browse thousands on GreasyFork.</p></span>
+        <span class="body">
+          <p class="t">Userscripts</p>
+          <p class="d">Install a script to change how any site looks or works. Browse thousands on GreasyFork.</p>
+        </span>
         <span class="chev"></span>
       </a>
       <a class="row fade" style="animation-delay:.18s" href="https://chromewebstore.google.com/">
         <span class="g">🧩</span>
-        <span class="body"><p class="t">Extensions</p><p class="d">Add Chrome &amp; Firefox extensions — ad blockers, userscript managers, and more.</p></span>
+        <span class="body">
+          <p class="t">Extensions</p>
+          <p class="d">Add Chrome &amp; Firefox extensions — ad blockers, userscript managers, and more.</p>
+        </span>
         <span class="chev"></span>
       </a>
       <div class="row fade" style="animation-delay:.24s">
         <span class="g">🎨</span>
-        <span class="body"><p class="t">Make it yours</p><p class="d">Light, Dark, or the classic OG BrownBear theme — in Settings → Appearance.</p></span>
+        <span class="body">
+          <p class="t">Make it yours</p>
+          <p class="d">Light, Dark, or the classic OG BrownBear theme — in Settings → Appearance.</p>
+        </span>
       </div>
     </div>
     """
