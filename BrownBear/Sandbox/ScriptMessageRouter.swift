@@ -106,6 +106,16 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
     /// every tab, navigation, and frame for the life of the app.
     private var tokenOrder: [String] = []
     private static let maxSessions = 2000
+    /// Sessions purged on a main-frame load, kept (sans web view) so a document restored from WebKit's
+    /// back-forward cache can revalidate its tokens — a bfcache restore does NOT re-run document-start
+    /// scripts, so the restored page's userscripts keep running with tokens that purgeSessions dropped,
+    /// and every GM_* call then failed "unrecognized or missing script token" on exactly the pages
+    /// reached via back/forward. Identity (script id/grants/connects) is preserved HERE, natively; the
+    /// loader can only revive tokens it already holds. Capped FIFO like `sessions`.
+    private var purgedSessions: [String: ScriptSession] = [:]
+    private var purgedOrder: [String] = []
+    private static let maxPurgedSessions = 4096
+    private static let maxRevalidateTokens = 256
 
     /// Which @grant names satisfy each gated API (classic and GM.* aliases).
     private static let grantAliases: [String: Set<String>] = [
@@ -197,6 +207,13 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         // getScripts is the loader's privilege; it needs no token and mints them.
         if api == "getScripts" {
             return try await handleGetScripts(payload: payload, webView: webView, frameInfo: frameInfo)
+        }
+        // Tokenless like getScripts: a back-forward-cache-restored document re-registering its purged
+        // tokens (document-start scripts don't re-run on a bfcache restore, so getScripts can't). A
+        // token revives ONLY if this router itself tombstoned it — identity comes from the tombstone,
+        // never the caller; unknown tokens are ignored; the web view/frame re-bind to the CALLING frame.
+        if api == "revalidateSessions" {
+            return handleRevalidateSessions(payload: payload, webView: webView, frameInfo: frameInfo)
         }
         // GM_abortRequest only cancels the caller's own request by id — safe without a grant.
         if api == "GM_abortRequest" {
@@ -362,6 +379,8 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
 
     /// Drop every session for a web view — called when its main frame (re)loads, so stale tokens
     /// from the prior page (and their now-defunct frames) don't linger or receive value broadcasts.
+    /// Purged sessions are TOMBSTONED (web view + frame detached, identity kept), because the prior
+    /// document usually enters WebKit's back-forward cache alive — see `purgedSessions`.
     private func purgeSessions(for webView: WKWebView) {
         // Menu commands are bound to the same injections; reap them with the sessions so a stale
         // "Script commands" entry can't survive a navigation/reload of this web view. Done first and
@@ -370,8 +389,36 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         menuStore.purge(webView: webView)
         let stale = Set(sessions.compactMap { $0.value.webView === webView ? $0.key : nil })
         guard !stale.isEmpty else { return }
-        for token in stale { sessions.removeValue(forKey: token) }
+        for token in stale {
+            guard var session = sessions.removeValue(forKey: token) else { continue }
+            session.webView = nil
+            session.frameInfo = nil
+            purgedSessions[token] = session
+            purgedOrder.append(token)
+        }
+        while purgedOrder.count > Self.maxPurgedSessions {
+            purgedSessions.removeValue(forKey: purgedOrder.removeFirst())
+        }
         tokenOrder.removeAll { stale.contains($0) }
+    }
+
+    /// Re-register a bfcache-restored document's purged sessions; see the `revalidateSessions` route.
+    /// Returns how many tokens were revived (diagnostic value for the loader, not used for control flow).
+    private func handleRevalidateSessions(payload: [String: Any],
+                                          webView: WKWebView?,
+                                          frameInfo: WKFrameInfo?) -> Int {
+        guard let tokens = payload["tokens"] as? [String], !tokens.isEmpty else { return 0 }
+        var restored = 0
+        for token in tokens.prefix(Self.maxRevalidateTokens) {
+            if sessions[token] != nil { continue }   // never purged (or already revived) — leave it be
+            guard var session = purgedSessions.removeValue(forKey: token) else { continue }
+            session.webView = webView
+            session.frameInfo = frameInfo
+            registerSession(token: token, session: session)
+            restored += 1
+        }
+        if restored > 0 { purgedOrder.removeAll { purgedSessions[$0] == nil } }
+        return restored
     }
 
     // MARK: - GM value propagation (cross-frame + cross-tab, ScriptCat parity)

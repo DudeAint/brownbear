@@ -51,6 +51,17 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
     private var sessions: [String: Session] = [:]
     /// Insertion order of tokens, for FIFO eviction once `sessions` exceeds `maxSessions`.
     private var tokenOrder: [String] = []
+    /// Content sessions purged on a main-frame load, kept (sans web view) so a document restored from
+    /// WebKit's back-forward cache can revalidate its tokens. A bfcache restore does NOT re-run
+    /// document-start scripts: the restored page's content scripts keep running with the tokens minted
+    /// for that document, which purgeSessions dropped when the tab navigated away — every later bridge
+    /// call then failed "unrecognized extension token" and userscript managers died on exactly the
+    /// pages reached via back/forward. The bootstrap re-registers via `revalidateSessions` on
+    /// pageshow(persisted); identity (extensionID/frameId/documentId) is preserved HERE, natively, so a
+    /// caller can only revive tokens it already holds — never mint or retarget one.
+    private var purgedSessions: [String: Session] = [:]
+    /// FIFO order for `purgedSessions` eviction.
+    private var purgedOrder: [String] = []
     /// Monotonic source of MessageSender.frameId for subframes (the main frame is always 0).
     private var frameIdCounter = 0
     /// Correlates a native→content message push with the content script's eventual sendResponse.
@@ -177,6 +188,12 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
                 }
             }
             return NSNull()
+        }
+        // Tokenless: a back-forward-cache-restored document re-registering its purged session tokens
+        // (document-start scripts don't re-run on a bfcache restore, so getContentScripts can't). Routed
+        // before resolve() — the whole point is that these tokens currently resolve to nothing.
+        if api == "revalidateSessions" {
+            return handleRevalidateSessions(payload: payload, webView: webView, frameInfo: frameInfo)
         }
         // Tokenless frame-level diagnostic (the content-script loader uses token=null and resolve() would
         // throw on it). The loader aborting means NO content scripts inject for the frame — a total, silent
@@ -718,17 +735,54 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
 
     /// Drop every content session for a web view — called when its main frame (re)loads so stale tokens
     /// from the prior page (and their defunct frames) don't linger or receive message/storage pushes.
+    /// Purged sessions are TOMBSTONED (web view + frame detached, identity kept) rather than forgotten,
+    /// because the prior document usually enters WebKit's back-forward cache alive — see `purgedSessions`.
     private func purgeSessions(for webView: WKWebView) {
         let stale = sessions.compactMap { key, session in
             (session.isContent && session.webView === webView) ? key : nil
         }
         guard !stale.isEmpty else { return }
-        for token in stale { sessions.removeValue(forKey: token) }
+        for token in stale {
+            guard var session = sessions.removeValue(forKey: token) else { continue }
+            session.webView = nil
+            session.frameInfo = nil
+            purgedSessions[token] = session
+            purgedOrder.append(token)
+        }
+        while purgedOrder.count > Self.maxPurgedSessions {
+            purgedSessions.removeValue(forKey: purgedOrder.removeFirst())
+        }
         let staleSet = Set(stale)
         tokenOrder.removeAll { staleSet.contains($0) }
         // The purged content scripts may have held open chrome.runtime ports; tear those down so their
         // background-worker peers get onDisconnect rather than stranding a listener on a dead frame.
         BrownBearServices.shared.webExtensionRuntime.portHub.disconnectClientPorts(tokens: staleSet)
+    }
+
+    /// Re-register a bfcache-restored document's purged content sessions. The bootstrap calls this on
+    /// `pageshow` with `persisted: true`, passing the tokens it was given at injection time. Trust model
+    /// (CLAUDE.md §5): a token revives ONLY if this router itself tombstoned it — identity comes from the
+    /// tombstone, never the caller; an unknown/forged token is silently ignored; the web view + frame are
+    /// re-bound to the CALLING frame (the same trust anchor getContentScripts uses); resolve()'s
+    /// enabled-extension check still gates every subsequent call. Both the tombstone map and the per-call
+    /// token count are capped, so this is not a growth or brute-force surface.
+    private static let maxPurgedSessions = 4096
+    private static let maxRevalidateTokens = 256
+    private func handleRevalidateSessions(payload: [String: Any],
+                                          webView: WKWebView?,
+                                          frameInfo: WKFrameInfo?) -> Int {
+        guard let tokens = payload["tokens"] as? [String], !tokens.isEmpty else { return 0 }
+        var restored = 0
+        for token in tokens.prefix(Self.maxRevalidateTokens) {
+            if sessions[token] != nil { continue }   // never purged (or already revived) — leave it be
+            guard var session = purgedSessions.removeValue(forKey: token) else { continue }
+            session.webView = webView
+            session.frameInfo = frameInfo
+            registerSession(token: token, session: session)
+            restored += 1
+        }
+        if restored > 0 { purgedOrder.removeAll { purgedSessions[$0] == nil } }
+        return restored
     }
 
 }

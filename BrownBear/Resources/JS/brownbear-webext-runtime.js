@@ -1074,13 +1074,26 @@
     bridge("getContentScripts", { url: location.href, isSubframe: isSubframe }, null)
       .then(function (scripts) {
         if (!scripts || !scripts.length) { return; }
-        var starts = [], ends = [], idles = [], hasCrossWorld = false;
+        var starts = [], ends = [], idles = [], hasCrossWorld = false, allTokens = [];
         for (var i = 0; i < scripts.length; i += 1) {
           var s = scripts[i];
+          if (s.token) { allTokens.push(s.token); }
           if (s.world === "MAIN" || s.world === "USER_SCRIPT") { hasCrossWorld = true; }
           if (s.runAt === "document_start") { starts.push(s); }
           else if (s.runAt === "document_idle") { idles.push(s); }
           else { ends.push(s); }
+        }
+        // WebKit's back-forward cache restores this document WITHOUT re-running document-start scripts:
+        // the content scripts above keep running, but native purged their session tokens when the tab
+        // navigated away — every later bridge call then fails ("unrecognized extension token"), so
+        // managers report "no access to this page" and storage/messaging die on exactly the pages
+        // reached via back/forward. Re-register this document's tokens on every persisted pageshow
+        // (native revives them from its own tombstones; identity stays native-side).
+        if (allTokens.length) {
+          W.addEventListener("pageshow", function (ev) {
+            if (!ev || !ev.persisted) { return; }
+            bridge("revalidateSessions", { tokens: allTokens }, null).catch(function () {});
+          });
         }
         // A page-world (MAIN) or USER_SCRIPT script means a cross-world manager is present; stand up the
         // isolated half of the `performance` bridge before ANY of its scripts (incl. the ISOLATED broker)
