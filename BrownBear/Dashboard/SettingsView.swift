@@ -19,6 +19,7 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Key.userScriptInstallPolicy) private var installPolicyRaw = UserScriptInstallPolicy.ask.rawValue
     @AppStorage(AppSettings.Key.userScriptWorld) private var userScriptWorldRaw = UserScriptWorld.userScript.rawValue
     @AppStorage(AppSettings.Key.keepVideosInline) private var keepVideosInline = true
+    @AppStorage(AppSettings.Key.theme) private var themeRaw = AppTheme.system.rawValue
     @State private var isClearing = false
     @State private var didClear = false
     @State private var confirmingClear = false
@@ -34,6 +35,18 @@ struct SettingsView: View {
             }
 
             Section("Appearance") {
+                Picker("Theme", selection: $themeRaw) {
+                    ForEach(AppTheme.allCases) { theme in
+                        Text(theme.title).tag(theme.rawValue)
+                    }
+                }
+                .onChange(of: themeRaw) { _ in
+                    Task { @MainActor in ThemeController.apply() }
+                }
+                Text("Light & Dark follow your device by default. OG BrownBear restores the original warm look.")
+                    .font(.caption)
+                    .foregroundStyle(BBTheme.Color.textSecondary)
+
                 Picker("Address bar", selection: $addressBarPositionRaw) {
                     ForEach(AddressBarPosition.allCases) { pos in
                         Text(pos.title).tag(pos.rawValue)
