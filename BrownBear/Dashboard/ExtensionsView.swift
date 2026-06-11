@@ -79,6 +79,8 @@ struct ExtensionsView: View {
     @State private var importing = false
     @State private var storePrompting = false
     @State private var storeInput = ""
+    /// Mirrors AppSettings.extensionsToolbarHidden so the toggle re-pins/unpins the toolbar button live.
+    @AppStorage(AppSettings.Key.extensionsToolbarHidden) private var toolbarHidden = false
 
     private var allowedTypes: [UTType] {
         [.zip, UTType(filenameExtension: "crx") ?? .data]
@@ -95,6 +97,7 @@ struct ExtensionsView: View {
                 } header: {
                     Text("Installed").foregroundStyle(BBTheme.Color.textSecondary)
                 }
+                toolbarSection
             }
             recommendedSections
         }
@@ -147,6 +150,30 @@ struct ExtensionsView: View {
             Text(model.errorMessage ?? "")
         }
         .task { await model.load() }
+    }
+
+    // MARK: - Toolbar pin
+
+    /// A toggle to show/hide the quick extensions button in the browser's bottom toolbar. Writing the
+    /// shared key (via @AppStorage) and posting the notification re-pins/unpins it live.
+    private var toolbarSection: some View {
+        Section {
+            Toggle(isOn: Binding(
+                get: { !toolbarHidden },
+                set: { newValue in
+                    toolbarHidden = !newValue
+                    NotificationCenter.default.post(name: .brownBearExtensionsToolbarChanged, object: nil)
+                }
+            )) {
+                Label("Show in toolbar", systemImage: "puzzlepiece.extension")
+                    .foregroundStyle(BBTheme.Color.textPrimary)
+            }
+            .tint(BBTheme.Color.accent)
+            .listRowBackground(BBTheme.Color.card)
+        } footer: {
+            Text("Adds a quick extensions button to the browser's bottom toolbar. Long-press it to hide it again.")
+                .font(.caption).foregroundStyle(BBTheme.Color.textSecondary)
+        }
     }
 
     // MARK: - Recommended

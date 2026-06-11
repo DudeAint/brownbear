@@ -71,6 +71,13 @@ final class BrownBearBrowserViewController: UIViewController {
     /// Observes `.brownBearOpenURL` so a presented surface (e.g. the dashboard's store links) can open a
     /// URL in a new tab without holding a reference to this controller.
     var openURLObserver: NSObjectProtocol?
+    /// Observe extension install/enable/remove and the toolbar pin-pref change, to re-evaluate the pinned
+    /// extensions button. Managed in BrownBearBrowserViewController+ExtensionsToolbar.swift.
+    var extensionsChangeObserver: NSObjectProtocol?
+    var extensionsToolbarPrefObserver: NSObjectProtocol?
+    /// The enabled extensions (with a chrome.action) the toolbar icon stands for, cached so a tap can act
+    /// without re-fetching: one → open its popup, several → the list popover.
+    var pinnedExtensionItems: [ExtensionListItem] = []
     /// Observes keyboard-frame changes so the BOTTOM address bar lifts above the keyboard while editing.
     var keyboardObserver: NSObjectProtocol?
     /// True while the keyboard is up — scroll-hide is suspended so typing doesn't fight the lift.
@@ -149,12 +156,16 @@ final class BrownBearBrowserViewController: UIViewController {
         DownloadManager.shared.onDownloadStarted = { [weak self] in self?.presentDownloadStartedToast() }
         buildHierarchy()
         registerChromeLayoutObservers()
+        registerExtensionsToolbarObservers()
+        refreshExtensionsToolbarIcon()
     }
 
     deinit {
         if let chromeLayoutObserver { NotificationCenter.default.removeObserver(chromeLayoutObserver) }
         if let keyboardObserver { NotificationCenter.default.removeObserver(keyboardObserver) }
         if let openURLObserver { NotificationCenter.default.removeObserver(openURLObserver) }
+        if let extensionsChangeObserver { NotificationCenter.default.removeObserver(extensionsChangeObserver) }
+        if let extensionsToolbarPrefObserver { NotificationCenter.default.removeObserver(extensionsToolbarPrefObserver) }
     }
 
     override var preferredStatusBarStyle: UIStatusBarStyle {
@@ -495,7 +506,8 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
         present(share, animated: true)
     }
 
-    private func presentDashboard(initialTab: BrownBearDashboardView.DashboardTab = .scripts) {
+    // Not `private`: the extensions toolbar button's long-press "Manage" opens this (+ExtensionsToolbar).
+    func presentDashboard(initialTab: BrownBearDashboardView.DashboardTab = .scripts) {
         present(BrownBearDashboardView.makeHostingController(initialTab: initialTab), animated: true)
     }
 

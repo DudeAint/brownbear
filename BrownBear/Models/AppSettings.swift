@@ -193,6 +193,7 @@ enum AppSettings {
         static let userScriptWorld = "bbUserScriptWorld"
         static let keepVideosInline = "bbKeepVideosInline"
         static let theme = "bbTheme"
+        static let extensionsToolbarHidden = "bbExtensionsToolbarHidden"
     }
 
     /// The app's appearance. Default `.system` (clean Light/Dark following the OS); the Settings picker
@@ -271,6 +272,15 @@ enum AppSettings {
         get { UserDefaults.standard.object(forKey: Key.lastScriptUpdateCheck) as? Date }
         set { UserDefaults.standard.set(newValue, forKey: Key.lastScriptUpdateCheck) }
     }
+
+    /// Whether the user has hidden the extensions button from the bottom toolbar. The button is shown by
+    /// default once at least one extension is installed (effectively "auto-pin on install"); the user can
+    /// hide it from its long-press menu and bring it back from the Extensions tab. Default `false` (shown).
+    /// Changing it posts `.brownBearExtensionsToolbarChanged` so the open browser re-evaluates the icon.
+    static var extensionsToolbarHidden: Bool {
+        get { UserDefaults.standard.bool(forKey: Key.extensionsToolbarHidden) }
+        set { UserDefaults.standard.set(newValue, forKey: Key.extensionsToolbarHidden) }
+    }
 }
 
 extension Notification.Name {
@@ -287,4 +297,8 @@ extension Notification.Name {
     /// e.g. the dashboard's "Browse the stores" rows. The browser dismisses any presented sheet and loads
     /// it, so the dashboard doesn't need a reference to the browser controller.
     static let brownBearOpenURL = Notification.Name("brownBearOpenURL")
+
+    /// Posted when `AppSettings.extensionsToolbarHidden` changes (e.g. the Extensions tab's "Show in
+    /// toolbar" toggle, or the icon's "Hide" menu), so the open browser re-evaluates the toolbar icon.
+    static let brownBearExtensionsToolbarChanged = Notification.Name("brownBearExtensionsToolbarChanged")
 }
