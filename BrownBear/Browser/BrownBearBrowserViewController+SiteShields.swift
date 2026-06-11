@@ -41,7 +41,8 @@ extension BrownBearBrowserViewController {
                                               displayHost: url.host ?? host,
                                               navigation: tab.state,
                                               scheme: url.scheme?.lowercased() ?? "",
-                                              stored: stored)
+                                              stored: stored,
+                                              blockedCount: ShieldBlockCounter.shared.count(for: tab.webView))
             let controller = SiteShieldsViewController(state: state, delegate: self)
             present(controller.makePopover(sourceView: anchor, sourceRect: sourceRect), animated: true)
         }
@@ -50,8 +51,8 @@ extension BrownBearBrowserViewController {
     /// Fold the stored per-host override over the app defaults into the effective switch states.
     private static func makeShieldsState(host: String, displayHost: String,
                                          navigation: NavigationState, scheme: String,
-                                         stored: SiteSettings) -> SiteShieldsState {
-        SiteShieldsState(
+                                         stored: SiteSettings, blockedCount: Int) -> SiteShieldsState {
+        var state = SiteShieldsState(
             host: host,
             displayHost: displayHost.hasPrefix("www.") ? String(displayHost.dropFirst(4)) : displayHost,
             isSecure: navigation.hasOnlySecureContent,
@@ -62,6 +63,10 @@ extension BrownBearBrowserViewController {
             javaScriptPinned: stored.allowJavaScript != nil,
             desktopSiteOn: stored.desktopUA ?? false,
             desktopSitePinned: stored.desktopUA != nil)
+        // Only surface the count when blocking is actually on for this host (a shields-off page blocks
+        // nothing, so a leftover tally would mislead).
+        state.blockedCount = state.contentBlockingOn ? blockedCount : 0
+        return state
     }
 }
 
