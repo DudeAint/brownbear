@@ -35,6 +35,9 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
         self.window = window
 
+        // Apply the saved appearance (clean Light/Dark/System or OG BrownBear) to the window.
+        ThemeController.applyAtLaunch(to: window)
+
         // Open the user's first tab on a friendly start page.
         browser.openInitialTabIfNeeded()
 
