@@ -675,17 +675,64 @@
       for (var i = 0; i < bin.length; i++) { bytes[i] = bin.charCodeAt(i) & 0xff; }
       return bytes;
     }
-    function Response(result) {
-      result = result || {};
-      this.ok = !!result.ok;
-      this.status = result.status || 0;
-      this.statusText = result.statusText || '';
-      this.url = result.url || '';
-      this.headers = new Headers(result.headers || {});
+    function base64FromBytes(bytes) {
+      var bin = '';
+      for (var i = 0; i < bytes.length; i++) { bin += String.fromCharCode(bytes[i]); }
+      return btoa(bin);
+    }
+    // Response supports BOTH construction forms:
+    //  - the spec `new Response(bodyInit, init)` — extensions build these directly (Tampermonkey's save
+    //    pipeline does `new Response(blob).text()` to read a script's source back out of a Blob; with
+    //    only the internal form below, that returned "" and the saved script registered EMPTY → it never
+    //    appeared in the installed list);
+    //  - the internal native-result shape `{ok, status, headers, bodyBase64}` our fetch/clone pass
+    //    (recognized by its marker keys when no init is given, so existing callers are unchanged).
+    function Response(result, init) {
+      var native = (init === undefined) && result !== null && typeof result === 'object'
+        && !(typeof globalThis.Blob === 'function' && result instanceof globalThis.Blob)
+        && (result.bodyBase64 !== undefined || result.status !== undefined || result.ok !== undefined);
+      if (native) {
+        result = result || {};
+        this.ok = !!result.ok;
+        this.status = result.status || 0;
+        this.statusText = result.statusText || '';
+        this.url = result.url || '';
+        this.headers = new Headers(result.headers || {});
+        this.redirected = false;
+        this.type = 'basic';
+        this.bodyUsed = false;
+        this._b64 = result.bodyBase64 || '';
+        return;
+      }
+      // Spec form: (bodyInit?, {status?, statusText?, headers?})
+      init = init || {};
+      this.status = (init.status === undefined) ? 200 : (init.status | 0);
+      this.ok = this.status >= 200 && this.status < 300;
+      this.statusText = init.statusText || '';
+      this.url = '';
+      this.headers = new Headers(init.headers || {});
       this.redirected = false;
       this.type = 'basic';
       this.bodyUsed = false;
-      this._b64 = result.bodyBase64 || '';
+      var body = (result === undefined) ? null : result;
+      if (body === null) { this._b64 = ''; }
+      else if (typeof body === 'string') { this._b64 = base64FromBytes(new TextEncoder().encode(body)); }
+      else if (typeof globalThis.Blob === 'function' && body instanceof globalThis.Blob && body._bbBytes) {
+        this._b64 = base64FromBytes(body._bbBytes);
+        if (!this.headers.has('content-type') && body.type) { this.headers.set('content-type', body.type); }
+      } else if (Object.prototype.toString.call(body) === '[object ArrayBuffer]') {
+        // Brand check, not instanceof — robust if the buffer was created in another realm.
+        this._b64 = base64FromBytes(new Uint8Array(body));
+      } else if (body && Object.prototype.toString.call(body.buffer) === '[object ArrayBuffer]'
+                 && typeof body.byteLength === 'number') {
+        this._b64 = base64FromBytes(new Uint8Array(body.buffer, body.byteOffset || 0, body.byteLength));
+      } else if (typeof URLSearchParams === 'function' && body instanceof URLSearchParams) {
+        this._b64 = base64FromBytes(new TextEncoder().encode(body.toString()));
+        if (!this.headers.has('content-type')) { this.headers.set('content-type', 'application/x-www-form-urlencoded;charset=UTF-8'); }
+      } else {
+        // Spec stringifies other bodies; better a readable body than a silent empty one.
+        this._b64 = base64FromBytes(new TextEncoder().encode(String(body)));
+      }
     }
     Response.prototype.arrayBuffer = function () { this.bodyUsed = true; return Promise.resolve(bytesFromBase64(this._b64).buffer); };
     Response.prototype.text = function () { this.bodyUsed = true; return Promise.resolve(new TextDecoder('utf-8').decode(bytesFromBase64(this._b64))); };
@@ -832,6 +879,25 @@
         var __fetchBase = (globalThis.location && globalThis.location.href) || globalThis.__bbBgBaseURL;
         if (__fetchBase) { url = new globalThis.URL(url, __fetchBase).href; }
       } catch (e) { /* leave url as written */ }
+      // blob: object URLs minted by THIS context's URL.createObjectURL resolve synchronously from the
+      // registry — they can never reach the native HTTP path (the bytes only exist in this JSContext).
+      // Tampermonkey's save pipeline reads a script's source back via fetch(objUrl) → .blob() → text;
+      // without this the fetch rejected, toBlob() swallowed it to undefined, and the saved script
+      // registered EMPTY → it never appeared in the installed list. Unknown/revoked blob: URLs reject
+      // with TypeError, matching Chrome.
+      if (/^blob:/i.test(String(url))) {
+        var __obj = globalThis.__bbObjectURLs && globalThis.__bbObjectURLs[String(url)];
+        if (__obj && __obj._bbBytes) {
+          var __objB64 = '', __objBytes = __obj._bbBytes;
+          for (var __oi = 0; __oi < __objBytes.length; __oi++) { __objB64 += String.fromCharCode(__objBytes[__oi]); }
+          return Promise.resolve(new Response({
+            ok: true, status: 200, statusText: 'OK', url: String(url),
+            headers: __obj.type ? { 'content-type': __obj.type } : {},
+            bodyBase64: btoa(__objB64)
+          }));
+        }
+        return Promise.reject(new TypeError('Failed to fetch'));
+      }
       var headersInit = (init.headers !== undefined) ? init.headers : (reqObj ? reqObj.headers : null);
       if (headersInit) {
         if (headersInit._m) { headers = headersInit._m; }                         // our Headers instance
@@ -889,7 +955,8 @@
             if (signal && typeof signal.removeEventListener === 'function') { signal.removeEventListener('abort', onAbort); }
             var r;
             try { r = JSON.parse(resJSON); } catch (e) { reject(new TypeError('Failed to fetch')); return; }
-            if (r.error) { reject(new TypeError('Failed to fetch: ' + r.error)); return; }
+            // A null/absent reply must REJECT, not crash reading .error on null.
+            if (!r || r.error) { reject(new TypeError('Failed to fetch' + (r && r.error ? ': ' + r.error : ''))); return; }
             resolve(new Response(r));
           });
         } catch (e) { settled = true; reject(e); }
