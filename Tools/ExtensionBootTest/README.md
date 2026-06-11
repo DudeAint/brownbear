@@ -52,3 +52,31 @@ The runtime JS is resolved relative to the repo (`../../BrownBear/Resources/JS`)
 rollup**: the `chrome.*` surface touched-but-missing across the whole set (sorted by how many
 extensions hit it) and the distinct boot-error signatures. Fix the top of the missing rollup in
 `brownbear-webext-background.js`, re-run, watch it shrink.
+
+---
+
+## Page boot test (popup / options / overrides / devtools / side panel)
+
+`boot-page.mjs` + `run-page.mjs` do the same for the **page** moving parts. Each page is loaded
+through the real page runtime — `brownbear-idle-callback.js` + `brownbear-webext-page.js` (the page
+shim that bridges `chrome.*` to the background) — and its `<script type=module>` graph is pre-linked
+with the same `__bbBundlePage` the app uses (WebKit won't load module scripts over the custom
+scheme, so a **link failure = a blank page** on device).
+
+```sh
+node Tools/ExtensionBootTest/run-page.mjs          # defaults to /tmp/crx
+BB_STACK=1 node Tools/ExtensionBootTest/boot-page.mjs /tmp/crx/<id>/unpacked <id>   # one ext, with stacks
+```
+
+What it reliably catches:
+- **module-link failures** (blank popup/options) — the highest-value signal, DOM-independent;
+- **page-shim `chrome.*` gaps** — a method/enum the page reads that the page shim doesn't provide
+  (e.g. `scripting.ExecutionWorld.MAIN`, `i18n.detectLanguage().then(...)`), via a recording proxy.
+
+What it can't (and is honest about): popups run in a real WKWebView with a real DOM on device; the
+harness runs against a **permissive DOM stub**, so DOM-heavy classic bundles (jQuery, webpack's
+automatic `publicPath`, DOMPurify's `addHook`) throw harness-only errors that do **not** reproduce on
+device. Treat the classic-script errors as best-effort; trust the **link-failure** and
+**missing-`chrome.*`** signals. Bridge calls to the background don't resolve here (the booted page
+has no live background), so a page that merely *awaits* data isn't flagged — only one that *throws*
+or *fails to link* is.
