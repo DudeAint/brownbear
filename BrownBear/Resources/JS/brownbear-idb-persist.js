@@ -141,12 +141,24 @@
     if (snapTimer !== null) { return; }
     snapTimer = setTimeout(function () {
       snapTimer = null;
-      try { var j = g.__bbIDBSnapshot(); if (typeof __bb_idb_save === 'function') { __bb_idb_save(j); } } catch (e) {}
+      persist();
     }, 300);
   }
-  g.__bbIDBFlush = function () {
-    try { var j = g.__bbIDBSnapshot(); if (typeof __bb_idb_save === 'function') { __bb_idb_save(j); } } catch (e) {}
-  };
+  // Snapshot the in-memory IndexedDB and hand it to native. A FAILURE here means a write (e.g. a saved
+  // userscript) is NOT persisted, so it vanishes on the next worker restart while the save looked
+  // successful — log it instead of swallowing, so that silent data loss is diagnosable.
+  function persist() {
+    try {
+      var j = g.__bbIDBSnapshot();
+      if (typeof __bb_idb_save === 'function') { __bb_idb_save(j); }
+    } catch (e) {
+      if (typeof __bb_log === 'function') {
+        __bb_log('error', '[bb-idb] snapshot FAILED to persist (a write will be lost on restart): '
+          + (e && e.message ? e.message : e));
+      }
+    }
+  }
+  g.__bbIDBFlush = function () { persist(); };
 
   function wrap(ctor, methods) {
     if (!ctor || !ctor.prototype) { return; }
