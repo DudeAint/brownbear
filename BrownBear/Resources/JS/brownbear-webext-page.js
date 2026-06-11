@@ -599,6 +599,10 @@
       return payload;
     }
     return {
+      // Chrome exposes the injection-world enum on chrome.scripting; a popup/options page reads
+      // chrome.scripting.ExecutionWorld.MAIN directly (a Firefox adblocker's popup.js does), and its
+      // absence throws "undefined is not an object (reading 'MAIN')" before the page finishes booting.
+      ExecutionWorld: { ISOLATED: "ISOLATED", MAIN: "MAIN" },
       executeScript: function (injection, callback) { return settle(bridge("scripting.executeScript", serialize(injection)), callback); },
       insertCSS: function (injection, callback) { return settle(bridge("scripting.insertCSS", cssPayload(injection)).then(function () { return undefined; }), callback); },
       removeCSS: function (injection, callback) { return settle(bridge("scripting.removeCSS", cssPayload(injection)).then(function () { return undefined; }), callback); }
@@ -1071,9 +1075,25 @@
     i18n: {
       getMessage: i18nGetMessage,
       getUILanguage: function () { return (W.navigator && W.navigator.language) || "en"; },
-      getAcceptLanguages: function (cb) { var langs = [(W.navigator && W.navigator.language) || "en"]; if (typeof cb === "function") { cb(langs); return undefined; } return _Promise.resolve(langs); }
+      getAcceptLanguages: function (cb) { var langs = [(W.navigator && W.navigator.language) || "en"]; if (typeof cb === "function") { cb(langs); return undefined; } return _Promise.resolve(langs); },
+      // chrome.i18n.detectLanguage(text) — Chrome returns {isReliable, languages:[{language, percentage}]}.
+      // A popup that calls `chrome.i18n.detectLanguage(text).then(...)` (an adblocker's popup_compiled.js
+      // does) crashed on undefined.then without this. Route to the background's native detector; it always
+      // returns a promise so the page degrades gracefully (an 'und' result) rather than throwing.
+      detectLanguage: function (text, cb) { return settle(bridge("i18n.detectLanguage", { text: String(text == null ? "" : text) }), cb); }
     },
-    extension: { getURL: getURL, inIncognitoContext: false }
+    extension: {
+      getURL: getURL,
+      inIncognitoContext: false,
+      // chrome.extension.* legacy surface real pages still read. getBackgroundPage is synchronous in
+      // Chrome and returns null under MV3 (no persistent background page) — provide the function so a
+      // popup calling it gets null instead of "getBackgroundPage is not a function". The access checks
+      // resolve false (iOS WKWebView grants extensions neither file-scheme nor incognito access).
+      getBackgroundPage: function () { return null; },
+      getViews: function () { return []; },
+      isAllowedFileSchemeAccess: function (cb) { if (typeof cb === "function") { cb(false); return undefined; } return _Promise.resolve(false); },
+      isAllowedIncognitoAccess: function (cb) { if (typeof cb === "function") { cb(false); return undefined; } return _Promise.resolve(false); }
+    }
   };
 
   W.chrome = chrome;
