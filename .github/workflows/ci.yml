@@ -103,13 +103,20 @@ jobs:
           key: dd-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
             dd-${{ runner.os }}-
-      - name: Pick an available iOS simulator
+      - name: Pick and pre-boot an iOS simulator
         id: sim
         run: |
           UDID=$(xcrun simctl list devices available -j | python3 -c "import sys,json; d=json.load(sys.stdin); print(next(dev['udid'] for k,v in d['devices'].items() if 'iOS' in k for dev in v if dev.get('isAvailable')))")
           echo "udid=$UDID" >> "$GITHUB_OUTPUT"
           echo "Using simulator $UDID"
+          # Boot it now so it finishes warming WHILE the app compiles — taking the ~30-60s simulator
+          # boot off the test step's critical path (xcodebuild test reuses the already-booted device).
+          xcrun simctl boot "$UDID" 2>/dev/null || true
       - name: Build & test
+        # Flags that trim minutes without changing what's built or tested:
+        #   ONLY_ACTIVE_ARCH=YES               — compile just the simulator's arch, not both
+        #   -disableAutomaticPackageResolution — packages are resolved in setup; don't re-resolve
+        #   -skip*Validation                   — skip the interactive plugin/macro trust checks (CI)
         run: |
           set -o pipefail
           xcodebuild test \
@@ -120,6 +127,10 @@ jobs:
             -derivedDataPath .derived-data \
             -resultBundlePath TestResults.xcresult \
             -quiet \
+            -disableAutomaticPackageResolution \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
+            ONLY_ACTIVE_ARCH=YES \
             COMPILER_INDEX_STORE_ENABLE=NO \
             CODE_SIGNING_ALLOWED=NO
       - name: Dump BrownBear crash report on failure
