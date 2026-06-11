@@ -85,7 +85,7 @@ extension BrownBearBrowserViewController {
         <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
         <style>\(newTabCSS)</style></head><body>
           <div class="wrap">
-            <div class="brand fade"><span class="mark">B</span><h1>BrownBear</h1></div>
+            <div class="brand fade"><span class="mark">\(brandMark)</span><h1>BrownBear</h1></div>
             <div class="sbox fade" style="animation-delay:.04s">
               <form class="search" action="\(engine.formAction)" method="GET" autocomplete="off">
                 <img class="elogo" src="https://\(engineHost)/favicon.ico" alt="" onerror="this.style.visibility='hidden'">
@@ -105,30 +105,29 @@ extension BrownBearBrowserViewController {
     :root{color-scheme:light dark;
       --bg:#F0F0F5;--text:#1C1C1E;--sub:#6C6C70;--border:rgba(0,0,0,.07);
       --glass:rgba(255,255,255,.62);--glass2:rgba(255,255,255,.7);--hair:rgba(255,255,255,.85);
-      --tile:rgba(255,255,255,.55);--blob1:rgba(120,140,180,.20);--blob2:rgba(180,150,210,.16);
+      --tile:rgba(255,255,255,.55);--lift:rgba(255,255,255,.7);
       --g1:#3A3A3C;--g2:#1C1C1E;--s1:rgba(0,0,0,.05);--s2:rgba(0,0,0,.08);}
     @media (prefers-color-scheme:dark){:root{
       --bg:#0A0A0C;--text:#F5F5F7;--sub:#9A9AA0;--border:rgba(255,255,255,.09);
       --glass:rgba(36,36,40,.58);--glass2:rgba(44,44,48,.66);--hair:rgba(255,255,255,.07);
-      --tile:rgba(60,60,66,.42);--blob1:rgba(90,110,160,.22);--blob2:rgba(150,120,190,.18);
+      --tile:rgba(60,60,66,.42);--lift:rgba(255,255,255,.045);
       --g1:#48484A;--g2:#2C2C2E;--s1:rgba(0,0,0,.5);--s2:rgba(0,0,0,.6);}}
     *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
     html,body{margin:0;min-height:100%;font-family:-apple-system,system-ui,sans-serif;
       background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased;}
-    /* Soft out-of-focus colour wells so the frosted glass has something to refract. */
-    body::before,body::after{content:"";position:fixed;width:60vmax;height:60vmax;border-radius:50%;
-      filter:blur(60px);z-index:0;pointer-events:none;}
-    body::before{background:var(--blob1);top:-22vmax;left:-18vmax;}
-    body::after{background:var(--blob2);bottom:-24vmax;right:-20vmax;}
+    /* A clean, neutral top-lift instead of coloured glows — keeps the graphite-on-white identity. */
+    body{background-image:radial-gradient(135% 85% at 50% -20%,var(--lift),transparent 60%);
+      background-attachment:fixed;}
     .wrap{position:relative;z-index:1;max-width:600px;margin:0 auto;padding:max(64px,13vh) 22px 52px;}
     @keyframes up{from{opacity:0;transform:translateY(16px) scale(.985);}to{opacity:1;transform:none;}}
     .fade{opacity:0;animation:up .6s cubic-bezier(.16,.84,.34,1) both;}
     @media (prefers-reduced-motion:reduce){.fade{animation:none;opacity:1;}
       .tile,.row,form.search,.sgrow{transition:none;}}
     .brand{display:flex;align-items:center;gap:11px;justify-content:center;margin-bottom:28px;}
-    .brand .mark{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;
-      background:linear-gradient(160deg,var(--g1),var(--g2));color:#fff;font-weight:800;font-size:17px;
-      box-shadow:inset 0 .5px 0 rgba(255,255,255,.25),0 4px 12px var(--s2);letter-spacing:-.5px;}
+    .brand .mark{width:32px;height:32px;border-radius:10px;display:grid;place-items:center;
+      background:linear-gradient(160deg,var(--g1),var(--g2));
+      box-shadow:inset 0 .5px 0 rgba(255,255,255,.25),0 4px 12px var(--s2);}
+    .brand .mark svg{width:22px;height:22px;display:block;}
     .brand h1{font-size:20px;font-weight:700;margin:0;letter-spacing:-.3px;}
     .sbox{position:relative;margin-bottom:34px;z-index:5;}
     form.search{display:flex;align-items:center;gap:11px;background:var(--glass);
@@ -252,6 +251,9 @@ extension BrownBearBrowserViewController {
     private static let glyphPuzzle = ##"<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2"/></svg>"##
     private static let glyphTheme = ##"<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9"><circle cx="12" cy="12" r="9"/><path fill="#fff" stroke="none" d="M12 3a9 9 0 010 18z"/></svg>"##
     private static let glyphGithub = ##"<svg viewBox="0 0 24 24" fill="#fff"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49 0-.24-.01-.88-.01-1.73-2.78.62-3.37-1.37-3.37-1.37-.46-1.18-1.11-1.5-1.11-1.5-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.36-2.22-.26-4.56-1.14-4.56-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.27 2.75 1.05A9.4 9.4 0 0112 6.84c.85 0 1.71.12 2.51.34 1.91-1.32 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.93-2.34 4.79-4.57 5.05.36.32.68.94.68 1.9 0 1.37-.01 2.47-.01 2.81 0 .27.18.59.69.49A10.26 10.26 0 0022 12.25C22 6.58 17.52 2 12 2z"/></svg>"##
+    /// The BrownBear mark: a clean bear face (white head + ears, graphite eyes + nose) drawn inside the
+    /// brand chip — the actual logo, replacing the bare "B" letter.
+    private static let brandMark = ##"<svg viewBox="0 0 24 24"><g fill="#fff"><circle cx="6.7" cy="7.4" r="3"/><circle cx="17.3" cy="7.4" r="3"/><circle cx="12" cy="13.6" r="7.4"/></g><g fill="#2a2a2c"><circle cx="9.5" cy="12.4" r="1.05"/><circle cx="14.5" cy="12.4" r="1.05"/><circle cx="12" cy="15.5" r="1.4"/></g></svg>"##
     // swiftlint:enable line_length
 
     /// The onboarding guide shown on a fresh New Tab page (no bookmarks/history yet). Static, first-party.
