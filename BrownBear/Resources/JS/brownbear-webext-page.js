@@ -150,7 +150,12 @@
     }, true);
     W.addEventListener("unhandledrejection", function (e) {
       var r = e && e.reason;
-      emit("error", ["Unhandled promise rejection: " + ((r && r.message) ? r.message : String(r))]);
+      var msg = "Unhandled promise rejection: " + ((r && r.message) ? r.message : String(r));
+      // Append the stack (file:line of the throwing frame) — a rejection with no source is undiagnosable
+      // (a bare "undefined is not an object (evaluating 'e.replace')" names neither the page nor the API
+      // that resolved undefined). The window 'error' handler already attaches a stack; mirror it here.
+      if (r && r.stack) { msg += "\n" + r.stack; }
+      emit("error", [msg]);
     });
   })();
 
