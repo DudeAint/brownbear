@@ -392,6 +392,19 @@ final class OmniboxView: UIView {
         refreshPillElevation()
     }
 
+    /// A focus ring on the pill while editing — an accent-tinted border that animates in on focus and
+    /// settles back to the resting elevation on blur. A clean, recognizable "active" affordance.
+    private func setEditingRing(_ on: Bool) {
+        UIView.animate(withDuration: 0.22, delay: 0, options: [.beginFromCurrentState]) {
+            if on {
+                self.container.layer.borderWidth = 2
+                self.container.layer.borderColor = BrownBearTheme.Palette.borderSelected.cgColor
+            } else {
+                self.refreshPillElevation()
+            }
+        }
+    }
+
     /// In light mode the pill floats on a soft shadow; in dark mode shadows wash out on near-black,
     /// so it instead gets a 1px border and no shadow.
     private func refreshPillElevation() {
@@ -452,6 +465,7 @@ extension OmniboxView: UITextFieldDelegate {
 
     func textFieldDidBeginEditing(_ textField: UITextField) {
         applyIconState(editing: true, animated: true)
+        setEditingRing(true)
         updateActionButton()
         // Select all so the user can type over the URL immediately.
         DispatchQueue.main.async {
@@ -470,6 +484,7 @@ extension OmniboxView: UITextFieldDelegate {
     func textFieldDidEndEditing(_ textField: UITextField) {
         // Collapse back to the two-tone display representation.
         applyIconState(editing: false, animated: true)
+        setEditingRing(false)
         applyDisplayURL(currentState)
         updateActionButton()
         delegate?.omniboxDidEndEditing(self)
