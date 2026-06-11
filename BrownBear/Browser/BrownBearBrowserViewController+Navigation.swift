@@ -38,6 +38,7 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         // The page's main document has started rendering — refresh the security indicator.
         extensionRedirectDepth.removeValue(forKey: ObjectIdentifier(webView))   // a page committed: redirect chain ended
+        ShieldBlockCounter.shared.reset(for: webView)   // new page → restart the "N blocked" tally
         if webView == installedWebView { refreshChrome() }
         applyStoredZoom(for: webView)
         if let id = extTabId(for: webView) {

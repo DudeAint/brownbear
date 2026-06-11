@@ -33,6 +33,9 @@ final class InjectionOrchestrator {
     let historyStateHandler = WebExtHistoryStateHandler()
     /// Backs the in-page "Add to BrownBear" / "Remove from BrownBear" button on Chrome Web Store pages.
     private let webStoreInstallHandler = WebStoreInstallHandler()
+    /// Receives the host→attempt-count map a page reports (PAGE world) so the Shields panel can show a
+    /// real "N blocked" count — WKContentRuleList blocks silently and reports nothing to the app.
+    private let shieldCounterHandler = ShieldCounterHandler()
     /// Compiles each extension's declarativeNetRequest rulesets into WKContentRuleLists (Module 6 P2).
     let contentBlocker: WebExtensionContentBlocker
     let scriptStore: ScriptStore
@@ -157,6 +160,21 @@ final class InjectionOrchestrator {
                                        in: .page)
         userContentController.addUserScript(pageConsole)
 
+        // Shield block counter — a PAGE-world, all-frames, document-start observer that reports the hosts
+        // a page tries to load so ShieldBlockCounter can show a real "N blocked" figure (WKContentRuleList
+        // cancels blocked requests silently and tells the app nothing). Untrusted-page-world handler: it
+        // only folds a host→count map into a per-tab display counter. Kill-switchable via the defaults key.
+        if ShieldBlockCounter.isEnabled {
+            userContentController.add(shieldCounterHandler,
+                                      contentWorld: .page,
+                                      name: ShieldCounterHandler.handlerName)
+            let shieldCounter = WKUserScript(source: Self.bootstrapSource("brownbear-shield-counter"),
+                                             injectionTime: .atDocumentStart,
+                                             forMainFrameOnly: false,
+                                             in: .page)
+            userContentController.addUserScript(shieldCounter)
+        }
+
         // Chrome Web Store in-page install button — a PAGE-world content script that self-gates to
         // store hosts, makes the store believe it's desktop Chrome, and rewires the install button to
         // BrownBear's installer via the reply handler below. Main frame only (the button is there).
@@ -262,6 +280,15 @@ final class InjectionOrchestrator {
                 .filter { $0.settings.blockContent == false }
                 .map(\.host)
             await contentBlocker.refresh(into: controller, shieldsDisabledHosts: disabled)
+            // Refresh the host set the page-world counter matches against, so the Shields "N blocked"
+            // figure reflects the SAME lists WebKit is blocking with. The parse can be large (tens of
+            // thousands of rules), so run it off the main actor and hop back to store the result.
+            if ShieldBlockCounter.isEnabled, let json = WebExtensionContentBlocker.builtInBlocklistJSON(excluding: []) {
+                let hosts = await Task.detached(priority: .utility) {
+                    ShieldBlockCounter.extractHosts(fromContentRuleJSON: json)
+                }.value
+                ShieldBlockCounter.shared.setBlockedHosts(hosts)
+            }
         }
     }
 
