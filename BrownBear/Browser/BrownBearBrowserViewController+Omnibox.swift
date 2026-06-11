@@ -80,4 +80,10 @@ extension BrownBearBrowserViewController: OmniboxSuggestionsViewDelegate {
         tab.delegate = self
         tab.load(suggestion.url)
     }
+
+    /// A tap on the exposed page area below the suggestions card — resign the omnibox so the keyboard
+    /// drops (and `omniboxDidEndEditing` clears the card), revealing the page the user tapped toward.
+    func suggestionsViewDidRequestDismiss(_ view: OmniboxSuggestionsView) {
+        omnibox.endEditing()
+    }
 }
