@@ -74,6 +74,13 @@ final class WebExtensionSchemeHandler: NSObject, WKURLSchemeHandler {
         if path.isEmpty { path = "index.html" }
         let resolvedPath = path
 
+        // Captured on the main thread (a WKURLSchemeTask's request must not be read off it) for the
+        // service-worker fetch fallback below. absoluteString keeps the query — Stylus's /data?… handler
+        // reads dark/frameId/url from it.
+        let requestMethod = urlSchemeTask.request.httpMethod ?? "GET"
+        let requestHeaders = urlSchemeTask.request.allHTTPHeaderFields ?? [:]
+        let absoluteURLString = url.absoluteString
+
         // A page module graph we pre-linked for this extension is served from memory under a synthetic
         // `__bb-page-bundle/<hash>.js` path (no packaged file). This must run BEFORE the store read so the
         // generated bundle, which has no file on disk, resolves. See WebExtensionPageModuleBundler.
@@ -116,29 +123,66 @@ final class WebExtensionSchemeHandler: NSObject, WKURLSchemeHandler {
                     })
                 if let rewritten { payload = Data(rewritten.utf8) }
             }
+            // No packaged file? Give this extension's service worker the chance to synthesize the
+            // response from its `fetch` handler (Stylus serves chrome-extension://<id>/data?… this way).
+            // Returns nil quickly for extensions with no fetch handler / no running worker.
+            var swResponse: WebExtensionBackgroundContext.ServiceWorkerFetchResponse?
+            if payload == nil {
+                let headersJSON = (try? JSONSerialization.data(withJSONObject: requestHeaders))
+                    .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+                swResponse = await BrownBearServices.shared.webExtensionRuntime.serviceWorkerFetch(
+                    extensionID: extensionID, urlString: absoluteURLString,
+                    method: requestMethod, headersJSON: headersJSON)
+            }
             await MainActor.run {
                 guard self.liveTasks.contains(key) else { return }   // stopped while we were reading
                 self.liveTasks.remove(key)
-                guard let data = payload else {
+                if let data = payload {
+                    let headers = Self.responseHeaders(path: resolvedPath, dataCount: data.count,
+                                                       extensionID: extensionID, csp: csp, scheme: self.scheme)
+                    if let response = HTTPURLResponse(url: url, statusCode: 200,
+                                                      httpVersion: "HTTP/1.1", headerFields: headers) {
+                        urlSchemeTask.didReceive(response)
+                        urlSchemeTask.didReceive(data)
+                        urlSchemeTask.didFinish()
+                    } else {
+                        self.logResourceFailure(level: "error", reason: "bad response for \(resolvedPath)")
+                        urlSchemeTask.didFailWithError(BrownBearError.bridgeRejected("bad response"))
+                    }
+                } else if let swResponse {
+                    self.deliver(serviceWorkerResponse: swResponse, url: url, extensionID: extensionID,
+                                 resolvedPath: resolvedPath, task: urlSchemeTask)
+                } else {
                     // A missing packaged resource is the canonical blank-popup / dead-options cause and the
                     // ONE place the failed path is known for certain (a missing subresource fires no JS error
                     // event, so nothing else can surface it). Log it so the Logs tab names the file.
                     self.logResourceFailure(level: "warn", reason: "resource not found: \(resolvedPath)")
                     urlSchemeTask.didFailWithError(BrownBearError.bridgeRejected("not found: \(resolvedPath)"))
-                    return
-                }
-                let headers = Self.responseHeaders(path: resolvedPath, dataCount: data.count,
-                                                   extensionID: extensionID, csp: csp, scheme: self.scheme)
-                if let response = HTTPURLResponse(url: url, statusCode: 200,
-                                                  httpVersion: "HTTP/1.1", headerFields: headers) {
-                    urlSchemeTask.didReceive(response)
-                    urlSchemeTask.didReceive(data)
-                    urlSchemeTask.didFinish()
-                } else {
-                    self.logResourceFailure(level: "error", reason: "bad response for \(resolvedPath)")
-                    urlSchemeTask.didFailWithError(BrownBearError.bridgeRejected("bad response"))
                 }
             }
+        }
+    }
+
+    /// Deliver a response the extension's service worker synthesized for an unpackaged path. Carries the
+    /// worker's status + headers, backfills Content-Type/Length and the extension-scoped CORS origin, and
+    /// streams the (possibly empty) body. Main-actor only — messages a live WKURLSchemeTask.
+    @MainActor
+    private func deliver(serviceWorkerResponse sw: WebExtensionBackgroundContext.ServiceWorkerFetchResponse,
+                         url: URL, extensionID: String, resolvedPath: String, task: WKURLSchemeTask) {
+        var headers = sw.headers
+        headers["Content-Length"] = "\(sw.body.count)"
+        headers["Access-Control-Allow-Origin"] = "\(self.scheme)://\(extensionID)"
+        let hasContentType = headers.keys.contains { $0.caseInsensitiveCompare("Content-Type") == .orderedSame }
+        if !hasContentType { headers["Content-Type"] = Self.mimeType(forPath: resolvedPath) }
+        let status = sw.status > 0 ? sw.status : 200
+        if let response = HTTPURLResponse(url: url, statusCode: status,
+                                          httpVersion: "HTTP/1.1", headerFields: headers) {
+            task.didReceive(response)
+            if !sw.body.isEmpty { task.didReceive(sw.body) }
+            task.didFinish()
+        } else {
+            self.logResourceFailure(level: "error", reason: "bad worker response for \(resolvedPath)")
+            task.didFailWithError(BrownBearError.bridgeRejected("bad worker response"))
         }
     }
 

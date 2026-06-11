@@ -300,12 +300,23 @@ try {
     globalThis.browser = wrapped;
 } catch (e) { /* keep real if proxy fails */ }
 
-// importScripts for classic SWs that pull in sibling files.
+// importScripts for classic SWs that pull in sibling files. An absolute chrome-/moz-extension URL
+// (often from getURL()) reduces to its package path; a bare relative path resolves against the SW's
+// own directory (importScripts is relative to the importing worker's URL, like Chrome).
+function resolveScriptPath(p, baseDir) {
+    p = String(p);
+    if (/^(?:chrome|moz)-extension:\/\//i.test(p)) { return p.replace(/^(?:chrome|moz)-extension:\/\/[^/]+\//i, ''); }
+    if (/^[a-z]+:\/\//i.test(p)) { return null; }   // http(s)/data — can't import in this harness
+    if (p.startsWith('/')) { return p.slice(1); }
+    return (baseDir && baseDir !== '.') ? baseDir + '/' + p : p;
+}
 globalThis.importScripts = function (...paths) {
     for (const p of paths) {
-        const s = readExt(p);
-        if (s == null) { recordError('importScripts', new Error('importScripts: file not found: ' + p)); continue; }
-        try { vm.runInThisContext(s, { filename: p }); } catch (e) { recordError('importScripts:' + p, e); }
+        const rel = resolveScriptPath(p, globalThis.__bbSwDir || '.');
+        if (rel == null) { continue; }
+        const s = readExt(rel);
+        if (s == null) { recordError('importScripts', new Error('importScripts: file not found: ' + rel)); continue; }
+        try { vm.runInThisContext(s, { filename: rel }); } catch (e) { recordError('importScripts:' + rel, e); }
     }
 };
 
@@ -333,6 +344,7 @@ let entriesHtmlPath = '__bgroot__.html';
 
 if (bg.service_worker) {
     kind = 'sw'; entries = [bg.service_worker]; isModule = bg.type === 'module';
+    globalThis.__bbSwDir = path.dirname(bg.service_worker);   // importScripts resolves relative to this
 } else if (Array.isArray(bg.scripts) && bg.scripts.length) {
     kind = 'mv2-scripts'; entries = bg.scripts.slice();
     isModule = bg.type === 'module';   // Firefox MV3 event page can be type:module scripts
