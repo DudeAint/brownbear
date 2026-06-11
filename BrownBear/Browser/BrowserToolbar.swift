@@ -19,6 +19,10 @@ protocol BrowserToolbarDelegate: AnyObject {
     func toolbarDidTapNewTab(_ toolbar: BrowserToolbar)
     func toolbarDidTapTabs(_ toolbar: BrowserToolbar)
     func toolbarDidTapMenu(_ toolbar: BrowserToolbar)
+    /// The pinned extensions button: a tap opens the single extension's popup or the extensions list;
+    /// a long-press offers Manage / Hide from toolbar.
+    func toolbarDidTapExtensions(_ toolbar: BrowserToolbar)
+    func toolbarDidLongPressExtensions(_ toolbar: BrowserToolbar)
     /// Long-press affordances (Firefox/Brave pattern): back/forward show the per-tab history list;
     /// the new-tab button offers New Private Tab.
     func toolbarDidLongPressBack(_ toolbar: BrowserToolbar)
@@ -35,6 +39,9 @@ final class BrowserToolbar: UIView {
     private let forwardButton = ToolbarButton()
     private let newTabButton = ToolbarButton()
     private let menuButton = ToolbarButton()
+    /// The pinnable extensions button. Hidden (and collapsed out of the stack) until the browser shows it
+    /// via `setExtensionsIconVisible` — i.e. only once there's an extension and the user hasn't hidden it.
+    private let extensionsButton = ToolbarButton()
 
     /// The tab-count control: a rounded square with the open-tab count, like Chrome iOS. It is a
     /// `ToolbarButton` for layout/haptic parity, hosting a bordered square + count label as subviews.
@@ -58,10 +65,17 @@ final class BrowserToolbar: UIView {
 
     // MARK: - Public state
 
-    /// The view a toolbar-triggered popover (e.g. an extension's action popup) anchors to. Extensions
-    /// live in the "•••" menu today, so their popup springs from that button — the toolbar is always at
-    /// the bottom, so the popover rises up over the page. (Re-anchors to a dedicated icon if one is added.)
-    var actionAnchorView: UIView { menuButton }
+    /// The view a toolbar-triggered popover (e.g. an extension's action popup) anchors to: the pinned
+    /// extensions button when it's shown, else the "•••" menu button. The toolbar is always at the bottom,
+    /// so the popover rises up over the page.
+    var actionAnchorView: UIView { extensionsButton.isHidden ? menuButton : extensionsButton }
+
+    /// Show or hide the pinned extensions button. Hiding it collapses it out of the equal-width stack, so
+    /// the remaining buttons redistribute (the default, extension-free toolbar is unchanged).
+    func setExtensionsIconVisible(_ visible: Bool) {
+        guard extensionsButton.isHidden == visible else { return }
+        extensionsButton.isHidden = !visible
+    }
 
     func update(canGoBack: Bool, canGoForward: Bool, tabCount: Int) {
         backButton.isEnabled = canGoBack
@@ -103,7 +117,17 @@ final class BrowserToolbar: UIView {
         configure(backButton, symbol: "chevron.backward", label: "Back", action: #selector(tapBack))
         configure(forwardButton, symbol: "chevron.forward", label: "Forward", action: #selector(tapForward))
         configure(newTabButton, symbol: "plus", label: "New Tab", action: #selector(tapNewTab))
+        configure(extensionsButton, symbol: "puzzlepiece.extension.fill", label: "Extensions",
+                  action: #selector(tapExtensions))
         configure(menuButton, symbol: "ellipsis", label: "More", action: #selector(tapMenu))
+
+        // Hidden until the browser pins it (an extension exists and the user hasn't hidden it).
+        extensionsButton.isHidden = true
+        // Long-press the extensions button → Manage / Hide-from-toolbar (handled by the browser).
+        extensionsButton.longPressHandler = { [weak self] in
+            guard let self else { return }
+            self.delegate?.toolbarDidLongPressExtensions(self)
+        }
 
         // Back/forward long-press shows the per-tab history list (ToolbarButton's built-in handler).
         backButton.longPressHandler = { [weak self] in
@@ -135,7 +159,8 @@ final class BrowserToolbar: UIView {
 
         buildTabsButton()
 
-        let stack = UIStackView(arrangedSubviews: [backButton, forwardButton, newTabButton, tabsButton, menuButton])
+        let stack = UIStackView(arrangedSubviews: [backButton, forwardButton, newTabButton, tabsButton,
+                                                   extensionsButton, menuButton])
         stack.axis = .horizontal
         stack.distribution = .fillEqually
         stack.alignment = .center
@@ -207,4 +232,5 @@ final class BrowserToolbar: UIView {
     @objc private func tapNewTab() { delegate?.toolbarDidTapNewTab(self) }
     @objc private func tapTabs() { delegate?.toolbarDidTapTabs(self) }
     @objc private func tapMenu() { delegate?.toolbarDidTapMenu(self) }
+    @objc private func tapExtensions() { delegate?.toolbarDidTapExtensions(self) }
 }
