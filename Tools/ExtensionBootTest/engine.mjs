@@ -105,7 +105,9 @@ function deliverMessageToWorker(message, sender) {
         const rid = 'w' + (++responseSeq);
         let settled = false;
         pendingPopupResponses.set(rid, (payload) => { if (settled) { return; } settled = true; pendingPopupResponses.delete(rid); resolve(payload); });
-        try { worker.__bbBg.dispatchMessage(message, sender, rid); }
+        // The worker's __bbBg.dispatchMessage parses JSON strings (it crosses the JSContext boundary as a
+        // serialized string on device), unlike the page shim's dispatchMessage which takes live objects.
+        try { worker.__bbBg.dispatchMessage(JSON.stringify(message === undefined ? null : message), JSON.stringify(sender || {}), rid); }
         catch (e) { L('host', 'dispatchMessage threw: ' + e.message); if (!settled) { settled = true; resolve(null); } }
         setTimeout(() => { if (!settled) { settled = true; pendingPopupResponses.delete(rid); resolve(null); } }, 4000);
     });
@@ -386,6 +388,28 @@ async function main() {
     const dataUrl = BASE_URL + 'data?dark=true&frameId=0&url=' + encodeURIComponent(BASE_URL + 'popup.html');
     const dataResp = await serviceWorkerFetch(dataUrl);
     L('host', '/data SW-fetch → ' + (dataResp ? ('matched=' + dataResp.matched + ' status=' + dataResp.status + ' body=' + (dataResp.bodyBase64 ? JSON.stringify(Buffer.from(dataResp.bodyBase64, 'base64').toString('utf8').slice(0, 90)) : '(empty)')) : 'NULL (worker had no fetch handler / no response)'));
+
+    // Optional worker-API probe. BB_PROBE_API is a JSON array of {path, args} (args optional) — a JSON
+    // array so style source / CSS (full of ; and newlines) survives intact. Drives a manager's RPC the way
+    // its own content/popup code does — chrome.runtime.sendMessage({data:{method:"invokeAPI", path, args}})
+    // — straight into the worker, and dumps each reply. Verifies a feature's BACKEND (e.g. Stylus's
+    // styles.getAll / usercss install) responds on our runtime, separate from popup DOM fidelity.
+    if (process.env.BB_PROBE_API) {
+        let probes = [];
+        try { probes = JSON.parse(process.env.BB_PROBE_API); } catch (e) { L('host', 'BB_PROBE_API parse failed: ' + e.message); }
+        if (!Array.isArray(probes)) { probes = []; }
+        for (const probe of probes) {
+            const apiPath = probe && probe.path;
+            if (!apiPath) { continue; }
+            const args = Array.isArray(probe.args) ? probe.args : [];
+            const msg = { data: { method: 'invokeAPI', path: apiPath, args }, TDM: 1 };
+            let reply;
+            try { reply = await deliverMessageToWorker(msg, { id: EXT_ID, url: BASE_URL + 'popup.html' }); }
+            catch (e) { reply = { __threw: e.message }; }
+            const s = JSON.stringify(reply);
+            L('host', 'API ' + apiPath + ' → ' + (s && s.length > 400 ? s.slice(0, 400) + '…' : s));
+        }
+    }
 
     // Auto-pick the popup if not given.
     if (!POPUP_HTML) { POPUP_HTML = manifest.action?.default_popup || manifest.browser_action?.default_popup || null; }
