@@ -48,6 +48,7 @@ jobs:
           xcodebuild build \
             -project BrownBear.xcodeproj -scheme BrownBear -configuration Debug \
             -destination 'generic/platform=iOS' \
+            -disableAutomaticPackageResolution -skipPackagePluginValidation -skipMacroValidation \
             -clonedSourcePackagesDirPath .spm-cache -derivedDataPath .derived-data \
             -quiet COMPILER_INDEX_STORE_ENABLE=NO CODE_SIGNING_ALLOWED=NO
           APP=$(find .derived-data -name "*.app" -maxdepth 7 -type d | head -1)
