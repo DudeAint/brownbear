@@ -3896,7 +3896,14 @@
       // Diagnostic: track this inbound message until it is answered or declined, so a popup/dashboard
       // request the worker RECEIVES but never answers (its onMessage stuck on `await isFullyInitialized`)
       // is named in the watchdog sweep — the smoking gun for "page waiting on the background worker".
-      var _mwhat = (message && (message.method || message.what || message.cmd || message.type)) || '?';
+      var _mwhat = (message && (message.method || message.what || message.cmd || message.type
+        || message.action || message.name || message.channel || message.id || message.cmdName)) || '?';
+      // If the message uses none of the common field names (Stylus/Bitwarden route opaque shapes), attach
+      // a compact snapshot so the watchdog/30s-timeout names a REAL message instead of "?". This is the
+      // smoking gun for which popup request the worker received but can't answer.
+      if (_mwhat === '?' && message && typeof message === 'object') {
+        try { _mwhat = '?' + JSON.stringify(message).slice(0, 120); } catch (e) { _mwhat = '?[unserializable]'; }
+      }
       var _clearTrack = (typeof __bbTrackPending === 'function') ? __bbTrackPending('onMessage:' + _mwhat) : null;
       function _doneTrack() { if (_clearTrack) { _clearTrack(); _clearTrack = null; } }
 
