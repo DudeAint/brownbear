@@ -1141,15 +1141,85 @@
       globalThis.EventTarget = BBEventTarget;
     }
 
-    // Minimal Clients / ServiceWorkerRegistration so the universal `self.clients.claim()` /
-    // `self.registration` in SW activate handlers don't throw. There is one headless context per
-    // extension and no controllable window clients on iOS, so matchAll resolves empty.
+    // Clients / ServiceWorkerRegistration. `self.clients.claim()` / `self.registration` in SW activate
+    // handlers must not throw. Unlike a real browser SW we have no controllable WINDOW clients (tabs),
+    // but an MV3 worker's OWN offscreen document IS a same-origin client it reaches via clients.matchAll()
+    // + client.postMessage — Stylus offloads usercss parsing (its nested Web Worker), blob URLs and
+    // prefers-color-scheme to its offscreen document this way. The registry lives on `globalThis`
+    // (`__bbSwHostClients`) because the SW-client-HOST bridge that fills it is declared at the file-IIFE
+    // top level, a different scope from this polyfill block. Each entry carries a `_post(data, transfer)`
+    // the WindowClient.postMessage forwards to, so matchAll needs no cross-scope helper.
+    globalThis.__bbSwHostClients = globalThis.__bbSwHostClients || [];
+    function __bbWrapWindowClient(c) {
+      return { id: c.id, url: c.url, type: 'window', frameType: 'none',
+               focused: false, visibilityState: 'hidden',
+               postMessage: function (data, transfer) { try { c._post(data, transfer); } catch (e) {} } };
+    }
     if (typeof globalThis.clients === 'undefined') {
       globalThis.clients = {
         claim: function () { return Promise.resolve(); },
-        matchAll: function () { return Promise.resolve([]); },
-        get: function () { return Promise.resolve(undefined); },
+        matchAll: function (options) {
+          var opts = options || {};
+          // We only have 'window' clients (offscreen docs); honor a type filter, ignore the rest.
+          var wantWindow = !opts.type || opts.type === 'window' || opts.type === 'all';
+          var out = wantWindow ? globalThis.__bbSwHostClients.map(__bbWrapWindowClient) : [];
+          return Promise.resolve(out);
+        },
+        get: function (id) {
+          var list = globalThis.__bbSwHostClients;
+          for (var i = 0; i < list.length; i++) {
+            if (list[i].id === id) { return Promise.resolve(__bbWrapWindowClient(list[i])); }
+          }
+          return Promise.resolve(undefined);
+        },
         openWindow: function () { return Promise.resolve(null); }
+      };
+    }
+
+    // Minimal MessageChannel / MessagePort. JavaScriptCore ships neither, but an MV3 worker that talks to
+    // its offscreen document over SW client messaging builds one (Stylus's initChannelPort does
+    // `new MessageChannel`, keeps port1, and transfers port2 to the client). port1<->port2 are linked
+    // locally (delivery is async, like the platform); a transferred port's traffic is re-routed to the
+    // real client by the SW-client-host bridge (client.postMessage / the bridged-port relay below).
+    if (typeof globalThis.MessageChannel === 'undefined') {
+      var __bbMakeMsgPort = function () {
+        var listeners = [];
+        var port = {
+          _peer: null, _started: false, _queue: [], onmessage: null, onmessageerror: null,
+          postMessage: function (data, transfer) {
+            var peer = this._peer;
+            if (!peer) { return; }
+            var ev = { data: data, ports: (transfer && transfer.slice) ? transfer.slice() : [],
+                       type: 'message', origin: '', lastEventId: '', source: null };
+            Promise.resolve().then(function () { if (peer._started) { peer._deliver(ev); } else { peer._queue.push(ev); } });
+          },
+          start: function () {
+            if (this._started) { return; }
+            this._started = true;
+            var q = this._queue; this._queue = [];
+            for (var i = 0; i < q.length; i++) { this._deliver(q[i]); }
+          },
+          close: function () { this._peer = null; },
+          addEventListener: function (t, fn) { if (t === 'message' && typeof fn === 'function') { listeners.push(fn); this.start(); } },
+          removeEventListener: function (t, fn) { var i = listeners.indexOf(fn); if (i >= 0) { listeners.splice(i, 1); } },
+          _deliver: function (ev) {
+            if (typeof this.onmessage === 'function') { try { this.onmessage(ev); } catch (e) {} }
+            for (var i = 0; i < listeners.length; i++) { try { listeners[i](ev); } catch (e) {} }
+          }
+        };
+        // Setting onmessage implicitly starts the port (spec behavior).
+        var _onmsg = null;
+        Object.defineProperty(port, 'onmessage', {
+          get: function () { return _onmsg; },
+          set: function (fn) { _onmsg = fn; if (typeof fn === 'function') { this.start(); } },
+          configurable: true, enumerable: true
+        });
+        return port;
+      };
+      globalThis.MessageChannel = function MessageChannel() {
+        var a = __bbMakeMsgPort(), b = __bbMakeMsgPort();
+        a._peer = b; b._peer = a;
+        this.port1 = a; this.port2 = b;
       };
     }
     if (typeof globalThis.registration === 'undefined') {
@@ -2228,6 +2298,101 @@
       } else if (msg.__bbSwPort) {
         deliverToSwPort(msg.data);
       }
+    });
+  }
+
+  // SW-client HOST bridge (worker side). The REVERSE of bindServiceWorkerClientPort: here the worker is
+  // the service worker reaching one of its CLIENTS — an offscreen document. The worker can't open a port
+  // toward a page (the hub is client→worker only), so the offscreen page opens a "__bb_swclient_host"
+  // port to us on load and announces its url; we register it as a `clients` entry and push
+  // client.postMessage payloads back over that (bidirectional) port. Stylus runs ALL of its offscreen
+  // work over this — usercss parsing (a NESTED Web Worker whose port is transferred back to us), blob
+  // URLs and prefers-color-scheme — so the relay supports MessagePort transfer, recursively.
+  var __bbSwHostClientSeq = 0;
+
+  // A port-transfer-capable relay over one host port. Channel ids are 'w<n>' (allocated here) vs the
+  // page side's 'c<n>', so the two ends never collide on the shared channel namespace.
+  function makeHostPortBridge(hostPort) {
+    var channels = Object.create(null);   // chId -> { deliver: function (data, ports) }
+    var seq = 0;
+    function alloc() { return 'w' + (++seq); }
+
+    // LOCAL ports transferred OUT: relay each one's outgoing traffic; return their channel ids.
+    function registerTransfers(portList) {
+      var ids = [];
+      if (!portList || !portList.length) { return ids; }
+      for (var i = 0; i < portList.length; i++) {
+        (function (p) {
+          if (!p) { return; }
+          var ch = alloc();
+          // Whatever p's peer posts arrives at p — relay it across the host port.
+          p.onmessage = function (e) {
+            try { hostPort.postMessage({ k: 'p', ch: ch, data: e && e.data, ports: registerTransfers(e && e.ports) }); } catch (x) {}
+          };
+          try { if (p.start) { p.start(); } } catch (x) {}
+          // Inbound frames for this channel go INTO p (so p's local peer sees them).
+          channels[ch] = { deliver: function (data, ports) { try { p.postMessage(data, reconstruct(ports)); } catch (x) {} } };
+          ids.push(ch);
+        })(portList[i]);
+      }
+      return ids;
+    }
+
+    // Ports transferred INTO us become bridged MessagePorts standing in for the remote real port.
+    function reconstruct(ids) {
+      var out = [];
+      if (!ids || !ids.length) { return out; }
+      for (var i = 0; i < ids.length; i++) { out.push(makeBridgedPort(ids[i])); }
+      return out;
+    }
+    function makeBridgedPort(ch) {
+      var listeners = [];
+      var bp = {
+        onmessage: null, onmessageerror: null, onerror: null,
+        postMessage: function (data, transfer) {
+          try { hostPort.postMessage({ k: 'p', ch: ch, data: data, ports: registerTransfers(transfer) }); } catch (x) {}
+        },
+        start: function () {}, close: function () {},
+        addEventListener: function (t, fn) { if (t === 'message' && typeof fn === 'function') { listeners.push(fn); } },
+        removeEventListener: function (t, fn) { var i = listeners.indexOf(fn); if (i >= 0) { listeners.splice(i, 1); } }
+      };
+      channels[ch] = { deliver: function (data, ports) {
+        var ev = { data: data, ports: reconstruct(ports), type: 'message', origin: '', lastEventId: '', source: null };
+        if (typeof bp.onmessage === 'function') { try { bp.onmessage(ev); } catch (x) {} }
+        for (var i = 0; i < listeners.length; i++) { try { listeners[i](ev); } catch (x) {} }
+      } };
+      return bp;
+    }
+    function onFrame(msg) {
+      if (!msg || msg.k !== 'p') { return; }
+      var c = channels[msg.ch];
+      if (c) { c.deliver(msg.data, msg.ports); }
+    }
+    return { registerTransfers: registerTransfers, onFrame: onFrame };
+  }
+
+  function bindServiceWorkerClientHostPort(hostPort) {
+    var client = null;
+    var bridge = makeHostPortBridge(hostPort);
+    hostPort.onMessage.addListener(function (msg) {
+      if (!msg) { return; }
+      if (msg.k === 'init') {
+        if (client) { return; }   // one announce per host port
+        client = { id: 'oc' + (++__bbSwHostClientSeq), url: msg.url || '', kind: msg.kind || '',
+                   _post: function (data, transfer) {
+                     hostPort.postMessage({ k: 'cmsg', data: (data === undefined ? null : data),
+                                            ports: bridge.registerTransfers(transfer) });
+                   } };
+        globalThis.__bbSwHostClients.push(client);
+      } else if (msg.k === 'p') {
+        bridge.onFrame(msg);
+      }
+    });
+    hostPort.onDisconnect.addListener(function () {
+      if (!client) { return; }
+      var list = globalThis.__bbSwHostClients;
+      var i = list.indexOf(client);
+      if (i >= 0) { list.splice(i, 1); }
     });
   }
 
@@ -4193,6 +4358,9 @@
       // A SW-client-messaging channel (navigator.serviceWorker.controller.postMessage) — bridge it to a
       // 'message' event with a MessagePort instead of firing the extension's chrome.runtime.onConnect.
       if (name === '__bb_swclient') { bindServiceWorkerClientPort(port); return; }
+      // The reverse channel: an offscreen document registering itself as a service-worker client so the
+      // worker can reach it via clients.matchAll() + client.postMessage (Stylus's offscreen pipeline).
+      if (name === '__bb_swclient_host') { bindServiceWorkerClientHostPort(port); return; }
       for (var i = 0; i < connectListeners.length; i++) {
         try { connectListeners[i](port); }
         catch (e) { __bb_log('error', 'runtime.onConnect listener threw: ' + (e && e.message ? e.message : e)); }

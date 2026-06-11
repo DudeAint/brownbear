@@ -79,6 +79,81 @@
         oncontrollerchange: null, onmessage: null, onmessageerror: null
       };
       _Object.defineProperty(W.navigator, "serviceWorker", { value: sw, configurable: true, enumerable: false });
+
+      // SW → CLIENT messaging (offscreen documents). The reverse of controller.postMessage above: an MV3
+      // service worker reaches its offscreen document via clients.matchAll() + client.postMessage(data,
+      // [port]); the document receives it on navigator.serviceWorker.onmessage with the transferred port
+      // as event.ports[0]. WKWebView exposes no real SW and the worker (a headless JSContext) can't open
+      // a port toward us — so the offscreen page opens a persistent "__bb_swclient_host" runtime port,
+      // announces its URL, and the worker pushes client.postMessage payloads back over it. Stylus runs ALL
+      // of its offscreen RPCs over this — usercss parsing (a NESTED Web Worker whose port is transferred
+      // back to the SW), blob URLs, prefers-color-scheme — so the relay supports MessagePort transfer,
+      // recursively. Only the offscreen document registers (popups talk to the worker the other way, via
+      // controller.postMessage). Channel ids are 'c<n>' here vs the worker's 'w<n>', so they never collide.
+      if (data && data.kind === "offscreen" && handler) {
+        try {
+          var fireSwMessage = function (ev) {
+            if (typeof sw.onmessage === "function") { try { sw.onmessage(ev); } catch (e) {} }
+            var ls = swListeners.message;
+            if (ls) { for (var i = 0; i < ls.length; i++) { try { ls[i](ev); } catch (e) {} } }
+          };
+          var hostPort = runtimeConnect({ name: "__bb_swclient_host" });
+          var channels = _Object.create(null);   // chId -> { deliver: function (data, ports) }
+          var chSeq = 0;
+          var registerTransfers = function (portList) {
+            var ids = [];
+            if (!portList || !portList.length) { return ids; }
+            for (var i = 0; i < portList.length; i++) {
+              (function (p) {
+                if (!p) { return; }
+                var ch = "c" + (++chSeq);
+                p.onmessage = function (e) {
+                  try { hostPort.postMessage({ k: "p", ch: ch, data: e && e.data, ports: registerTransfers(e && e.ports) }); } catch (x) {}
+                };
+                try { if (p.start) { p.start(); } } catch (x) {}
+                channels[ch] = { deliver: function (d, ports) { try { p.postMessage(d, reconstruct(ports)); } catch (x) {} } };
+                ids.push(ch);
+              })(portList[i]);
+            }
+            return ids;
+          };
+          var reconstruct = function (ids) {
+            var out = [];
+            if (!ids || !ids.length) { return out; }
+            for (var i = 0; i < ids.length; i++) { out.push(makeBridgedPort(ids[i])); }
+            return out;
+          };
+          var makeBridgedPort = function (ch) {
+            var listeners = [];
+            var bp = {
+              onmessage: null, onmessageerror: null, onerror: null,
+              postMessage: function (d, transfer) {
+                try { hostPort.postMessage({ k: "p", ch: ch, data: d, ports: registerTransfers(transfer) }); } catch (x) {}
+              },
+              start: function () {}, close: function () {},
+              addEventListener: function (t, fn) { if (t === "message" && typeof fn === "function") { listeners.push(fn); } },
+              removeEventListener: function (t, fn) { var i = listeners.indexOf(fn); if (i >= 0) { listeners.splice(i, 1); } }
+            };
+            channels[ch] = { deliver: function (d, ports) {
+              var ev = { data: d, ports: reconstruct(ports), type: "message", origin: "", lastEventId: "", source: null };
+              if (typeof bp.onmessage === "function") { try { bp.onmessage(ev); } catch (x) {} }
+              for (var i = 0; i < listeners.length; i++) { try { listeners[i](ev); } catch (x) {} }
+            } };
+            return bp;
+          };
+          hostPort.onMessage.addListener(function (msg) {
+            if (!msg) { return; }
+            if (msg.k === "cmsg") {
+              fireSwMessage({ data: (msg.data === undefined ? null : msg.data), ports: reconstruct(msg.ports),
+                              type: "message", origin: "", lastEventId: "", source: null });
+            } else if (msg.k === "p") {
+              var c = channels[msg.ch];
+              if (c) { c.deliver(msg.data, msg.ports); }
+            }
+          });
+          hostPort.postMessage({ k: "init", url: (W.location && W.location.href) || "", kind: "offscreen" });
+        } catch (e) { /* offscreen client registration is best-effort */ }
+      }
     } catch (e) { /* navigator may be a non-configurable native; nothing we can do, but don't break the page */ }
   })();
 
