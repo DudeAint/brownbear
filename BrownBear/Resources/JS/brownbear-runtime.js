@@ -760,12 +760,24 @@
     bridge("getScripts", { url: location.href, isSubframe: isSubframe }, null)
       .then(function (scripts) {
         if (!scripts || !scripts.length) { return; }
-        var starts = [], ends = [], idles = [];
+        var starts = [], ends = [], idles = [], allTokens = [];
         for (var i = 0; i < scripts.length; i += 1) {
           var s = scripts[i];
+          if (s.token) { allTokens.push(s.token); }
           if (s.runAt === "document-start") { starts.push(s); }
           else if (s.runAt === "document-idle") { idles.push(s); }
           else { ends.push(s); }
+        }
+        // WebKit's back-forward cache restores this document WITHOUT re-running document-start
+        // scripts: the userscripts above keep running, but native purged their session tokens when
+        // the tab navigated away — every later GM_* call then fails ("unrecognized or missing script
+        // token") on exactly the pages reached via back/forward. Re-register this document's tokens
+        // on every persisted pageshow (native revives them from its own tombstones).
+        if (allTokens.length) {
+          W.addEventListener("pageshow", function (ev) {
+            if (!ev || !ev.persisted) { return; }
+            bridge("revalidateSessions", { tokens: allTokens }, null).catch(function () {});
+          });
         }
         if (starts.length) { runAll(starts); }
         if (ends.length) { whenDOMReady(function () { runAll(ends); }); }
