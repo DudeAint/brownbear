@@ -1249,6 +1249,12 @@
       USP.prototype.keys = function () { return this._list.map(function (p) { return p[0]; }); };
       USP.prototype.values = function () { return this._list.map(function (p) { return p[1]; }); };
       USP.prototype.entries = function () { return this._list.map(function (p) { return p.slice(); }); };
+      // The default URLSearchParams iterator yields [key, value] pairs (same as entries()). Without it
+      // `[...new URL(u).searchParams]` throws "Spread syntax requires …[Symbol.iterator] to be a
+      // function" — ClearURLs' countFields does exactly that and died at request time on every URL.
+      if (typeof Symbol === 'function' && Symbol.iterator) {
+        USP.prototype[Symbol.iterator] = function () { return this.entries()[Symbol.iterator](); };
+      }
       USP.prototype.toString = function () {
         return this._list.map(function (p) { return encodeURIComponent(p[0]) + '=' + encodeURIComponent(p[1]); }).join('&');
       };
