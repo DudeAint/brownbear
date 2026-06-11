@@ -31,9 +31,15 @@ extension BrownBearBrowserViewController {
         Task { @MainActor in
             let store = BrownBearServices.shared.webExtensionStore
             var items: [ExtensionListItem] = []
+            let actionState = BrownBearServices.shared.webExtensionActionState
             for ext in await store.enabledExtensions() {
                 // Only surface extensions with a browser action — those are the ones a toolbar tap drives.
-                guard ext.manifest?.action != nil else { continue }
+                guard let action = ext.manifest?.action else { continue }
+                // Seed the action state now so the FIRST tap works. Without this the state isn't
+                // registered until the "•••" menu builds it, and webExtTriggerAction's isEnabled/popup
+                // lookup no-ops — the reported "first tap does nothing until you open it from the menu".
+                actionState.registerManifestAction(extensionID: ext.id, action: action,
+                                                   fallbackIcons: ext.manifest?.icons ?? [:])
                 var icon: UIImage?
                 if let path = WebExtensionIconResolver.bestIconPath(ext.manifest),
                    let data = await store.file(extensionID: ext.id, path: path) {

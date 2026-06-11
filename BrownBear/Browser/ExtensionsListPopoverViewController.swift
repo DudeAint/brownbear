@@ -24,6 +24,8 @@ final class ExtensionsListPopoverViewController: UIViewController {
     private let items: [ExtensionListItem]
     private let onSelect: (String) -> Void
     private static let rowHeight: CGFloat = 52
+    /// Cap the popover height; past this the rows scroll inside it (the title stays pinned at the top).
+    private static let maxHeight: CGFloat = 360
 
     init(items: [ExtensionListItem], onSelect: @escaping (String) -> Void) {
         self.items = items
@@ -54,33 +56,51 @@ final class ExtensionsListPopoverViewController: UIViewController {
     }
 
     private func preferredHeight() -> CGFloat {
-        let header: CGFloat = 38
-        let rows = CGFloat(items.count) * Self.rowHeight
-        return header + rows + 18   // header + rows + bottom padding
+        let header: CGFloat = 40   // title + its spacing
+        let content = header + CGFloat(items.count) * Self.rowHeight + 14
+        return min(content, Self.maxHeight)   // taller than this → the rows scroll
     }
 
     // MARK: - Layout
 
     private func buildLayout() {
+        // The title is pinned at the top (never scrolls off); the rows live in a scroll view below it so
+        // a long extension list scrolls instead of pushing the title off the popover.
         let title = UILabel()
         title.text = "Extensions"
         title.font = .systemFont(ofSize: 13, weight: .semibold)
         title.textColor = BrownBearTheme.Palette.textSecondary
+        title.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(title)
 
-        let rows: [UIView] = [title] + items.map(makeRow)
-        let stack = UIStackView(arrangedSubviews: rows)
+        let scroll = UIScrollView()
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.alwaysBounceVertical = false
+        scroll.showsVerticalScrollIndicator = true
+        view.addSubview(scroll)
+
+        let stack = UIStackView(arrangedSubviews: items.map(makeRow))
         stack.axis = .vertical
         stack.spacing = 2
-        stack.setCustomSpacing(8, after: title)
         stack.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(stack)
+        scroll.addSubview(stack)
 
         let guide = view.layoutMarginsGuide
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: guide.topAnchor, constant: 14),
-            stack.leadingAnchor.constraint(equalTo: guide.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: guide.trailingAnchor),
-            stack.bottomAnchor.constraint(lessThanOrEqualTo: guide.bottomAnchor, constant: -14)
+            title.topAnchor.constraint(equalTo: guide.topAnchor, constant: 12),
+            title.leadingAnchor.constraint(equalTo: guide.leadingAnchor),
+            title.trailingAnchor.constraint(equalTo: guide.trailingAnchor),
+
+            scroll.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 8),
+            scroll.leadingAnchor.constraint(equalTo: guide.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: guide.trailingAnchor),
+            scroll.bottomAnchor.constraint(equalTo: guide.bottomAnchor, constant: -10),
+
+            stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
+            stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor),
+            stack.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor)
         ])
     }
 

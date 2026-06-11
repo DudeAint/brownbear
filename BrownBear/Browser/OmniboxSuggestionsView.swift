@@ -35,7 +35,7 @@ final class OmniboxSuggestionsView: UIView {
     private static let rowHeight: CGFloat = 58
     /// Cap the card to a handful of rows; when there are more results, a compact footer row links to the
     /// full History page instead of the card growing unbounded.
-    private static let maxRows = 6
+    private static let maxRows = 5
     private static let seeAllHeight: CGFloat = 44
     private static let cardRadius = BrownBearTheme.Metrics.cellCornerRadius
 
