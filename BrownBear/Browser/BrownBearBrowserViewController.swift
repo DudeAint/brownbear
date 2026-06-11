@@ -511,7 +511,8 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
         }), animated: true)
     }
 
-    private func presentHistory() {
+    // Not `private`: the omnibox "see all" suggestions footer (in +Omnibox.swift) opens History too.
+    func presentHistory() {
         present(HistoryView.makeHostingController(onOpen: { [weak self] url in
             self?.openBookmark(url)
         }), animated: true)

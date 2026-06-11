@@ -14,8 +14,10 @@ import UIKit
 @MainActor
 protocol OmniboxSuggestionsViewDelegate: AnyObject {
     func suggestionsView(_ view: OmniboxSuggestionsView, didSelect suggestion: OmniboxSuggestion)
-    /// The user tapped the exposed page area below/around the card — dismiss the keyboard.
+    /// The user tapped or began scrolling the exposed page area below/around the card — dismiss the keyboard.
     func suggestionsViewDidRequestDismiss(_ view: OmniboxSuggestionsView)
+    /// The user tapped the compact "see all" footer row — open the full History page.
+    func suggestionsViewDidRequestShowHistory(_ view: OmniboxSuggestionsView)
 }
 
 final class OmniboxSuggestionsView: UIView {
@@ -31,6 +33,10 @@ final class OmniboxSuggestionsView: UIView {
     private var suggestions: [OmniboxSuggestion] = []
     private static let cellID = "OmniboxSuggestionCell"
     private static let rowHeight: CGFloat = 58
+    /// Cap the card to a handful of rows; when there are more results, a compact footer row links to the
+    /// full History page instead of the card growing unbounded.
+    private static let maxRows = 6
+    private static let seeAllHeight: CGFloat = 44
     private static let cardRadius = BrownBearTheme.Metrics.cellCornerRadius
 
     override init(frame: CGRect) {
@@ -95,6 +101,13 @@ final class OmniboxSuggestionsView: UIView {
         tap.delegate = self
         addGestureRecognizer(tap)
 
+        // Dragging/scrolling on the exposed page area also reads as "I'm done searching" → dismiss the
+        // keyboard so the user can get back to the page (it was just covered by the editing overlay).
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handleBackgroundPan(_:)))
+        pan.cancelsTouchesInView = false
+        pan.delegate = self
+        addGestureRecognizer(pan)
+
         applyChromeColors()
     }
 
@@ -129,7 +142,9 @@ final class OmniboxSuggestionsView: UIView {
         }
         let wasHidden = isHidden
         self.suggestions = suggestions
-        cardHeight.constant = CGFloat(suggestions.count) * Self.rowHeight
+        // Height = the (capped) suggestion rows, plus the compact "see all" footer when there are more.
+        cardHeight.constant = CGFloat(min(suggestions.count, Self.maxRows)) * Self.rowHeight
+            + (suggestions.count > Self.maxRows ? Self.seeAllHeight : 0)
         if wasHidden {
             tableView.reloadData()
             tableView.setContentOffset(.zero, animated: false)
@@ -193,6 +208,11 @@ final class OmniboxSuggestionsView: UIView {
     @objc private func handleBackgroundTap() {
         delegate?.suggestionsViewDidRequestDismiss(self)
     }
+
+    @objc private func handleBackgroundPan(_ recognizer: UIPanGestureRecognizer) {
+        // The first hint of a scroll on the exposed page is enough — drop the keyboard on .began.
+        if recognizer.state == .began { delegate?.suggestionsViewDidRequestDismiss(self) }
+    }
 }
 
 extension OmniboxSuggestionsView: UIGestureRecognizerDelegate {
@@ -204,25 +224,49 @@ extension OmniboxSuggestionsView: UIGestureRecognizerDelegate {
 
 extension OmniboxSuggestionsView: UITableViewDataSource, UITableViewDelegate {
 
+    /// Whether there are more results than fit, so the last row is the "see all" footer.
+    private var showSeeAll: Bool { suggestions.count > Self.maxRows }
+    /// How many suggestion rows are actually shown (the rest spill into "see all").
+    private var shownCount: Int { min(suggestions.count, Self.maxRows) }
+    private func isSeeAllRow(_ indexPath: IndexPath) -> Bool { showSeeAll && indexPath.row == shownCount }
+
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        suggestions.count
+        shownCount + (showSeeAll ? 1 : 0)
+    }
+
+    func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
+        isSeeAllRow(indexPath) ? Self.seeAllHeight : Self.rowHeight
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: Self.cellID, for: indexPath)
-        let suggestion = suggestions[indexPath.row]
-
-        var config = UIListContentConfiguration.subtitleCell()
-        config.text = suggestion.title
-        config.secondaryText = suggestion.subtitle
-        config.image = UIImage(systemName: suggestion.iconName)
-        config.imageProperties.tintColor = BrownBearTheme.Palette.textSecondary
-        config.textProperties.color = BrownBearTheme.Palette.textPrimary
-        config.textProperties.numberOfLines = 1
-        config.secondaryTextProperties.color = BrownBearTheme.Palette.textSecondary
-        config.secondaryTextProperties.numberOfLines = 1
-        cell.contentConfiguration = config
         cell.backgroundColor = .clear
+
+        if isSeeAllRow(indexPath) {
+            // A small, unintrusive footer linking to the full History page.
+            var config = UIListContentConfiguration.cell()
+            config.text = "Show all in History"
+            config.image = UIImage(systemName: "clock.arrow.circlepath")
+            config.textProperties.font = .systemFont(ofSize: 13, weight: .semibold)
+            config.textProperties.color = BrownBearTheme.Palette.textSecondary
+            config.imageProperties.tintColor = BrownBearTheme.Palette.textSecondary
+            config.imageToTextPadding = 10
+            cell.contentConfiguration = config
+            cell.accessoryType = .disclosureIndicator
+        } else {
+            let suggestion = suggestions[indexPath.row]
+            var config = UIListContentConfiguration.subtitleCell()
+            config.text = suggestion.title
+            config.secondaryText = suggestion.subtitle
+            config.image = UIImage(systemName: suggestion.iconName)
+            config.imageProperties.tintColor = BrownBearTheme.Palette.textSecondary
+            config.textProperties.color = BrownBearTheme.Palette.textPrimary
+            config.textProperties.numberOfLines = 1
+            config.secondaryTextProperties.color = BrownBearTheme.Palette.textSecondary
+            config.secondaryTextProperties.numberOfLines = 1
+            cell.contentConfiguration = config
+            cell.accessoryType = .none
+        }
 
         let selected = UIView()
         selected.backgroundColor = BrownBearTheme.Palette.accent.withAlphaComponent(0.12)
@@ -232,6 +276,10 @@ extension OmniboxSuggestionsView: UITableViewDataSource, UITableViewDelegate {
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: false)
-        delegate?.suggestionsView(self, didSelect: suggestions[indexPath.row])
+        if isSeeAllRow(indexPath) {
+            delegate?.suggestionsViewDidRequestShowHistory(self)
+        } else {
+            delegate?.suggestionsView(self, didSelect: suggestions[indexPath.row])
+        }
     }
 }
