@@ -321,6 +321,12 @@ extension BrownBearBrowserViewController: TabManagerDelegate {
 // MARK: - TabDelegate
 
 extension BrownBearBrowserViewController: TabDelegate {
+    /// Reloading the New Tab page must regenerate it (it's an about:blank data document) rather than
+    /// reload an empty document. Covers the reload button and pull-to-refresh, which both call tab.reload().
+    func tabNeedsNewTabPage(_ tab: Tab) {
+        loadNewTabPage(in: tab)
+    }
+
     func tab(_ tab: Tab, didChange state: NavigationState) {
         // chrome.tabs.onUpdated fires for EVERY tab (Chrome parity), so emit before the active-tab
         // guard. The emitter diffs against the last record and only fires on a real change.

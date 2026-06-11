@@ -39,6 +39,10 @@ struct NavigationState: Equatable {
 protocol TabDelegate: AnyObject {
     /// The tab's observable navigation state changed (progress, title, url, secure, nav flags).
     func tab(_ tab: Tab, didChange state: NavigationState)
+    /// The tab is showing the New Tab page and was asked to reload — the page is a `loadHTMLString`
+    /// data document (about:blank) with nothing to reload, so the browser must regenerate it instead of
+    /// reloading an empty document (which would blank the screen).
+    func tabNeedsNewTabPage(_ tab: Tab)
 }
 
 @MainActor
@@ -125,8 +129,22 @@ final class Tab {
         load(pendingURL)
     }
 
+    /// True when this tab is showing the in-app New Tab page: it's loaded via `loadHTMLString(baseURL:
+    /// nil)` so `webView.url` reports about:blank, and there's no real navigation pending.
+    var isShowingNewTabPage: Bool {
+        pendingURL == nil && (webView.url == nil || webView.url?.absoluteString == "about:blank")
+    }
+
     func reload() {
-        if webView.url == nil, let pendingURL { load(pendingURL) } else { webView.reload() }
+        if isShowingNewTabPage {
+            // Nothing to reload in an about:blank data document — ask the browser to rebuild the page,
+            // otherwise reloading blanks the screen.
+            delegate?.tabNeedsNewTabPage(self)
+        } else if webView.url == nil, let pendingURL {
+            load(pendingURL)
+        } else {
+            webView.reload()
+        }
     }
 
     func stopLoading() { webView.stopLoading() }
