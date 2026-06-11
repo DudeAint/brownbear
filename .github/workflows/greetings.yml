@@ -19,7 +19,7 @@ jobs:
     # It must never gate or fail a pull request.
     continue-on-error: true
     steps:
-      - uses: actions/first-interaction@v1
+      - uses: actions/first-interaction@v3
         continue-on-error: true
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
