@@ -243,6 +243,12 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
 
                 let messageJSON = jsonString(message)
                 let senderJSON = jsonString(sender)
+                // A short label naming THIS message's intent — managers tag their RPC with `method`
+                // (Tampermonkey: loadTree/saveScript/…), others with what/cmd/type/action. Without it the
+                // diagnostic only says "dispatchMessage", so a request that's RECEIVED but answered with an
+                // empty/null reply (Tampermonkey saving a script that never appears) can't be told apart
+                // from one that worked. Surface it so the device log pins the exact failing call.
+                let msgLabel = Self.messageLabel(message)
                 if let dispatcher = context.objectForKeyedSubscript("__bbBg"),
                    !dispatcher.isUndefined {
                     dispatcher.invokeMethod(method, withArguments: [messageJSON, senderJSON, responseId])
@@ -252,12 +258,12 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
                     // synchronously; still parked means a listener returned true (will sendResponse later)
                     // or NO listener ran at all. Name which, so the device log pins where the bg stalls.
                     if pendingResponses[responseId] == nil {
-                        logSink(makeLog(.debug, "[bb-bg] \(method) answered synchronously"))
+                        logSink(makeLog(.debug, "[bb-bg] \(method)\(msgLabel) answered synchronously"))
                     } else {
-                        logSink(makeLog(.debug, "[bb-bg] \(method) deferred — a listener will sendResponse, or none ran; awaiting reply"))
+                        logSink(makeLog(.debug, "[bb-bg] \(method)\(msgLabel) deferred — a listener will sendResponse, or none ran; awaiting reply"))
                     }
                 } else {
-                    logSink(makeLog(.warn, "[bb-bg] \(method): no __bbBg dispatcher — background never finished init "
+                    logSink(makeLog(.warn, "[bb-bg] \(method)\(msgLabel): no __bbBg dispatcher — background never finished init "
                         + "(stalled before registering onMessage). The popup/dashboard will hang/blank waiting on it."))
                     resolveResponse(responseId, payload: nil)
                     return
@@ -267,7 +273,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
                 queue.asyncAfter(deadline: .now() + 30) { [weak self] in
                     guard let self else { return }
                     if self.pendingResponses[responseId] != nil {
-                        self.logSink(self.makeLog(.warn, "[bb-bg] \(method) NEVER responded within 30s — the onMessage "
+                        self.logSink(self.makeLog(.warn, "[bb-bg] \(method)\(msgLabel) NEVER responded within 30s — the onMessage "
                             + "handler stalled (its async work, e.g. an IndexedDB read, never completed). This is the "
                             + "root of the blank popup / 'unable to load tree'."))
                     }
@@ -275,6 +281,20 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
                 }
             }
         }
+    }
+
+    /// A short `(intent)` tag for a runtime message, for the dispatch diagnostic — managers carry their
+    /// RPC name under `method` (Tampermonkey: loadTree/saveScript), others under what/cmd/type/action.
+    /// Returns `""` when none is present (a bare data message) so the log line stays clean. Capped so a
+    /// hostile/huge field can't bloat the log.
+    static func messageLabel(_ message: Any) -> String {
+        guard let dict = message as? [String: Any] else { return "" }
+        for key in ["method", "what", "cmd", "type", "action"] {
+            if let value = dict[key] as? String, !value.isEmpty {
+                return "(\(value.prefix(48)))"
+            }
+        }
+        return ""
     }
 
     /// Dispatch a synthetic `webRequest.onBeforeRequest` for a main-frame `.user.js` URL into this worker,

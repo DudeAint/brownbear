@@ -3588,7 +3588,7 @@
       // Diagnostic: track this inbound message until it is answered or declined, so a popup/dashboard
       // request the worker RECEIVES but never answers (its onMessage stuck on `await isFullyInitialized`)
       // is named in the watchdog sweep — the smoking gun for "page waiting on the background worker".
-      var _mwhat = (message && (message.what || message.cmd || message.type)) || '?';
+      var _mwhat = (message && (message.method || message.what || message.cmd || message.type)) || '?';
       var _clearTrack = (typeof __bbTrackPending === 'function') ? __bbTrackPending('onMessage:' + _mwhat) : null;
       function _doneTrack() { if (_clearTrack) { _clearTrack(); _clearTrack = null; } }
 
