@@ -264,6 +264,10 @@ async function bootPopup(htmlRel) {
         get(t, p) {
             if (p === 'write' || p === 'writeln') { return (...args) => { const html = args.join(''); const re = /<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*>/gi; let m; while ((m = re.exec(html)) !== null) { writeQueue.push(m[1]); } }; }
             if (typeof p === 'symbol') { return docStub[p]; }
+            if (p === 'styleSheets' || p === 'adoptedStyleSheets' || p === 'children' || p === 'childNodes' || p === 'forms' || p === 'images' || p === 'links' || p === 'scripts' || p === 'all') { return []; }
+            if (p === 'readyState') { return 'complete'; }
+            if (p === 'hidden') { return false; }
+            if (p === 'visibilityState') { return 'visible'; }
             return docStub[p];
         }, set() { return true; }, has() { return true; }, apply() { return makeStub('document()'); }, construct() { return makeStub('new document'); }
     });
