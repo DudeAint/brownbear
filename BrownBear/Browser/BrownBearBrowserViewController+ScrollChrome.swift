@@ -18,9 +18,29 @@ extension BrownBearBrowserViewController: UIScrollViewDelegate {
     /// How many points of per-frame scroll movement to ignore as noise before reacting to a direction.
     private static var scrollDeadzone: CGFloat { 0.5 }
 
+    /// Minimum deliberate top-overscroll (points) during a drag for a pull-to-refresh to count. Filters
+    /// momentum bounces; a real downward pull goes well past this before UIRefreshControl even fires.
+    private static var pullRefreshMinOverscroll: CGFloat { 40 }
+
+    /// A new drag starts — reset the pull-to-refresh overscroll tracker for this gesture.
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        guard scrollView === tabManager.activeTab?.webView.scrollView else { return }
+        pullMaxOverscroll = 0
+    }
+
+    /// True only when the just-ended drag pulled deliberately past the top — the pull-to-refresh gate.
+    func tabShouldAcceptPullToRefresh(_ tab: Tab) -> Bool {
+        pullMaxOverscroll >= Self.pullRefreshMinOverscroll
+    }
+
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         // Only the active tab's web view drives the chrome; ignore any stale delegate callbacks.
         guard scrollView === tabManager.activeTab?.webView.scrollView else { return }
+        // Track the drag's deepest top-overscroll so pull-to-refresh fires only on a deliberate pull.
+        if scrollView.isDragging {
+            let overscroll = -scrollView.adjustedContentInset.top - scrollView.contentOffset.y
+            if overscroll > pullMaxOverscroll { pullMaxOverscroll = overscroll }
+        }
         // Don't fight the keyboard-lift while editing the bottom bar.
         guard !keyboardVisible else { return }
 

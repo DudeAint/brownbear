@@ -43,6 +43,9 @@ protocol TabDelegate: AnyObject {
     /// data document (about:blank) with nothing to reload, so the browser must regenerate it instead of
     /// reloading an empty document (which would blank the screen).
     func tabNeedsNewTabPage(_ tab: Tab)
+    /// The pull-to-refresh control fired — accept it only if the user made a DELIBERATE downward pull at
+    /// the top (the browser tracks the drag's overscroll), not a momentary bounce / momentum overshoot.
+    func tabShouldAcceptPullToRefresh(_ tab: Tab) -> Bool
 }
 
 @MainActor
@@ -101,7 +104,17 @@ final class Tab {
         // Pull-to-refresh on web content: reload on overscroll; ended when the load settles
         // (see recomputeState). Tab isn't an NSObject, so use a UIAction rather than target-action.
         self.webView.scrollView.refreshControl = refreshControl
-        refreshControl.addAction(UIAction { [weak self] _ in self?.reload() }, for: .valueChanged)
+        refreshControl.addAction(UIAction { [weak self] _ in
+            guard let self else { return }
+            // UIRefreshControl fires on release-past-threshold, but a momentum overshoot at the top can
+            // also trip it. Only reload on a deliberate pull (the delegate vouches for the drag); otherwise
+            // cancel the spinner so a "scroll up, then back down" gesture doesn't refresh.
+            if self.delegate?.tabShouldAcceptPullToRefresh(self) ?? true {
+                self.reload()
+            } else {
+                self.refreshControl.endRefreshing()
+            }
+        }, for: .valueChanged)
         installObservations()
     }
 
