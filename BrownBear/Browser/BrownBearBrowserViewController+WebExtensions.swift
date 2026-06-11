@@ -223,12 +223,18 @@ extension BrownBearBrowserViewController: WebExtensionBridgeHost {
                 self?.openExtensionPageTab(ext: ext, kind: .options, path: path, activate: true)
             }))
         }
-        // --- webRequest managers (Violentmonkey): dispatch the navigation into the chosen worker's listener.
+        // --- webRequest / webNavigation managers (Violentmonkey, Tampermonkey): hand the navigation to
+        // the chosen worker through both detection channels, with the REAL active tab id (a manager opens
+        // its confirm page in that tab, and Tampermonkey's detector early-returns on tabId <= 0).
         for id in await runtime.userScriptWebRequestManagerIDs(url: url) where !seen.contains(id) {
             guard let ext = byID[id] else { continue }
             seen.insert(id)
-            targets.append(ScriptInstallTarget(name: ext.displayName, route: {
-                Task { @MainActor in _ = await runtime.dispatchUserScript(extensionID: id, url: url) }
+            targets.append(ScriptInstallTarget(name: ext.displayName, route: { [weak self] in
+                var tabId = -1
+                if let self, let activeID = self.tabManager.activeTabID {
+                    tabId = self.webExtTabRegistry.id(for: activeID)
+                }
+                Task { @MainActor in _ = await runtime.dispatchUserScript(extensionID: id, url: url, tabId: tabId) }
             }))
         }
         return targets

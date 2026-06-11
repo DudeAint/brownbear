@@ -301,17 +301,36 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
     /// so a webRequest-based userscript manager (Violentmonkey) runs its OWN install/confirm flow (fetch +
     /// cache + open its confirm page). Returns whether a matching onBeforeRequest listener was invoked —
     /// the webRequest analog of the declarativeNetRequest hand-off used for MV3 managers.
-    func dispatchUserScriptWebRequest(url: String) async -> Bool {
+    func dispatchUserScriptWebRequest(url: String, tabId: Int) async -> Bool {
         await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             queue.async { [self] in
                 guard isAlive, let context else { continuation.resume(returning: false); return }
                 context.setObject(url, forKeyedSubscript: "__bbPendingUserScriptURL" as NSString)
+                context.setObject(tabId, forKeyedSubscript: "__bbPendingUserScriptTabId" as NSString)
                 let result = context.evaluateScript(
                     "(typeof __bbDispatchWebRequestUserScript === 'function')"
-                    + " ? !!__bbDispatchWebRequestUserScript(__bbPendingUserScriptURL, -1) : false")
+                    + " ? !!__bbDispatchWebRequestUserScript(__bbPendingUserScriptURL, __bbPendingUserScriptTabId) : false")
                 continuation.resume(returning: result?.toBool() ?? false)
             }
         }
+    }
+
+    /// Fire a synthetic `webNavigation` sequence (onBeforeNavigate → onCommitted → onCompleted) for a
+    /// `.user.js` main-frame navigation into THIS worker, with a REAL tab id. The webRequest twin above
+    /// covers managers that install from `onBeforeRequest` (Violentmonkey); this covers managers that
+    /// detect the install from `webNavigation` instead — notably Tampermonkey, whose default
+    /// `scriptUrlDetection: "auto"` ignores the webRequest path and watches `onCommitted`. Generic: any
+    /// manager listening on either channel runs its own confirm/install flow. No-op (early-returns inside
+    /// the manager) if its detector can't resolve the tab, so it never makes things worse.
+    func dispatchUserScriptWebNavigation(url: String, tabId: Int) {
+        let base: [String: Any] = ["tabId": tabId, "url": url, "frameId": 0,
+                                   "parentFrameId": -1, "processId": 0, "timeStamp": 0]
+        var committed = base
+        committed["transitionType"] = "link"
+        committed["transitionQualifiers"] = [String]()
+        dispatchExtEvent(name: "webNavigation.onBeforeNavigate", argsJSON: jsonString([base]))
+        dispatchExtEvent(name: "webNavigation.onCommitted", argsJSON: jsonString([committed]))
+        dispatchExtEvent(name: "webNavigation.onCompleted", argsJSON: jsonString([base]))
     }
 
     /// Detection-only: does this worker have a main-frame `webRequest.onBeforeRequest` listener whose
