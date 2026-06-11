@@ -38,6 +38,9 @@ function recordError(phase, e) {
 }
 process.on('unhandledRejection', (e) => { unhandled.push(String((e && e.message) || e)); });
 process.on('uncaughtException', (e) => { recordError('uncaught', e); });
+// Capture the harness's own process hooks before we hide `process` from the extension (see runEntries).
+const _exit = process.exit.bind(process);
+const _stdoutWrite = process.stdout.write.bind(process.stdout);
 
 function readExt(p) { try { return readFileSync(path.join(EXT_DIR, p), 'utf8'); } catch { return null; } }
 
@@ -300,12 +303,23 @@ try {
     globalThis.browser = wrapped;
 } catch (e) { /* keep real if proxy fails */ }
 
-// importScripts for classic SWs that pull in sibling files.
+// importScripts for classic SWs that pull in sibling files. An absolute chrome-/moz-extension URL
+// (often from getURL()) reduces to its package path; a bare relative path resolves against the SW's
+// own directory (importScripts is relative to the importing worker's URL, like Chrome).
+function resolveScriptPath(p, baseDir) {
+    p = String(p);
+    if (/^(?:chrome|moz)-extension:\/\//i.test(p)) { return p.replace(/^(?:chrome|moz)-extension:\/\/[^/]+\//i, ''); }
+    if (/^[a-z]+:\/\//i.test(p)) { return null; }   // http(s)/data — can't import in this harness
+    if (p.startsWith('/')) { return p.slice(1); }
+    return (baseDir && baseDir !== '.') ? baseDir + '/' + p : p;
+}
 globalThis.importScripts = function (...paths) {
     for (const p of paths) {
-        const s = readExt(p);
-        if (s == null) { recordError('importScripts', new Error('importScripts: file not found: ' + p)); continue; }
-        try { vm.runInThisContext(s, { filename: p }); } catch (e) { recordError('importScripts:' + p, e); }
+        const rel = resolveScriptPath(p, globalThis.__bbSwDir || '.');
+        if (rel == null) { continue; }
+        const s = readExt(rel);
+        if (s == null) { recordError('importScripts', new Error('importScripts: file not found: ' + rel)); continue; }
+        try { vm.runInThisContext(s, { filename: rel }); } catch (e) { recordError('importScripts:' + rel, e); }
     }
 };
 
@@ -333,6 +347,7 @@ let entriesHtmlPath = '__bgroot__.html';
 
 if (bg.service_worker) {
     kind = 'sw'; entries = [bg.service_worker]; isModule = bg.type === 'module';
+    globalThis.__bbSwDir = path.dirname(bg.service_worker);   // importScripts resolves relative to this
 } else if (Array.isArray(bg.scripts) && bg.scripts.length) {
     kind = 'mv2-scripts'; entries = bg.scripts.slice();
     isModule = bg.type === 'module';   // Firefox MV3 event page can be type:module scripts
@@ -380,6 +395,15 @@ function runEntries() {
     }
 }
 
+// A real MV3 service worker runs in a JSContext with NO Node globals. Node's process/module/global/
+// require being visible makes isomorphic libs take their Node code path — js-sha1 in DuckDuckGo's
+// bundle does `if (NODE_JS) nodeWrap()` → `eval("require('crypto')")` → "require is not defined" (ESM
+// has no require). Hide them so the harness boots the extension the way the device's JSContext does.
+globalThis.process = undefined;
+globalThis.module = undefined;
+globalThis.global = undefined;
+globalThis.require = undefined;
+
 runEntries();
 
 // Let async init settle (registrations, microtasks), then report.
@@ -398,9 +422,9 @@ const verdict = {
 };
 // Sentinel-prefix the verdict so the driver can pick it out even if the extension wrote its own
 // lines to stdout, and flush BEFORE exiting (process.exit can truncate a still-buffered write).
-process.stdout.write('BBVERDICT:' + JSON.stringify(verdict) + '\n', () => {
+_stdoutWrite('BBVERDICT:' + JSON.stringify(verdict) + '\n', () => {
     // Hard-exit so lingering timers/intervals from the ext don't keep the process alive.
-    process.exit(0);
+    _exit(0);
 });
 // Safety net: if the write callback never fires (closed pipe), still exit shortly.
-_setTimeout(() => process.exit(0), 500);
+_setTimeout(() => _exit(0), 500);

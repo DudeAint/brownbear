@@ -1900,7 +1900,14 @@
     sync: storageArea('sync'),
     session: storageArea('session'),
     managed: storageArea('managed'),
-    onChanged: makeEvent(storageChangedListeners)
+    onChanged: makeEvent(storageChangedListeners),
+    // chrome.storage.AccessLevel — the enum passed to storage.session.setAccessLevel. Grammarly reads
+    // chrome.storage.AccessLevel.TRUSTED_AND_UNTRUSTED_CONTEXTS directly at boot; without the enum that
+    // is undefined and the setAccessLevel call throws before the worker finishes initializing.
+    AccessLevel: {
+      TRUSTED_CONTEXTS: 'TRUSTED_CONTEXTS',
+      TRUSTED_AND_UNTRUSTED_CONTEXTS: 'TRUSTED_AND_UNTRUSTED_CONTEXTS'
+    }
   };
 
   // ---------------------------------------------------------------- chrome.alarms
@@ -2143,6 +2150,18 @@
       if (typeof cb === 'function') { cb(info); return undefined; }
       return Promise.resolve(info);
     },
+    // chrome.runtime.requestUpdateCheck — asks Chrome to check for an extension update now. iOS has no
+    // Chrome auto-update channel (extensions update through BrownBear's own flow), so we report
+    // 'no_update'. Grammarly calls this on a timer; an undefined method throws "not a function".
+    // Callback form is (status, details); the promise form resolves { status }.
+    requestUpdateCheck: function (cb) {
+      if (typeof cb === 'function') { cb('no_update', {}); return undefined; }
+      return Promise.resolve({ status: 'no_update' });
+    },
+    // chrome.runtime.onPerformanceWarning (Chrome 111+) — fired when the runtime detects a slow content
+    // script. No native source fires it on iOS, but extensions register a listener at boot; the event
+    // object must exist or `undefined.addListener` throws.
+    onPerformanceWarning: makeEvent([]),
     getContexts: function (filter, cb) {
       var p = new Promise(function (resolve) {
         __bb_get_contexts(JSON.stringify(filter || {}), function (resJSON) {
