@@ -20,6 +20,9 @@ final class WebExtensionPageViewController: UIViewController {
 
     private let session: WebExtensionPageSession
     private var webView: WKWebView?
+    /// True when this page is hosted in a floating popover (the toolbar action popup) rather than a sheet,
+    /// so the backdrop is glass and the content size hugs the popup's own HTML dimensions.
+    private var isPopover = false
 
     init(ext: WebExtension,
          kind: Kind,
@@ -36,7 +39,13 @@ final class WebExtensionPageViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = BrownBearTheme.Palette.background
+        // A floating popup floats over the page on frosted glass (matching the Site Shields panel); a
+        // sheet-hosted page (options) keeps the solid surface.
+        if isPopover {
+            GlassBackground.install(in: view)
+        } else {
+            view.backgroundColor = BrownBearTheme.Palette.background
+        }
         title = session.ext.displayName
         navigationItem.rightBarButtonItem = UIBarButtonItem(barButtonSystemItem: .done, target: self, action: #selector(close))
 
@@ -66,7 +75,9 @@ final class WebExtensionPageViewController: UIViewController {
         let webView = WKWebView(frame: view.bounds, configuration: configuration)
         webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         webView.isOpaque = false
-        webView.backgroundColor = BrownBearTheme.Palette.background
+        // Clear over the glass so any transparent popup areas reveal the frosted backdrop; opaque popups
+        // simply paint their own body. A sheet keeps the solid surface behind it.
+        webView.backgroundColor = isPopover ? .clear : BrownBearTheme.Palette.background
         webView.navigationDelegate = self   // surface load failures instead of a blank sheet
         webView.uiDelegate = self            // route window.open() (e.g. ScriptCat's Options button) to a real tab
         view.addSubview(webView)
@@ -106,6 +117,52 @@ final class WebExtensionPageViewController: UIViewController {
 
     // MARK: - Presentation
 
+    /// Fixed popup width (most extension popups declare ~300–400pt) and the height bounds the popover
+    /// hugs to once its HTML has laid out. The initial height is a sensible guess until `didFinish`.
+    private static let popoverWidth: CGFloat = 360
+    private static let popoverInitialHeight: CGFloat = 420
+    private static let popoverMinHeight: CGFloat = 160
+    private static let popoverMaxHeight: CGFloat = 560
+
+    /// Present as a floating glassy popover anchored to `sourceView` (the toolbar action button) instead
+    /// of a sheet, so the popup hovers over the page like Chrome/Safari — the page stays visible around
+    /// it. Width is fixed; the height grows to the popup's own content after it loads.
+    func makePopover(sourceView: UIView, sourceRect: CGRect) -> UIViewController {
+        isPopover = true
+        modalPresentationStyle = .popover
+        preferredContentSize = CGSize(width: Self.popoverWidth, height: Self.popoverInitialHeight)
+        if let popover = popoverPresentationController {
+            popover.sourceView = sourceView
+            popover.sourceRect = sourceRect
+            // The toolbar sits at the bottom, so the popover rises UP over the page (arrow down at the
+            // button); allow .up as a fallback if UIKit can't fit it above.
+            popover.permittedArrowDirections = [.down, .up]
+            popover.delegate = self
+            popover.backgroundColor = .clear   // let the glass backdrop show instead of an opaque frame
+        }
+        return self
+    }
+
+    /// Shrink/grow the popover to the popup's own rendered height (clamped), so a short popup isn't a tall
+    /// empty card and a long one scrolls within a sensible cap. No-op for the sheet-hosted options page.
+    private func sizePopoverToContent() {
+        guard isPopover, let webView else { return }
+        let measure = "(function(){var d=document.documentElement,b=document.body;" +
+            "return Math.max(d?d.scrollHeight:0,b?b.scrollHeight:0,b?b.offsetHeight:0);})()"
+        // The completion is a non-isolated ObjC block (called on the main thread); hop to the main actor
+        // before touching preferredContentSize so it's safe under strict concurrency checking.
+        BBEvaluateJavaScriptForResult(webView, measure, .page) { result, _ in
+            guard let height = (result as? NSNumber)?.doubleValue, height > 0 else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let clamped = min(max(CGFloat(height), Self.popoverMinHeight), Self.popoverMaxHeight)
+                guard abs(clamped - self.preferredContentSize.height) > 1 else { return }
+                // Setting preferredContentSize animates the popover resize for free.
+                self.preferredContentSize = CGSize(width: Self.popoverWidth, height: clamped)
+            }
+        }
+    }
+
     /// Wrap in a navigation controller with a sheet presentation (medium/large detents).
     func wrappedForPresentation() -> UIViewController {
         let nav = UINavigationController(rootViewController: self)
@@ -141,8 +198,12 @@ extension WebExtensionPageViewController: WKNavigationDelegate {
     /// turning an invisible blank dead-end into a diagnosable Logs line.
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         let extID = session.ext.id, kind = session.kind.title
+        // Size the popover to the popup now, and again after a beat for popups that fill asynchronously
+        // (e.g. once their background worker replies).
+        sizePopoverToContent()
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self, weak webView] in
             guard let self, let webView, self.webView === webView else { return }
+            self.sizePopoverToContent()
             // Probe the rendered body AND the page-module bundle's run report (globalThis.__bbPageBundle,
             // set by brownbear-esm-page-bundler.js). The body state alone can't tell apart "a module
             // threw" from "the bundle ran but the page is still waiting on the background worker" — the
@@ -241,6 +302,18 @@ extension WebExtensionPageViewController: WKUIDelegate {
             dismiss(animated: true)
         }
         return nil
+    }
+}
+
+// MARK: - UIPopoverPresentationControllerDelegate (stay a true popover on iPhone)
+
+extension WebExtensionPageViewController: UIPopoverPresentationControllerDelegate {
+    /// Keep the action popup an arrow-anchored popover on compact widths too, instead of UIKit's default
+    /// adaptive full-screen sheet — the whole point is that it floats over the page.
+    nonisolated func adaptivePresentationStyle(
+        for controller: UIPresentationController,
+        traitCollection: UITraitCollection) -> UIModalPresentationStyle {
+        .none
     }
 }
 
