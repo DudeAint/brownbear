@@ -343,7 +343,9 @@ extension ScriptInstallViewController {
 
     private func makeHero(_ preview: UserScriptInstaller.Preview) -> UIView {
         let icon = UIImageView(image: UIImage(systemName: "scroll.fill"))
-        icon.tintColor = .white
+        // The accent fill is near-WHITE in dark mode, so a hardcoded white glyph vanishes; onAccent is the
+        // contrasting foreground (white in light, near-black in dark).
+        icon.tintColor = BrownBearTheme.Palette.onAccent
         icon.contentMode = .center
         icon.backgroundColor = BrownBearTheme.Palette.accent
         icon.layer.cornerRadius = 14
@@ -386,7 +388,15 @@ extension ScriptInstallViewController {
             let badge = BBChipView(text: "Update \(from) → \(to)",
                                    systemImage: "arrow.triangle.2.circlepath",
                                    tint: BrownBearTheme.Palette.secure)
-            textStack.addArrangedSubview(badge)
+            // The hero's text stack is `.fill`-aligned, which would stretch the pill across the whole row
+            // (the green bar the owner saw). Wrap it with a trailing spacer so the pill hugs its content
+            // — a neat capsule around "Update vX → vY".
+            badge.setContentHuggingPriority(.required, for: .horizontal)
+            let spacer = UIView()
+            spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            let badgeRow = UIStackView(arrangedSubviews: [badge, spacer])
+            badgeRow.axis = .horizontal
+            textStack.addArrangedSubview(badgeRow)
         }
 
         let hero = UIStackView(arrangedSubviews: [icon, textStack])
@@ -552,7 +562,8 @@ extension ScriptInstallViewController {
         var config = UIButton.Configuration.filled()
         config.title = title
         config.baseBackgroundColor = BrownBearTheme.Palette.accent
-        config.baseForegroundColor = .white
+        // onAccent (not .white): the accent fill is near-white in dark mode, where white text is invisible.
+        config.baseForegroundColor = BrownBearTheme.Palette.onAccent
         config.cornerStyle = .large
         config.contentInsets = NSDirectionalEdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16)
         let button = UIButton(configuration: config)
@@ -612,7 +623,8 @@ extension ScriptInstallViewController {
         config.contentInsets = NSDirectionalEdgeInsets(top: 13, leading: 16, bottom: 13, trailing: 16)
         if filled {
             config.baseBackgroundColor = BrownBearTheme.Palette.accent
-            config.baseForegroundColor = .white
+            // onAccent (not .white): the accent fill is near-white in dark mode → white label would vanish.
+            config.baseForegroundColor = BrownBearTheme.Palette.onAccent
         } else {
             config.baseForegroundColor = BrownBearTheme.Palette.textPrimary
         }
