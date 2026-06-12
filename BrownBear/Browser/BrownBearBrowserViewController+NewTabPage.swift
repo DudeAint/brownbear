@@ -105,6 +105,9 @@ extension BrownBearBrowserViewController {
         } else {
             sections += newTabFooterHTML
         }
+        // Then always pin the "report a broken extension" CTA below it — BrownBear's whole pitch is
+        // running every extension, so the fastest way we hear about (and fix) a broken one is one tap away.
+        sections += newTabIssueCTA
 
         // The search box's history popover data (recent sites), embedded safely for the inline script.
         let histItems = visitedWeb.prefix(8).map { ["t": $0.title, "u": $0.url.absoluteString, "h": $0.url.host ?? ""] }
@@ -340,6 +343,50 @@ extension BrownBearBrowserViewController {
       <span class="chev"></span>
     </a>
     """
+
+    /// The "report a broken extension" CTA pinned to the bottom of every New Tab page. BrownBear's whole
+    /// pitch is running every Chrome/Firefox extension on iOS, so a broken one is the single most valuable
+    /// signal we can get — and the gap between "it's broken" and a *useful* report is where most reports
+    /// die. So the link opens a **prefilled** GitHub issue (label + title prefix + a body that asks for
+    /// exactly what we need to reproduce: which extension, the site, and the Logs-tab output), turning a
+    /// vague frustration into a one-tap, high-signal report. Copy is framed as a promise ("we want every
+    /// extension to work — tell us which one doesn't") rather than a chore, which converts far better.
+    private static var newTabIssueCTA: String {
+        let body = """
+        Thanks for helping make BrownBear run every extension — a few details get this fixed fast:
+
+        **Which extension?** (its name + where you got it — Chrome Web Store, Edge, Firefox…)
+
+
+        **What should happen, and what happens instead?**
+
+
+        **Which website?** (paste the URL if it only breaks on certain sites)
+
+
+        **Logs** — open Settings › this extension › Logs and paste anything in red below:
+
+
+        """
+        var components = URLComponents(string: "https://github.com/DudeAint/brownbear/issues/new")
+        components?.queryItems = [
+            URLQueryItem(name: "labels", value: "extension,bug"),
+            URLQueryItem(name: "title", value: "Extension not working: "),
+            URLQueryItem(name: "body", value: body)
+        ]
+        let href = htmlEscape(components?.url?.absoluteString
+            ?? "https://github.com/DudeAint/brownbear/issues/new")
+        return """
+        <a class="row fade" style="animation-delay:.34s" href="\(href)">
+          <span class="g">\(glyphGithub)</span>
+          <span class="body">
+            <p class="t">An extension not working?</p>
+            <p class="d">We want every extension to run on BrownBear. Tell us which one broke and we'll fix it &mdash; tap to open a prefilled report.</p>
+          </span>
+          <span class="chev"></span>
+        </a>
+        """
+    }
 
     /// The private/incognito New Tab page: a dark, self-explanatory page that makes clear nothing is
     /// being saved. No shortcut tiles (which would leak browsing) — just the search box and the
