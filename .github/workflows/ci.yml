@@ -63,13 +63,17 @@ jobs:
           range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
           pattern='^(feat|fix|refactor|perf|docs|test|build|ci|chore|revert)(\([a-z0-9-]+\))?!?: .{1,72}'
           fail=0
+          # --no-merges: a merge commit subject ("Merge branch 'main' into …") is not a conventional
+          # commit and is never what ships (PRs squash-merge), but it appears in the range whenever a PR
+          # branch is brought up to date via GitHub's "Update branch" button. Skipping merges keeps that
+          # routine action from red-flagging an otherwise-clean PR.
           while IFS= read -r subject; do
             [ -z "$subject" ] && continue
             if ! printf '%s' "$subject" | grep -Eq "$pattern"; then
               echo "::error::Non-conventional commit subject: '$subject'"
               fail=1
             fi
-          done < <(git log --format=%s "$range")
+          done < <(git log --no-merges --format=%s "$range")
           exit $fail
 
   js-runtime:
