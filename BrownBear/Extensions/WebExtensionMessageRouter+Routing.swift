@@ -280,11 +280,19 @@ extension WebExtensionMessageRouter {
         }
     }
 
-    /// declarativeNetRequest is privileged: require the API permission before any read OR write.
+    /// declarativeNetRequest is privileged: require the API permission before any read OR write. The
+    /// effective set is the manifest's declared permissions UNION the optional ones the user granted at
+    /// runtime (chrome.permissions.request) — an EWE-based blocker can declare DNR optionally and request
+    /// it on first run. The diagnostic names the actual state (the userScripts gate's lesson) so the next
+    /// device log distinguishes a genuine absence from a manifest-lookup miss.
     private func requireDNRPermission(_ extensionID: String) async throws {
-        let perms = await store.ext(for: extensionID)?.manifest?.permissions ?? []
+        let ext = await store.ext(for: extensionID)
+        let granted = await BrownBearServices.shared.webExtensionPermissionGrants.granted(extensionID: extensionID)
+        let perms = Set(ext?.manifest?.permissions ?? []).union(granted.permissions)
         guard perms.contains("declarativeNetRequest") || perms.contains("declarativeNetRequestWithHostAccess") else {
-            throw BrownBearError.bridgeRejected("declarativeNetRequest permission not granted")
+            throw BrownBearError.bridgeRejected("declarativeNetRequest permission not granted "
+                + "(extLoaded=\(ext != nil) mv=\(ext?.manifest?.manifestVersion ?? 0) "
+                + "perms=[\(perms.sorted().joined(separator: ","))])")
         }
     }
 
