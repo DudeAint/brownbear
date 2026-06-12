@@ -52,8 +52,9 @@ extension BrownBearBrowserViewController {
     // MARK: - Helpers
 
     /// Present the extension's popup as a glassy popover anchored to the toolbar action button, so it
-    /// floats over the page (Chrome/Safari-style) instead of covering it as a sheet.
-    private func presentActionPopup(extensionID: String) {
+    /// floats over the page (Chrome/Safari-style) instead of covering it as a sheet. Internal so the
+    /// extensions-toolbar hold-menu ("Open Popup") can reach it from its own +file.
+    func presentActionPopup(extensionID: String) {
         Task { @MainActor in
             guard let ext = await BrownBearServices.shared.webExtensionStore.ext(for: extensionID) else { return }
             let controller = WebExtensionPageViewController(ext: ext, kind: .popup)
