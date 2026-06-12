@@ -11,6 +11,14 @@ on:
     - cron: "0 6 * * 1"   # Monday 06:00 UTC
   workflow_dispatch:
 
+# Only ever keep the NEWEST CodeQL scan per branch in flight. The Swift matrix leg is a full macOS
+# build, so a burst of main pushes (e.g. several PRs merged back-to-back) otherwise stacks up that many
+# macOS CodeQL builds, starving the scarce macOS runner pool and queueing the gating "Build & Test".
+# A scan only cares about the latest code, so cancelling the older in-progress scan is exactly right.
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   security-events: write
