@@ -94,6 +94,10 @@ struct WebExtensionManifest: Equatable {
     /// (Momentum, Tabliss, …). Same key in MV2 and MV3. nil when the extension declares no override.
     /// Defaulted so the synthesized memberwise initializer stays source-compatible with existing callers.
     var newTabOverride: String? = nil
+    /// The extension's side-panel page — Chrome MV3 `side_panel.default_path` or Firefox MV2
+    /// `sidebar_action.default_panel`. nil when the extension declares no side panel. Defaulted so the
+    /// synthesized memberwise initializer stays source-compatible with existing callers.
+    var sidePanelPath: String? = nil
 
     // MARK: - Parsing
 
@@ -161,6 +165,10 @@ struct WebExtensionManifest: Equatable {
         // chrome_url_overrides.newtab — a packaged page replacing the New Tab page (same key MV2/MV3).
         let newTabOverride = (json["chrome_url_overrides"] as? [String: Any])?["newtab"] as? String
 
+        // The side-panel page: Chrome MV3 `side_panel.default_path`, or Firefox MV2 `sidebar_action.default_panel`.
+        let sidePanelPath = ((json["side_panel"] as? [String: Any])?["default_path"] as? String)
+            ?? ((json["sidebar_action"] as? [String: Any])?["default_panel"] as? String)
+
         let csp: String?
         if let cspString = json["content_security_policy"] as? String {
             csp = cspString
@@ -200,7 +208,8 @@ struct WebExtensionManifest: Equatable {
             contentSecurityPolicy: csp,
             declarativeNetRequest: dnr,
             commands: commands,
-            newTabOverride: newTabOverride)
+            newTabOverride: newTabOverride,
+            sidePanelPath: sidePanelPath)
     }
 
     // MARK: - Field parsers

@@ -28,6 +28,11 @@ final class WebExtensionPageSession {
         /// explicit packaged path. Normal tabs can't load chrome-extension://, so a new tab that should show
         /// an override is created with this session's per-extension configuration instead.
         case newtab
+        /// A side-panel page — Chrome MV3 `chrome.sidePanel` / Firefox `sidebar_action`. Same page engine
+        /// as a popup/options page (full UI + chrome.* bridge); the page path comes from the manifest
+        /// (`side_panel.default_path` / `sidebar_action.default_panel`) or a `sidePanel.setOptions({path})`
+        /// override passed in. iOS has no docked panel, so it's hosted as a sheet over the page.
+        case sidebar
 
         var title: String {
             switch self {
@@ -35,6 +40,7 @@ final class WebExtensionPageSession {
             case .options: return "Options"
             case .offscreen: return "Offscreen document"
             case .newtab: return "New Tab"
+            case .sidebar: return "Side panel"
             }
         }
 
@@ -48,6 +54,7 @@ final class WebExtensionPageSession {
             case .options: return "options"
             case .offscreen: return "offscreen"
             case .newtab: return "newtab"
+            case .sidebar: return "sidebar"
             }
         }
     }
@@ -110,6 +117,7 @@ final class WebExtensionPageSession {
         case .options: return ext.manifest?.optionsPage
         case .offscreen: return nil   // offscreen always supplies an explicit path (handled above)
         case .newtab: return ext.manifest?.newTabOverride
+        case .sidebar: return ext.manifest?.sidePanelPath   // a setOptions override is passed via explicitPath
         }
     }
 
@@ -326,6 +334,7 @@ extension WebExtensionPageSession: WebExtensionEventReceiver {
         case .popup: contextType = "POPUP"
         case .options, .newtab: contextType = "TAB"
         case .offscreen: contextType = "OFFSCREEN_DOCUMENT"
+        case .sidebar: contextType = "SIDE_PANEL"
         }
         // An offscreen document isn't associated with a top frame or a window — Chrome reports
         // frameId/windowId as -1 for it (unlike a popup/options page, which lives in the lone window).

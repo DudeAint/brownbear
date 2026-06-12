@@ -44,19 +44,9 @@ extension BrownBearBrowserViewController {
             presentActionPopup(extensionID: extensionID)
             return
         }
-        // No popup. If the extension registered a chrome.action.onClicked handler, the tap is its to handle
-        // → deliver onClicked to its background worker (Chrome semantics).
-        if BrownBearServices.shared.webExtensionRuntime.hasActionClickedListener(extensionID: extensionID) {
-            let tab = tabManager.activeTab.map(webExtActionTabRecord)
-            Task { await BrownBearServices.shared.webExtensionRuntime
-                .fireActionClicked(extensionID: extensionID, tab: tab) }
-            return
-        }
-        // No popup AND no onClicked handler: the tap would otherwise do nothing visible. Open the extension's
-        // options page — the action a user expects from a configure-only extension (Cookie-Editor, uBO Lite,
-        // Old Reddit Redirect, …). If it declares no options page either, deliver onClicked anyway (a harmless
-        // no-op matching Chrome), so behaviour is never worse than before.
-        presentActionOptionsOrClick(extensionID: extensionID)
+        // No popup: the right destination (side panel / onClicked / options) depends on the extension's
+        // manifest plus live chrome.sidePanel state, so resolve it off the main-actor store read.
+        resolveNoPopupActionTap(extensionID: extensionID)
     }
 
     // MARK: - Helpers
@@ -72,21 +62,61 @@ extension BrownBearBrowserViewController {
         }
     }
 
-    /// For a no-popup action whose worker registered no onClicked handler: present the extension's options
-    /// page (its `options_ui`/`options_page`) as a sheet — the natural destination when there's nothing else
-    /// to show. If the extension declares no options page, fall back to delivering chrome.action.onClicked
-    /// (a no-op the extension ignores, matching Chrome's "click does nothing" for such actions).
-    private func presentActionOptionsOrClick(extensionID: String) {
+    /// Resolve a no-popup toolbar tap to the destination a user expects. Precedence (all after "no popup"):
+    ///   1. side panel + setPanelBehavior({openPanelOnActionClick:true})  → open the side panel (Chrome)
+    ///   2. a registered chrome.action.onClicked handler                  → deliver onClicked (Chrome)
+    ///   3. a side panel (even without the behavior opt-in)               → open it — reachable on iOS,
+    ///      which has no Chrome "puzzle menu" side-panel entry to open it from otherwise
+    ///   4. an options page                                               → open it (configure-only ext)
+    ///   5. none of the above                                             → deliver onClicked anyway (a
+    ///      harmless no-op, matching Chrome, so behaviour is never worse than before)
+    /// Async because the side-panel path + options page come from the extension's manifest (a store read).
+    private func resolveNoPopupActionTap(extensionID: String) {
+        let runtime = BrownBearServices.shared.webExtensionRuntime
         Task { @MainActor in
             guard let ext = await BrownBearServices.shared.webExtensionStore.ext(for: extensionID) else { return }
-            if let options = ext.manifest?.optionsPage, !options.isEmpty {
-                let controller = WebExtensionPageViewController(ext: ext, kind: .options)
-                present(controller.wrappedForPresentation(), animated: true)
-            } else {
-                let tab = tabManager.activeTab.map(webExtActionTabRecord)
-                BrownBearServices.shared.webExtensionRuntime.fireActionClicked(extensionID: extensionID, tab: tab)
+            let panelPath = runtime.sidePanelPathOverride(extensionID: extensionID) ?? ext.manifest?.sidePanelPath
+            let hasPanel = (panelPath?.isEmpty == false) && runtime.sidePanelEnabled(extensionID: extensionID)
+
+            if hasPanel, runtime.sidePanelOpensOnActionClick(extensionID: extensionID) {
+                presentSidePanel(ext: ext, path: panelPath)
+                return
             }
+            if runtime.hasActionClickedListener(extensionID: extensionID) {
+                let tab = tabManager.activeTab.map(webExtActionTabRecord)
+                runtime.fireActionClicked(extensionID: extensionID, tab: tab)
+                return
+            }
+            if hasPanel {
+                presentSidePanel(ext: ext, path: panelPath)
+                return
+            }
+            if let options = ext.manifest?.optionsPage, !options.isEmpty {
+                present(WebExtensionPageViewController(ext: ext, kind: .options).wrappedForPresentation(), animated: true)
+                return
+            }
+            let tab = tabManager.activeTab.map(webExtActionTabRecord)
+            runtime.fireActionClicked(extensionID: extensionID, tab: tab)
         }
+    }
+
+    /// chrome.sidePanel.open — present the extension's side-panel page (resolving the manifest default /
+    /// setOptions override path) as a sheet over the page. iOS has no docked panel surface, so a sheet is
+    /// the side-panel host; the page itself runs with the full chrome.* bridge like a popup/options page.
+    func webExtPresentSidePanel(extensionID: String) {
+        let runtime = BrownBearServices.shared.webExtensionRuntime
+        Task { @MainActor in
+            guard let ext = await BrownBearServices.shared.webExtensionStore.ext(for: extensionID) else { return }
+            let path = runtime.sidePanelPathOverride(extensionID: extensionID) ?? ext.manifest?.sidePanelPath
+            presentSidePanel(ext: ext, path: path)
+        }
+    }
+
+    /// Present an extension's side-panel page as a sheet, or no-op if it declares no side panel.
+    private func presentSidePanel(ext: WebExtension, path: String?) {
+        guard let path, !path.isEmpty else { return }
+        let controller = WebExtensionPageViewController(ext: ext, kind: .sidebar, path: path)
+        present(controller.wrappedForPresentation(), animated: true)
     }
 
     /// The chrome.tabs Tab record passed to onClicked. Mirrors +WebExtensions' tabRecord shape (kept
