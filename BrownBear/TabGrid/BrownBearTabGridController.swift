@@ -33,6 +33,9 @@ final class BrownBearTabGridController: UIViewController {
     /// Live tab-search text; filters the visible cards by title + host.
     private var searchText = ""
 
+    /// Whether the one-time "center on the active tab when the grid opens" scroll has run yet.
+    private var didCenterOnActiveTab = false
+
     /// Which set the grid is showing. Private mode is only reachable once a private tab exists or the
     /// user explicitly switches to it; it persists while the grid is open.
     private var showingPrivate: Bool
@@ -71,6 +74,24 @@ final class BrownBearTabGridController: UIViewController {
     override func viewWillLayoutSubviews() {
         super.viewWillLayoutSubviews()
         updateItemSize()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        // On first open, center the grid on the tab you're currently in instead of always snapping to the
+        // top — you land near the open tab. Once only, after the layout has a real size, so any scrolling
+        // you do afterwards sticks.
+        guard !didCenterOnActiveTab, collectionView.bounds.height > 0 else { return }
+        didCenterOnActiveTab = true
+        centerOnActiveTab(animated: false)
+    }
+
+    /// Scroll so the active tab's card is centered (clamped at the ends). No-op if it isn't in the current
+    /// mode's set — but the grid opens in the active tab's mode, so on first open it always is.
+    private func centerOnActiveTab(animated: Bool) {
+        guard let activeID = tabManager.activeTabID,
+              let indexPath = dataSource.indexPath(for: activeID) else { return }
+        collectionView.scrollToItem(at: indexPath, at: .centeredVertically, animated: animated)
     }
 
     // MARK: - Header
