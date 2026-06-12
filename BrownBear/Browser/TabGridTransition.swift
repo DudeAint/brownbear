@@ -94,11 +94,14 @@ final class TabGridTransitionAnimator: NSObject, UIViewControllerAnimatedTransit
             container.insertSubview(browserView, belowSubview: gridView)
         }
 
-        // The hero card sits on top, starting at the tapped card's frame and growing to fill the page.
-        // Aspect-fill so the card image scales UNIFORMLY as the (differently-proportioned) frame grows —
-        // it crops the overflow instead of stretching the content vertically.
+        // The hero card sits on top, starting at the tapped card's frame and growing into the page.
+        // It grows to the page WIDTH, top-anchored, keeping the card's own aspect ratio (so the final
+        // frame has the same proportions as the image). That makes the whole motion a UNIFORM scale by
+        // width — the content enlarges at the same rate the frame does (≈2×), gently, instead of the
+        // aspect-fill "cover" that magnifies it ~3× to fill the much-taller screen (the aggressive zoom).
+        // The live page is revealed below the growing card, then the card dissolves into it.
         let hero = UIImageView(image: image)
-        hero.contentMode = .scaleAspectFill
+        hero.contentMode = .scaleAspectFill   // aspect already matches the frame, so this never distorts
         let startCorner = BrownBearTheme.Metrics.cellCornerRadius
         hero.frame = heroFrame
         hero.layer.cornerRadius = startCorner
@@ -106,8 +109,12 @@ final class TabGridTransitionAnimator: NSObject, UIViewControllerAnimatedTransit
         hero.clipsToBounds = true
         container.addSubview(hero)
 
+        let imageAspect = image.size.width / max(image.size.height, 1)   // == the card frame's aspect
+        let finalFrame = CGRect(x: pageFrame.minX, y: pageFrame.minY,
+                                width: pageFrame.width, height: pageFrame.width / max(imageAspect, 0.01))
+
         // Round the corners out to a square page edge. A CABasicAnimation is the reliable way to animate
-        // a layer corner alongside a UIView spring (UIView.animate doesn't carry cornerRadius on springs).
+        // a layer corner alongside a UIView animation (UIView.animate doesn't always carry cornerRadius).
         let corner = CABasicAnimation(keyPath: "cornerRadius")
         corner.fromValue = startCorner
         corner.toValue = 0
@@ -116,12 +123,13 @@ final class TabGridTransitionAnimator: NSObject, UIViewControllerAnimatedTransit
         hero.layer.cornerRadius = 0
         hero.layer.add(corner, forKey: "heroCorner")
 
-        // The surrounding cards fall away while the hero springs out to full screen.
+        // A smooth decelerate (damping 1.0 = no overshoot/bounce, which reads as gentler than a spring).
+        // The surrounding cards fall away as the card grows.
         UIView.animate(withDuration: duration, delay: 0,
-                       usingSpringWithDamping: 0.9, initialSpringVelocity: 0.2,
-                       options: [.allowUserInteraction]) {
+                       usingSpringWithDamping: 1.0, initialSpringVelocity: 0,
+                       options: [.allowUserInteraction, .curveEaseInOut]) {
             gridView.alpha = 0
-            hero.frame = pageFrame
+            hero.frame = finalFrame
         } completion: { _ in
             hero.removeFromSuperview()
             gridView.alpha = 1
@@ -129,10 +137,10 @@ final class TabGridTransitionAnimator: NSObject, UIViewControllerAnimatedTransit
             context.completeTransition(!context.transitionWasCancelled)
         }
 
-        // Dissolve the (now full-screen) card snapshot into the live page over the back half, so a page
-        // that no longer matches its snapshot cross-fades in rather than popping.
-        UIView.animate(withDuration: duration * 0.4, delay: duration * 0.55,
-                       options: [.curveEaseIn]) {
+        // Dissolve the grown card into the live page over the back half, so the seam where the card image
+        // meets the real page (and a page that no longer matches its snapshot) cross-fades in cleanly.
+        UIView.animate(withDuration: duration * 0.45, delay: duration * 0.5,
+                       options: [.curveEaseInOut]) {
             hero.alpha = 0
         }
     }
