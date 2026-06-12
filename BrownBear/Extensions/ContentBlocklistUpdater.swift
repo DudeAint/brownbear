@@ -82,6 +82,25 @@ final class ContentBlocklistUpdater {
         return json
     }
 
+    /// The merged-cache file URL, recomputed WITHOUT touching the @MainActor singleton, so the content
+    /// blocker can read the (multi-MB) cache off the main thread. Mirrors `init()`'s path exactly.
+    nonisolated static func cacheFileURL() -> URL {
+        let base = (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                                 appropriateFor: nil, create: false))
+            ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        return base.appendingPathComponent("BrownBear", isDirectory: true)
+                   .appendingPathComponent("blocklist-merged.json")
+    }
+
+    /// Read the cached merged list off the main actor (a synchronous read of this multi-MB file on the
+    /// main thread is part of the cold-start freeze). Nil when absent/empty — same contract as
+    /// `cachedMergedJSON`, just callable from a background task.
+    nonisolated static func loadCachedMergedJSON() -> String? {
+        guard let data = try? Data(contentsOf: cacheFileURL()),
+              let json = String(data: data, encoding: .utf8), !json.isEmpty, json != "[]" else { return nil }
+        return json
+    }
+
     /// Kick off a refresh if the cache is missing or stale. Fire-and-forget; safe to call on launch.
     func updateIfStale(now: Date = Date()) {
         if let stampData = try? Data(contentsOf: stampURL),
