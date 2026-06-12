@@ -43,7 +43,7 @@ final class BrownBearTabGridController: UIViewController {
     /// Snapshot + on-screen frame (window coordinates) of the card the user just tapped, captured at
     /// selection time so the browser's hero transition can expand exactly that card into the full page.
     /// Read once by the browser right after `didSelect`, then it presents/dismisses.
-    private(set) var selectedCardSnapshot: UIView?
+    private(set) var selectedCardImage: UIImage?
     private(set) var selectedCardFrame: CGRect = .zero
 
     /// The tabs currently displayed, scoped to the active mode.
@@ -373,16 +373,18 @@ extension BrownBearTabGridController: UICollectionViewDelegate {
         gridDelegate?.tabGrid(self, didSelect: tab)
     }
 
-    /// Grab a lightweight snapshot of the tapped card and its frame in the window, for the hero
-    /// expand-into-page transition. If the cell isn't on screen (it always is on tap) we leave the
-    /// fields empty and the transition falls back to its soft fade.
+    /// Render the tapped card to an IMAGE (not a snapshot view) plus its frame in the window, for the hero
+    /// expand-into-page transition. An image lets the transition scale it with aspect-fill so the content
+    /// doesn't stretch as the card grows into the differently-proportioned page. If the cell isn't on
+    /// screen (it always is on tap) we leave the fields empty and the transition falls back to its fade.
     private func captureSelectedCard(at indexPath: IndexPath) {
         guard let cell = collectionView.cellForItem(at: indexPath) else {
-            selectedCardSnapshot = nil
+            selectedCardImage = nil
             selectedCardFrame = .zero
             return
         }
-        selectedCardSnapshot = cell.snapshotView(afterScreenUpdates: false)
+        let renderer = UIGraphicsImageRenderer(bounds: cell.bounds)
+        selectedCardImage = renderer.image { _ in cell.drawHierarchy(in: cell.bounds, afterScreenUpdates: false) }
         selectedCardFrame = cell.convert(cell.bounds, to: nil)   // window coordinates == transition container
     }
 
