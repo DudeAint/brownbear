@@ -64,6 +64,34 @@ extension BrownBearBrowserViewController {
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
         + "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
+    /// A desktop Edge User-Agent — makes the Edge Add-ons store serve its desktop install experience.
+    static let desktopEdgeUserAgent =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        + "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0"
+
+    /// A desktop Firefox User-Agent — makes AMO serve the add-on install experience (paired with the
+    /// in-page InstallTrigger/mozAddonManager spoof) instead of the "Download Firefox" CTA.
+    static let desktopFirefoxUserAgent =
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:121.0) Gecko/20100101 Firefox/121.0"
+
+    /// The desktop User-Agent to force for `url` if it's an extension store (so the store renders its real
+    /// install button for the matching browser), else nil. Chrome/Edge/AMO each sniff for their own UA.
+    static func storeUserAgent(for url: URL) -> String? {
+        guard let host = url.host?.lowercased() else { return nil }
+        if host == "chromewebstore.google.com" || (host == "chrome.google.com" && url.path.hasPrefix("/webstore")) {
+            return desktopChromeUserAgent
+        }
+        if host == "microsoftedge.microsoft.com" { return desktopEdgeUserAgent }
+        if host.hasSuffix("addons.mozilla.org") { return desktopFirefoxUserAgent }
+        return nil
+    }
+
+    /// Whether `ua` is one of the desktop store UAs we force, so leaving a store can restore the default.
+    static func isStoreUserAgent(_ ua: String?) -> Bool {
+        guard let ua else { return false }
+        return ua == desktopChromeUserAgent || ua == desktopEdgeUserAgent || ua == desktopFirefoxUserAgent
+    }
+
     /// A desktop Safari User-Agent — the default desktop UA for the manual "Request Desktop Site" toggle.
     static let desktopSafariUserAgent =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
