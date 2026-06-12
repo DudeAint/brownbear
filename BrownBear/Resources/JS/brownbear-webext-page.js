@@ -676,6 +676,13 @@
       onActivated: makeEvent(tabEventLists["tabs.onActivated"]),
       onRemoved: makeEvent(tabEventLists["tabs.onRemoved"]),
       onReplaced: makeEvent([]),
+      // iOS is single-window, so tabs never attach/detach/move between windows — these never fire, but
+      // they must EXIST: Stylus's editor (edit.js) registers chrome.tabs.onAttached.addListener
+      // unconditionally at init, and `undefined.addListener` threw an unhandled rejection that aborted the
+      // whole page's module init. Inert no-ops keep such pages alive.
+      onAttached: makeEvent([]),
+      onDetached: makeEvent([]),
+      onMoved: makeEvent([]),
       // Multi-select highlighting + zoom have no iOS analog (single-tab model); inert but present so a
       // page that registers these unguarded doesn't throw. onHighlightChanged is the deprecated alias.
       onHighlighted: makeEvent([]),
@@ -1032,6 +1039,17 @@
     windows: windowsApi(),
     management: managementApi(),
     permissions: permissionsApi(),
+    // chrome.readingList — Chrome's MV3 reading list. iOS has no reading-list store; an inert query→[]
+    // (+ no-op mutators) mirrors the background shim so an extension PAGE that calls it directly — e.g.
+    // OneTab's onetab.html "import from Reading List" flow does `chrome.readingList.query({})` — doesn't
+    // throw "chrome.readingList is undefined" once the user grants the optional permission and picks it.
+    readingList: {
+      query: function (info, cb) { return settle(_Promise.resolve([]), cb); },
+      addEntry: function (entry, cb) { return settle(_Promise.resolve(undefined), cb); },
+      removeEntry: function (info, cb) { return settle(_Promise.resolve(undefined), cb); },
+      updateEntry: function (info, cb) { return settle(_Promise.resolve(undefined), cb); },
+      onEntryAdded: makeEvent([]), onEntryRemoved: makeEvent([]), onEntryUpdated: makeEvent([])
+    },
     declarativeNetRequest: declarativeNetRequest,
     userScripts: userScripts,
     privacy: privacyApi,
