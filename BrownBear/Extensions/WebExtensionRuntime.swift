@@ -210,6 +210,14 @@ class WebExtensionRuntime {
         contexts[extensionID]?.fireActionClicked(tab: tab)
     }
 
+    /// Extension IDs whose worker has registered a chrome.action/pageAction.onClicked listener. Set by the
+    /// worker (via __bb_note_action_onclicked) the moment one registers, and read on the toolbar-tap path:
+    /// an action with no popup AND no onClicked handler opens the extension's options page (the action a
+    /// user expects from a configure-only extension) rather than firing a click nothing is listening for.
+    private var actionClickedExtensionIDs: Set<String> = []
+    func noteActionClickedListener(extensionID: String) { actionClickedExtensionIDs.insert(extensionID) }
+    func hasActionClickedListener(extensionID: String) -> Bool { actionClickedExtensionIDs.contains(extensionID) }
+
     // MARK: - chrome.offscreen
 
     /// chrome.offscreen.createDocument — create the extension's single hidden offscreen document.

@@ -42,12 +42,21 @@ extension BrownBearBrowserViewController {
 
         if let popup, !popup.isEmpty {
             presentActionPopup(extensionID: extensionID)
-        } else {
-            // No popup → chrome.action.onClicked(tab). Deliver to the extension's background worker.
+            return
+        }
+        // No popup. If the extension registered a chrome.action.onClicked handler, the tap is its to handle
+        // → deliver onClicked to its background worker (Chrome semantics).
+        if BrownBearServices.shared.webExtensionRuntime.hasActionClickedListener(extensionID: extensionID) {
             let tab = tabManager.activeTab.map(webExtActionTabRecord)
             Task { await BrownBearServices.shared.webExtensionRuntime
                 .fireActionClicked(extensionID: extensionID, tab: tab) }
+            return
         }
+        // No popup AND no onClicked handler: the tap would otherwise do nothing visible. Open the extension's
+        // options page — the action a user expects from a configure-only extension (Cookie-Editor, uBO Lite,
+        // Old Reddit Redirect, …). If it declares no options page either, deliver onClicked anyway (a harmless
+        // no-op matching Chrome), so behaviour is never worse than before.
+        presentActionOptionsOrClick(extensionID: extensionID)
     }
 
     // MARK: - Helpers
@@ -60,6 +69,23 @@ extension BrownBearBrowserViewController {
             let controller = WebExtensionPageViewController(ext: ext, kind: .popup)
             let anchor = toolbar.actionAnchorView
             present(controller.makePopover(sourceView: anchor, sourceRect: anchor.bounds), animated: true)
+        }
+    }
+
+    /// For a no-popup action whose worker registered no onClicked handler: present the extension's options
+    /// page (its `options_ui`/`options_page`) as a sheet — the natural destination when there's nothing else
+    /// to show. If the extension declares no options page, fall back to delivering chrome.action.onClicked
+    /// (a no-op the extension ignores, matching Chrome's "click does nothing" for such actions).
+    private func presentActionOptionsOrClick(extensionID: String) {
+        Task { @MainActor in
+            guard let ext = await BrownBearServices.shared.webExtensionStore.ext(for: extensionID) else { return }
+            if let options = ext.manifest?.optionsPage, !options.isEmpty {
+                let controller = WebExtensionPageViewController(ext: ext, kind: .options)
+                present(controller.wrappedForPresentation(), animated: true)
+            } else {
+                let tab = tabManager.activeTab.map(webExtActionTabRecord)
+                BrownBearServices.shared.webExtensionRuntime.fireActionClicked(extensionID: extensionID, tab: tab)
+            }
         }
     }
 

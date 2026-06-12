@@ -2785,6 +2785,22 @@
   // (overflow-menu tap on an action with no popup) through __bbBg.dispatchActionClicked. setIcon
   // forwards only serializable path data (ImageData isn't bridgeable from JavaScriptCore).
   var actionClickedListeners = [];
+  // The worker flags native the first time an action/pageAction.onClicked listener registers. The toolbar
+  // tap path reads this: an action with NO popup AND no onClicked handler is a configure-only extension, so
+  // native opens its options page (what a user expects) instead of firing a click nothing listens for.
+  var __bbHasActionClickedListener = false;
+  function __bbNoteActionClicked() {
+    if (__bbHasActionClickedListener) { return; }
+    __bbHasActionClickedListener = true;
+    try { if (typeof __bb_note_action_onclicked === 'function') { __bb_note_action_onclicked(); } } catch (e) {}
+  }
+  // An onClicked event that notifies native on the first listener (otherwise identical to makeEvent).
+  function makeActionClickedEvent(list) {
+    var ev = makeEvent(list);
+    var addListener = ev.addListener;
+    ev.addListener = function (fn) { addListener(fn); if (typeof fn === 'function') { __bbNoteActionClicked(); } };
+    return ev;
+  }
   function actionCall(method, args) {
     return new Promise(function (resolve) {
       __bb_action(method, JSON.stringify(args || {}), function (resJSON) { resolve(parseJSON(resJSON)); });
@@ -2874,7 +2890,7 @@
       var args = (options && typeof options === 'object') ? options : {};
       return settleBg(actionCall('openPopup', args).then(function () { return undefined; }), cb);
     },
-    onClicked: makeEvent(actionClickedListeners)
+    onClicked: makeActionClickedEvent(actionClickedListeners)
   };
 
   // chrome.pageAction (MV2): iOS has no per-tab page-action button, so show/hide/isShown are no-ops, but
@@ -2890,7 +2906,7 @@
     setIcon: actionSetIcon,
     setPopup: actionSetter('setPopup'),
     getPopup: function (_details, cb) { if (typeof cb === 'function') { cb(''); return undefined; } return Promise.resolve(''); },
-    onClicked: makeEvent(actionClickedListeners)
+    onClicked: makeActionClickedEvent(actionClickedListeners)
   };
 
   // ---------------------------------------------------------------- chrome.tabs
