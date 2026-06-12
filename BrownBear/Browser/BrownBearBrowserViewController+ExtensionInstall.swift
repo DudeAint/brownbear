@@ -127,7 +127,9 @@ extension BrownBearBrowserViewController {
         var addConfig = UIButton.Configuration.filled()
         addConfig.title = installed ? "Remove" : "Add"
         addConfig.baseBackgroundColor = installed ? BrownBearTheme.Palette.destructive : BrownBearTheme.Palette.accent
-        addConfig.baseForegroundColor = .white
+        // "Add" sits on the accent fill, which is near-WHITE in dark mode → a white title vanishes; use the
+        // contrasting onAccent there. "Remove" sits on the red destructive fill, where white reads fine.
+        addConfig.baseForegroundColor = installed ? .white : BrownBearTheme.Palette.onAccent
         addConfig.cornerStyle = .capsule
         addConfig.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16)
         let addButton = UIButton(configuration: addConfig)
@@ -215,7 +217,7 @@ extension BrownBearBrowserViewController {
         let label = UILabel()
         label.text = message
         label.font = .systemFont(ofSize: 13, weight: .semibold)
-        label.textColor = .white
+        label.textColor = BrownBearTheme.Palette.onAccent   // accent fill is near-white in dark mode
         label.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(label)
         view.addSubview(container)
