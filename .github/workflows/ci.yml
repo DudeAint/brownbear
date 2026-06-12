@@ -149,7 +149,7 @@ jobs:
           if [ -z "$found" ]; then echo "(no BrownBear .ips in host reports; listing recent reports)"; ls -lt ~/Library/Logs/DiagnosticReports/ 2>/dev/null | head -8; fi
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: TestResults
           path: TestResults.xcresult
