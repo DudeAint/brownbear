@@ -259,6 +259,43 @@
     });
   })();
 
+  // One-shot DOM-storage availability probe. Some extension pages (Momentum, Tabliss, …) keep ALL their
+  // state in window.localStorage / IndexedDB rather than chrome.storage — they don't even request the
+  // `storage` permission. On the chrome-extension:// custom-scheme page origin, DOM storage can be
+  // unavailable or non-persistent (a WebKit custom-scheme limitation): localStorage may throw, and
+  // IndexedDB.open() fails ASYNCHRONOUSLY — open() never succeeds, with NO thrown error — so the page
+  // just hangs on its loading spinner with nothing in the log (the reported Momentum "stuck on the M"
+  // symptom). Probe both and surface ONE tagged line ONLY when something is missing or fails — turning an
+  // invisible stuck-load into a diagnosable cause. Silent (no log) when storage works, so it's noise-free
+  // for the common case where pages use chrome.storage.
+  (function () {
+    function note(msg) {
+      try { bridge("runtime.pageLog", { level: "error", message: "[bb-storage-probe] " + msg }).catch(function () {}); } catch (e) {}
+    }
+    try {
+      if (!W.localStorage) { note("window.localStorage is undefined on this page origin"); }
+      else {
+        var k = "__bb_storage_probe__";
+        W.localStorage.setItem(k, "1");
+        if (W.localStorage.getItem(k) !== "1") { note("localStorage write/read did not round-trip"); }
+        W.localStorage.removeItem(k);
+      }
+    } catch (e) { note("localStorage threw: " + (e && e.message ? e.message : e)); }
+    try {
+      if (!W.indexedDB || typeof W.indexedDB.open !== "function") {
+        note("window.indexedDB is unavailable on this page origin — pages that store data in IndexedDB (Momentum/Tabliss) will hang on load");
+      } else {
+        var req = W.indexedDB.open("__bb_storage_probe_db__", 1);
+        req.onerror = function () {
+          note("indexedDB.open errored: " + ((req.error && req.error.message) || "unknown")
+            + " — pages that store data in IndexedDB (Momentum/Tabliss) will hang on load");
+        };
+        req.onblocked = function () { note("indexedDB.open blocked"); };
+        req.onsuccess = function () { try { req.result.close(); W.indexedDB.deleteDatabase("__bb_storage_probe_db__"); } catch (e) {} };
+      }
+    } catch (e) { note("indexedDB threw: " + (e && e.message ? e.message : e)); }
+  })();
+
   var messages = data.messages || {};
   // messageKey → { placeholderName(lowercased): content } for chrome.i18n named placeholders.
   var i18nPlaceholders = data.placeholders || {};
