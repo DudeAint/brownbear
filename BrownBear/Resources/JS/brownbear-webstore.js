@@ -4,10 +4,11 @@
 //
 //  Injected at document-start in the PAGE world on every page; it does nothing unless the page is a
 //  Chrome Web Store, Microsoft Edge Add-ons, or Firefox (AMO) extension page. There it:
-//    1. Spoofs whatever each store sniffs for so it renders an ENABLED install button instead of a
-//       "you're not on <Browser>" download CTA (Chrome: userAgentData/vendor/window.chrome; Firefox:
-//       InstallTrigger + navigator.mozAddonManager; Edge: window.chrome). The native side additionally
-//       forces the matching desktop User-Agent for store hosts at the navigation layer.
+//    1. Spoofs what Chrome/Edge sniff for so they render an ENABLED install button instead of a "you're
+//       not on <Browser>" CTA (Chrome: userAgentData/vendor/window.chrome; Edge: Edge-branded
+//       userAgentData + window.chrome). The native side also forces the matching desktop UA for Chrome
+//       and Edge. Firefox (AMO) is NOT spoofed — a forced Firefox UA makes AMO 500 under WebKit — so we
+//       render it on the default desktop UA and just rewrite its "Download Firefox" button below.
 //    2. Rewrites the store's install button to "Add to BrownBear" / "Remove from BrownBear" and routes
 //       its click to BrownBear's native installer (window.webkit.messageHandlers.brownbearWebStore),
 //       intercepting the page's own handler. Re-applies as the SPA re-renders / route-navigates between
@@ -67,28 +68,32 @@
         } catch (e) { /* best-effort */ }
     }
 
-    function spoofFirefox() {
-        // AMO only paints the real "Add to Firefox" install button when it believes it's Firefox WITH the
-        // add-on manager — a UA string alone isn't enough. Define the legacy InstallTrigger global and a
-        // minimal navigator.mozAddonManager. If this isn't enough on a given AMO build, we still rewrite
-        // its "Download Firefox" fallback button below, so the affordance works either way.
+    function spoofEdge() {
+        // Edge's store renders an ENABLED install button (and drops the "incompatible with your browser"
+        // notice) only when it sees an Edge client — so present Edge brands in userAgentData, not just a UA
+        // string + window.chrome. Without this the button installs (our capture-phase click wins) but looks
+        // greyed-out with an incompatible warning.
+        try { if (!window.chrome) { window.chrome = { runtime: {}, webstore: {} }; } } catch (e) { /* best-effort */ }
         try {
-            if (typeof window.InstallTrigger === "undefined") {
-                Object.defineProperty(window, "InstallTrigger", {
-                    configurable: true, value: { install: function () {}, enabled: function () { return true; } }
-                });
-            }
-        } catch (e) { /* best-effort */ }
-        try {
-            if (!navigator.mozAddonManager) {
-                Object.defineProperty(navigator, "mozAddonManager", {
+            var brands = [
+                { brand: "Microsoft Edge", version: "120" },
+                { brand: "Chromium", version: "120" },
+                { brand: "Not?A_Brand", version: "24" }
+            ];
+            if (!navigator.userAgentData) {
+                Object.defineProperty(navigator, "userAgentData", {
                     configurable: true,
                     get: function () {
                         return {
-                            getInstallForURL: function () { return Promise.resolve({ install: function () {} }); },
-                            createInstall: function () { return Promise.resolve({ install: function () {} }); },
-                            permissionPromptsEnabled: true,
-                            addEventListener: function () {}, removeEventListener: function () {}
+                            brands: brands, mobile: false, platform: "Windows",
+                            getHighEntropyValues: function () {
+                                return Promise.resolve({
+                                    architecture: "x86", bitness: "64", mobile: false, model: "",
+                                    platform: "Windows", platformVersion: "10.0.0",
+                                    uaFullVersion: "120.0.0.0", fullVersionList: brands
+                                });
+                            },
+                            toJSON: function () { return { brands: brands, mobile: false, platform: "Windows" }; }
                         };
                     }
                 });
@@ -96,13 +101,11 @@
         } catch (e) { /* best-effort */ }
     }
 
-    function spoofEdge() {
-        try { if (!window.chrome) { window.chrome = { runtime: {}, webstore: {} }; } } catch (e) { /* best-effort */ }
-    }
-
+    // Firefox (AMO): NO spoof. A forced Firefox UA makes AMO 500 under WebKit, and AMO's real install
+    // button needs a true Firefox engine anyway — so we render it on the default desktop UA and just
+    // rewrite its "Download Firefox" button (below) to "Add to BrownBear".
     if (STORE === "chrome") { spoofChrome(); }
-    else if (STORE === "firefox") { spoofFirefox(); }
-    else { spoofEdge(); }
+    else if (STORE === "edge") { spoofEdge(); }
 
     // --- 2. Find + rewrite the install button. ---
 
@@ -177,7 +180,7 @@
     }
 
     function rewire() {
-        if (STORE === "chrome") { hideChromeUnavailableNotice(); }
+        hideStoreNotices();
         var button = findButton();
         if (!button) { return; }
         if (button.getAttribute(TAG) !== "1") {
@@ -200,22 +203,38 @@
         applyState(button);
     }
 
-    // The Chrome store client-renders a red "Item currently unavailable / troubleshooting guide" notice
-    // for our spoofed client even though BrownBear installs the item fine. Blank it (visibility:hidden, so
-    // its reserved layout band stays and the title doesn't jump up), matched by visible text.
-    function hideChromeUnavailableNotice() {
+    // The stores show a "you can't install this" notice for our spoofed client even though BrownBear
+    // installs fine: Chrome a red "currently unavailable / troubleshooting guide" band, Edge an
+    // "incompatible with your browser" warning beside the button + a "Download the new Microsoft Edge"
+    // top banner. Blank them (visibility:hidden, so the reserved layout stays and content doesn't jump).
+    function hideStoreNotices() {
+        if (STORE === "chrome") {
+            hideTextNotice(function (t) {
+                return t.indexOf("currently unavailable") >= 0
+                    || (t.indexOf("troubleshooting") >= 0 && t.indexOf("guide") >= 0);
+            }, 5);
+        } else if (STORE === "edge") {
+            // The incompatible warning sits right next to the button — climb 0 (hide only its own text
+            // wrapper) so we never blank the install button beside it. The banner is far away, so climb.
+            hideTextNotice(function (t) { return t.indexOf("incompatible with your browser") >= 0; }, 0);
+            hideTextNotice(function (t) { return t.indexOf("download the new microsoft edge") >= 0; }, 5);
+        }
+    }
+
+    // Hide the smallest container whose text matches `predicate`, climbing at most `climbLimit` levels
+    // (and never into a container big enough to hold real page content).
+    function hideTextNotice(predicate, climbLimit) {
         if (!document.body) { return; }
         try {
             var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
             var node;
             while ((node = walker.nextNode())) {
-                var text = (node.nodeValue || "").toLowerCase();
-                if (text.indexOf("currently unavailable") < 0
-                    && !(text.indexOf("troubleshooting") >= 0 && text.indexOf("guide") >= 0)) { continue; }
+                if (!predicate((node.nodeValue || "").toLowerCase())) { continue; }
                 var el = node.parentElement;
-                while (el && el.parentElement && el.parentElement !== document.body
-                       && (el.parentElement.textContent || "").length < 240) {
-                    el = el.parentElement;
+                var n = 0;
+                while (n < climbLimit && el && el.parentElement && el.parentElement !== document.body
+                       && (el.parentElement.textContent || "").length < 200) {
+                    el = el.parentElement; n++;
                 }
                 if (el) { el.style.visibility = "hidden"; el.style.backgroundColor = "transparent"; }
                 return;
