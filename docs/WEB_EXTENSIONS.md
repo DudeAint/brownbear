@@ -30,9 +30,10 @@ Four routes, all landing in the same validated pipeline:
 - **In-page "Add to BrownBear".** Browse the **Chrome Web Store**, **Edge Add-ons**, or **Firefox
   (AMO)** inside BrownBear; on an extension page, that store's native "Add to *<Browser>*" button is
   rewritten to **Add to BrownBear** (→ **Remove from BrownBear** once installed) and re-applies as the
-  store's single-page app navigates between listings without reloading. BrownBear spoofs each store's
-  browser sniff (Chrome `userAgentData`/`window.chrome`; Firefox `InstallTrigger`/`mozAddonManager`;
-  Edge `window.chrome`) plus the matching desktop UA so the real install button renders.
+  store's single-page app navigates between listings without reloading. For Chrome and Edge, BrownBear
+  spoofs their browser sniff (Edge-/Chrome-branded `userAgentData` + `window.chrome`) and forces the
+  matching desktop UA so the enabled button renders; AMO is left on the default desktop UA (a forced
+  Firefox UA makes it 500 under WebKit) and its "Download Firefox" button is rewritten directly.
 - **Recommended extensions.** Dashboard → **Extensions** → a curated, categorized list (ad-blocking,
   privacy, productivity, …) with a one-tap **Get** — uBlock Origin Lite, Dark Reader, Bitwarden, and more.
 - **From a web store…** → paste a Chrome Web Store / Edge Add-ons / Firefox (AMO) link, or a bare 32-char

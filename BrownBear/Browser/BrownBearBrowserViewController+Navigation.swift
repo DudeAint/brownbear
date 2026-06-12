@@ -116,16 +116,20 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
            ["http", "https", "about", "file", "data"].contains(scheme) {
             pendingNavTargets[ObjectIdentifier(webView)] = dest.absoluteString
         }
+        let isStore = destination.map { ExtensionStoreSource.isStoreURL($0) } ?? false
         let storeUA = destination.flatMap { Self.storeUserAgent(for: $0) }
-        let isStore = storeUA != nil
         if let tab = tabManager.tabs.first(where: { $0.webView === webView }) {
-            // An extension store (Chrome / Edge / AMO) renders its real "Add to <Browser>" install button
-            // (and skips the "you're not on <Browser>" CTA) only for that browser's desktop client, so
-            // force the matching desktop UA for store hosts regardless of the tab's toggle; otherwise honor
-            // the user's Desktop choice.
-            if let storeUA {
+            // An extension store renders its real install button (and skips the "you're not on <Browser>"
+            // CTA) only for the right desktop client, so for store hosts force desktop mode regardless of
+            // the tab's toggle. Chrome/Edge also need their matching desktop UA; AMO (no storeUA) is left
+            // on the default desktop UA — a forced Firefox UA makes AMO 500.
+            if isStore {
                 preferences.preferredContentMode = .desktop
-                webView.customUserAgent = storeUA
+                if let storeUA {
+                    webView.customUserAgent = storeUA
+                } else if Self.isStoreUserAgent(webView.customUserAgent) {
+                    webView.customUserAgent = nil   // AMO: drop a Chrome/Edge UA left over from another store
+                }
             } else {
                 preferences.preferredContentMode = tab.prefersDesktop ? .desktop : .mobile
                 // Clear any store UA when leaving a store (but don't clobber a manual Desktop UA).
