@@ -159,6 +159,14 @@ final class WebExtensionPageSession {
         // dashboard) would otherwise throw a bare ReferenceError and render blank.
         controller.addUserScript(WKUserScript(source: Self.idlePolyfillSource,
                                               injectionTime: .atDocumentStart, forMainFrameOnly: false))
+        // IndexedDB engine, injected ONLY when the page origin has no working IndexedDB. WKWebView gives the
+        // chrome-extension:// custom-scheme page origin no DOM storage (the same gap as window.localStorage),
+        // so a page that opens an IndexedDB database — Momentum's Dexie data layer, ScriptCat, … — throws
+        // "IndexedDB API missing" or hangs. Our in-memory engine self-installs globalThis.indexedDB; the
+        // guard leaves a real, working IndexedDB untouched. Before the page bootstrap so the page's own
+        // scripts see it. (In-memory per page load for now; native-backed persistence is a follow-up.)
+        controller.addUserScript(WKUserScript(source: Self.idbPolyfillSource,
+                                              injectionTime: .atDocumentStart, forMainFrameOnly: true))
         controller.addUserScript(WKUserScript(source: "window.__bbExtPage = \(dataJSON);",
                                               injectionTime: .atDocumentStart, forMainFrameOnly: true))
         controller.addUserScript(WKUserScript(source: Self.pageRuntimeSource,
@@ -285,6 +293,22 @@ final class WebExtensionPageSession {
             return "/* brownbear-webext-page.js missing */"
         }
         return source
+    }()
+
+    /// Our in-memory IndexedDB engine (the same one the background worker gets via BrownBearIDBStore),
+    /// wrapped in a guard so it installs ONLY when the page origin has no working `indexedDB` — WKWebView
+    /// gives the chrome-extension:// custom-scheme page origin none, so a page's `indexedDB.open(...)`
+    /// throws "IndexedDB API missing" or hangs (Momentum's Dexie, ScriptCat, …). The engine self-installs
+    /// `globalThis.indexedDB`; the guard never overrides a real, working IndexedDB. In-memory per page load
+    /// (native-backed persistence is a follow-up).
+    private static let idbPolyfillSource: String = {
+        guard let url = Bundle.main.url(forResource: "brownbear-indexeddb", withExtension: "js", subdirectory: nil)
+                ?? Bundle.main.url(forResource: "brownbear-indexeddb", withExtension: "js", subdirectory: "JS"),
+              let source = try? String(contentsOf: url, encoding: .utf8) else {
+            return "/* brownbear-indexeddb.js missing */"
+        }
+        return "(function(){try{if(self.indexedDB&&typeof self.indexedDB.open==='function'){return;}}catch(e){}\n"
+            + source + "\n})();"
     }()
 
     /// The requestIdleCallback/cancelIdleCallback polyfill. Extension pages (popup/options/dashboard) run
