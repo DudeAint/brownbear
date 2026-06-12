@@ -30,6 +30,11 @@ final class TabGridTransitionAnimator: NSObject, UIViewControllerAnimatedTransit
     /// and stretching a snapshot view's frame between them squashes/stretches the content vertically.
     var heroImage: UIImage?
     var heroFrame: CGRect = .zero
+    /// Where the hero should END (window coords): the page's CONTENT area (the web view's frame), not the
+    /// whole screen. The hero IS the page's content-area snapshot, so growing it to the content frame keeps
+    /// it 1:1 with the live page underneath — the dissolve is seamless instead of an instant zoom-out.
+    /// `.zero` falls back to the full screen.
+    var heroTargetFrame: CGRect = .zero
 
     init(presenting: Bool) {
         self.isPresenting = presenting
@@ -94,11 +99,11 @@ final class TabGridTransitionAnimator: NSObject, UIViewControllerAnimatedTransit
             container.insertSubview(browserView, belowSubview: gridView)
         }
 
-        // The hero is the page's own snapshot (≈ screen aspect ratio), so it grows from the tapped card's
-        // picture straight to the FULL page and ends perfectly centered on the live page beneath. Because
-        // the image and the screen share an aspect, aspect-fill scales it by ~the width ratio (≈2×, gentle)
-        // with only a sliver of crop — not the ~3× magnify you'd get filling a screen with a square-ish
-        // card thumbnail. Then the snapshot dissolves into the live page.
+        // The hero is the page's own snapshot — a render of the web view's CONTENT area. So it grows from
+        // the tapped card's picture to the content-area frame (not the whole screen), where it sits 1:1 on
+        // the live page beneath: same scale, so the dissolve is seamless. Growing to the full screen instead
+        // would aspect-fill the content snapshot ~13% larger than the live page, and the dissolve then read
+        // as an instant zoom-out "snap". The chrome bars show the (revealed) browser around it.
         let hero = UIImageView(image: image)
         hero.contentMode = .scaleAspectFill
         let startCorner = BrownBearTheme.Metrics.cellCornerRadius
@@ -108,7 +113,7 @@ final class TabGridTransitionAnimator: NSObject, UIViewControllerAnimatedTransit
         hero.clipsToBounds = true
         container.addSubview(hero)
 
-        let finalFrame = pageFrame
+        let finalFrame = heroTargetFrame == .zero ? pageFrame : heroTargetFrame
 
         // Round the corners out to a square page edge. A CABasicAnimation is the reliable way to animate
         // a layer corner alongside a UIView animation (UIView.animate doesn't always carry cornerRadius).
@@ -176,6 +181,9 @@ final class TabGridTransitionController: NSObject, UIViewControllerTransitioning
     /// Done/back dismiss falls back to the soft fade.
     var selectedCardImage: UIImage?
     var selectedCardFrame: CGRect = .zero
+    /// The page's content-area frame (window coords) the hero should grow to — so the content snapshot
+    /// lands 1:1 on the live page rather than over-zoomed. `.zero` → full screen.
+    var selectedContentFrame: CGRect = .zero
 
     func animationController(forPresented presented: UIViewController,
                              presenting: UIViewController,
@@ -188,8 +196,10 @@ final class TabGridTransitionController: NSObject, UIViewControllerTransitioning
         let animator = TabGridTransitionAnimator(presenting: false)
         animator.heroImage = selectedCardImage
         animator.heroFrame = selectedCardFrame
+        animator.heroTargetFrame = selectedContentFrame
         selectedCardImage = nil
         selectedCardFrame = .zero
+        selectedContentFrame = .zero
         return animator
     }
 }
