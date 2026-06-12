@@ -79,6 +79,9 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.brownbear.app
         INFOPLIST_KEY_UIStatusBarStyle: UIStatusBarStyleLightContent
         TARGETED_DEVICE_FAMILY: "1,2"
+        # The BrownBear bear mark (the same face shown on the New Tab page), with a light and a dark
+        # variant — Assets.xcassets/AppIcon.appiconset.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # Calling evaluateJavaScript(_:in:in:) from Swift links the Swift WebKit overlay
         # (libswiftWebKit.dylib), which iOS 18 dropped from its runtime — so a 16.4-deployment app
         # aborts at launch. We route that one call through an Objective-C shim (BBWebKitBridge),
