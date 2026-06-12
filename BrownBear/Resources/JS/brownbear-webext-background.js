@@ -125,8 +125,15 @@
       function sweep() {
         var now = nowMs(), stuck = [];
         for (var id in pending) {
-          var age = now - pending[id].t;
-          if (age > 6000 && !warned[id]) { warned[id] = 1; stuck.push(pending[id].label + ' [' + Math.round(age / 1000) + 's, no reply]'); }
+          var p = pending[id];
+          var age = now - p.t;
+          // Network bridges (__bb_fetch / __bb_fetch_image) legitimately run for many seconds — slow hosts,
+          // and long-poll endpoints like a QR-login status poll (AnswerAI polls auth/qr/status, which the
+          // server holds open). They carry their own ~60s native timeout, so a slow request is NOT a boot
+          // stall: only flag one once it's past that timeout (≈ the timeout didn't fire ⇒ genuinely stuck).
+          // Everything else (storage/tabs/…) should return promptly, so the 6s threshold stands.
+          var threshold = (p.label.indexOf('__bb_fetch') === 0) ? 65000 : 6000;
+          if (age > threshold && !warned[id]) { warned[id] = 1; stuck.push(p.label + ' [' + Math.round(age / 1000) + 's, no reply]'); }
         }
         if (stuck.length) { __bb_log('error', '[BrownBear] background worker boot stalled — native bridge call(s) not returning: ' + stuck.join('; ')); }
         try { setTimeout(sweep, 4000); } catch (e) { /* timer gone — stop */ }
