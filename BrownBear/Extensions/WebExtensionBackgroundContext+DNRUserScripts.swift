@@ -20,10 +20,19 @@ extension WebExtensionBackgroundContext {
     static func dispatchDNR(extensionID: String, method: String, args: [String: Any]) async -> Any {
         let services = BrownBearServices.shared
         let dnrStore = services.webExtensionDNRStore
-        let manifest = await services.webExtensionStore.ext(for: extensionID)?.manifest
-        let perms = manifest?.permissions ?? []
+        let ext = await services.webExtensionStore.ext(for: extensionID)
+        let manifest = ext?.manifest
+        // Effective permissions = the manifest's declared permissions UNION the optional ones the user
+        // granted at runtime via chrome.permissions.request. An EWE-based blocker (AdBlock/ABP) can
+        // declare declarativeNetRequest as OPTIONAL and request it on first run, so gating on the declared
+        // set alone rejected every DNR call ("declarativeNetRequest permission not granted") and the
+        // blocker couldn't register any rules. The diagnostic names the actual state so the next device
+        // log distinguishes a genuine absence from a manifest-lookup miss (the userScripts gate's lesson).
+        let granted = await services.webExtensionPermissionGrants.granted(extensionID: extensionID)
+        let perms = Set(manifest?.permissions ?? []).union(granted.permissions)
         guard perms.contains("declarativeNetRequest") || perms.contains("declarativeNetRequestWithHostAccess") else {
-            return ["error": "declarativeNetRequest permission not granted"]
+            return ["error": "declarativeNetRequest permission not granted (extLoaded=\(ext != nil) "
+                + "mv=\(manifest?.manifestVersion ?? 0) perms=[\(perms.sorted().joined(separator: ","))])"]
         }
         do {
             switch method {
