@@ -632,6 +632,9 @@ extension BrownBearBrowserViewController: BrownBearTabGridControllerDelegate {
         tabManager.setActiveTab(tab)
         tabGridTransition.selectedCardImage = controller.selectedCardImage
         tabGridTransition.selectedCardFrame = controller.selectedCardFrame
+        // The card snapshot is a render of the web view's content area; grow it to that area (window
+        // coords) so it lands 1:1 on the live page instead of over-zoomed (no zoom-out "snap" on dissolve).
+        tabGridTransition.selectedContentFrame = contentContainer.convert(contentContainer.bounds, to: nil)
         controller.dismiss(animated: true)
     }
 
