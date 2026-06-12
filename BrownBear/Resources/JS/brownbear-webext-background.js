@@ -3276,17 +3276,26 @@
   // declarativeNetRequest. We do NOT warn for the legitimate `*.user.js` install handoff (which a V2
   // manager registers as a blocking onBeforeRequest and which DOES work via the synthetic dispatch).
   var __bbWarnedBlockingWebRequest = false;
+  // Set once a NON-userscript blocking onBeforeRequest listener registers. Native reads it (gate) so a
+  // blocking webRequest extension's listeners are consulted on FRAME navigations — the one request class
+  // WKWebView lets us intercept (WKNavigationDelegate) — to block ad iframes / redirect-trackers. Static
+  // subresources (img/script/xhr) still have no WebKit hook; declarativeNetRequest covers those.
+  var __bbHasBlockingWebRequestListener = false;
   function __bbNoteBlockingWebRequest(filter, extraInfoSpec) {
-    if (__bbWarnedBlockingWebRequest) { return; }
     if (!Array.isArray(extraInfoSpec) || extraInfoSpec.indexOf('blocking') < 0) { return; }
     var urls = (filter && filter.urls) || [];
-    // The userscript-install listener targets only `*.user.js` and is genuinely honored — don't warn for it.
+    // The userscript-install listener targets only `*.user.js` and is genuinely honored — don't flag it.
     var userScriptOnly = urls.length > 0 && urls.every(function (u) { return /\.user\.js(\b|$)/i.test(String(u)); });
     if (userScriptOnly) { return; }
+    __bbHasBlockingWebRequestListener = true;
+    // Tell native a blocking webRequest extension is present, so the nav delegate consults it on frame
+    // navigations. Optional bridge (absent in headless/test contexts) — guarded.
+    try { if (typeof __bb_note_blocking_webrequest === 'function') { __bb_note_blocking_webrequest(); } } catch (e) {}
+    if (__bbWarnedBlockingWebRequest) { return; }
     __bbWarnedBlockingWebRequest = true;
-    __bb_log('warn', 'chrome.webRequest blocking/redirect listeners cannot intercept requests on ' +
-      'WKWebView (iOS) — this listener will never fire, so request blocking/modification here is inert. ' +
-      'Use declarativeNetRequest for network blocking.');
+    __bb_log('warn', 'chrome.webRequest blocking applies only to FRAME navigations on WKWebView (iOS) — ' +
+      'ad iframes / redirect-trackers ARE blocked, but static subresources (img/script/xhr) have no ' +
+      'WebKit interception hook. Use declarativeNetRequest for full subresource blocking.');
   }
   function makeWebRequestEvent(store) {
     return {
@@ -3393,6 +3402,40 @@
       for (var j = 0; j < entry.urls.length; j++) { if (__bbMatchPattern(entry.urls[j], url)) { return true; } }
     }
     return false;
+  };
+
+  // Native gate: does this worker have a (non-userscript) BLOCKING onBeforeRequest listener? Read on the
+  // navigation hot path so the per-frame decision dispatch only happens when a blocking webRequest
+  // extension is actually present (no cost for everyone else).
+  globalThis.__bbHasBlockingWebRequest = function () { return !!__bbHasBlockingWebRequestListener; };
+
+  // Run the blocking onBeforeRequest listeners for a FRAME navigation (`main_frame`/`sub_frame`) and
+  // return the aggregate decision as JSON — `{"cancel":true}`, `{"redirectUrl":"…"}`, or `''` (allow).
+  // Called by native from WKNavigationDelegate, the only request class WebKit lets us intercept; lets an
+  // MV2 webRequest blocker (uBO/ABP/AdBlock) actually block ad IFRAMES and redirect-trackers. First
+  // listener that cancels/redirects wins (Chrome's blocking-webRequest precedence).
+  globalThis.__bbWebRequestNavDecision = function (url, type, tabId) {
+    if (typeof url !== 'string' || !url || !__bbWebRequestOnBeforeRequest.length) { return ''; }
+    var t = (type === 'main_frame' || type === 'sub_frame') ? type : 'sub_frame';
+    var details = {
+      requestId: String(++__bbWebRequestSeq), url: url, method: 'GET',
+      frameId: t === 'sub_frame' ? 1 : 0, parentFrameId: t === 'sub_frame' ? 0 : -1,
+      tabId: (typeof tabId === 'number' ? tabId : -1), type: t, timeStamp: Date.now()
+    };
+    for (var i = 0; i < __bbWebRequestOnBeforeRequest.length; i++) {
+      var entry = __bbWebRequestOnBeforeRequest[i];
+      if (entry.types && entry.types.indexOf(t) < 0) { continue; }
+      var matches = !entry.urls || entry.urls.length === 0;
+      for (var j = 0; !matches && j < entry.urls.length; j++) { if (__bbMatchPattern(entry.urls[j], url)) { matches = true; } }
+      if (!matches) { continue; }
+      var r;
+      try { r = entry.fn(details); } catch (e) { continue; }
+      if (r && typeof r === 'object') {
+        if (r.cancel === true) { return JSON.stringify({ cancel: true }); }
+        if (typeof r.redirectUrl === 'string' && r.redirectUrl) { return JSON.stringify({ redirectUrl: r.redirectUrl }); }
+      }
+    }
+    return '';
   };
 
   var webRequest = {
