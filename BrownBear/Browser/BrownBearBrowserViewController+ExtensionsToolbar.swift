@@ -13,7 +13,9 @@ import UIKit
 
 extension BrownBearBrowserViewController {
 
-    /// Re-evaluate the toolbar icon whenever the extension set or the pin preference changes.
+    /// Re-evaluate the toolbar icon whenever the extension set or the pin preference changes — and on app
+    /// foreground, so a cold relaunch (where the single viewDidLoad refresh can race the extension store's
+    /// first load) re-shows the icon for an enabled, un-hidden extension instead of leaving it missing.
     func registerExtensionsToolbarObservers() {
         extensionsChangeObserver = NotificationCenter.default.addObserver(
             forName: .brownBearExtensionsDidChange, object: nil, queue: .main) { [weak self] _ in
@@ -21,6 +23,10 @@ extension BrownBearBrowserViewController {
         }
         extensionsToolbarPrefObserver = NotificationCenter.default.addObserver(
             forName: .brownBearExtensionsToolbarChanged, object: nil, queue: .main) { [weak self] _ in
+            self?.refreshExtensionsToolbarIcon()
+        }
+        extensionsToolbarActiveObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             self?.refreshExtensionsToolbarIcon()
         }
     }
