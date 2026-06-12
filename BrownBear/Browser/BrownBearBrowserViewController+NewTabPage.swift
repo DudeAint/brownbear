@@ -226,6 +226,16 @@ extension BrownBearBrowserViewController {
       background:linear-gradient(180deg,var(--text),var(--sub));-webkit-background-clip:text;
       -webkit-text-fill-color:transparent;}
     .hello .d{font-size:15px;line-height:1.45;color:var(--sub);margin:0 auto;max-width:330px;}
+    /* The "report a broken extension" CTA: a small rounded accent pill (graphite gradient, like the brand
+       chips) — a button, not a full card. Centered + non-intrusive, sits under the GitHub section. */
+    .cta{text-align:center;margin:18px 0 2px;}
+    .cta a{display:inline-flex;align-items:center;gap:7px;text-decoration:none;
+      background:linear-gradient(160deg,var(--g1),var(--g2));color:#fff;
+      font-size:13px;font-weight:600;letter-spacing:-.1px;padding:9px 16px;border-radius:999px;
+      box-shadow:inset 0 .5px 0 rgba(255,255,255,.22),0 5px 16px var(--s2);
+      transition:transform .16s cubic-bezier(.34,1.56,.64,1);}
+    .cta a:active{transform:scale(.94);}
+    .cta a svg{width:15px;height:15px;flex:none;}
     @media (max-width:380px){.grid{grid-template-columns:repeat(3,1fr);}}
     """
 
@@ -344,13 +354,12 @@ extension BrownBearBrowserViewController {
     </a>
     """
 
-    /// The "report a broken extension" CTA pinned to the bottom of every New Tab page. BrownBear's whole
-    /// pitch is running every Chrome/Firefox extension on iOS, so a broken one is the single most valuable
-    /// signal we can get — and the gap between "it's broken" and a *useful* report is where most reports
-    /// die. So the link opens a **prefilled** GitHub issue (label + title prefix + a body that asks for
-    /// exactly what we need to reproduce: which extension, the site, and the Logs-tab output), turning a
-    /// vague frustration into a one-tap, high-signal report. Copy is framed as a promise ("we want every
-    /// extension to work — tell us which one doesn't") rather than a chore, which converts far better.
+    /// The "report a broken extension" CTA — a small rounded accent pill (not a full card) under the
+    /// GitHub section. BrownBear's pitch is running every extension, so a broken one is the most valuable
+    /// signal we get, and the gap between "it's broken" and a *useful* report is where most reports die.
+    /// The pill still opens a **prefilled** GitHub issue (label + title prefix + a body asking for the
+    /// extension, the site, and the Logs-tab output) — the conversion win is kept; only the heavy card is
+    /// traded for a compact, non-intrusive accent button.
     private static var newTabIssueCTA: String {
         let body = """
         Thanks for helping make BrownBear run every extension — a few details get this fixed fast:
@@ -377,14 +386,7 @@ extension BrownBearBrowserViewController {
         let href = htmlEscape(components?.url?.absoluteString
             ?? "https://github.com/DudeAint/brownbear/issues/new")
         return """
-        <a class="row fade" style="animation-delay:.34s" href="\(href)">
-          <span class="g">\(glyphGithub)</span>
-          <span class="body">
-            <p class="t">An extension not working?</p>
-            <p class="d">We want every extension to run on BrownBear. Tell us which one broke and we'll fix it &mdash; tap to open a prefilled report.</p>
-          </span>
-          <span class="chev"></span>
-        </a>
+        <p class="cta fade" style="animation-delay:.36s"><a href="\(href)">\(glyphGithub)Extension not working? Report it</a></p>
         """
     }
 
