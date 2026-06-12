@@ -84,6 +84,12 @@ final class BrownBearTabGridController: UIViewController {
         // for users who never open one.
         modeControl.selectedSegmentIndex = showingPrivate ? 1 : 0
         modeControl.selectedSegmentTintColor = BrownBearTheme.Palette.accent
+        // The selected segment sits on the accent fill (near-black in light mode, near-WHITE in dark mode),
+        // so its label must use the contrasting on-accent colour or it goes invisible (white-on-white in
+        // dark, dark-on-dark in light). Unselected segments use the normal text colour over the control's
+        // default fill. Default UISegmentedControl text is `label`, which only contrasts in one mode.
+        modeControl.setTitleTextAttributes([.foregroundColor: BrownBearTheme.Palette.onAccent], for: .selected)
+        modeControl.setTitleTextAttributes([.foregroundColor: BrownBearTheme.Palette.textPrimary], for: .normal)
         modeControl.addTarget(self, action: #selector(modeChanged), for: .valueChanged)
         modeControl.translatesAutoresizingMaskIntoConstraints = false
         header.addSubview(modeControl)
@@ -150,7 +156,9 @@ final class BrownBearTabGridController: UIViewController {
         // A prominent "+" button floats at the bottom, Chrome-style.
         let plusConfig = UIImage.SymbolConfiguration(pointSize: 22, weight: .semibold)
         newTabButton.setImage(UIImage(systemName: "plus", withConfiguration: plusConfig), for: .normal)
-        newTabButton.tintColor = .white
+        // On-accent foreground (not hardcoded white): the accent fill is near-white in dark mode, where a
+        // white "+" would be invisible. onAccent is white in light mode, near-black in dark mode.
+        newTabButton.tintColor = BrownBearTheme.Palette.onAccent
         newTabButton.backgroundColor = BrownBearTheme.Palette.accent
         newTabButton.layer.cornerRadius = 28
         newTabButton.layer.shadowColor = UIColor.black.cgColor
