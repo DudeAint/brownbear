@@ -66,17 +66,43 @@ struct BrownBearDashboardView: View {
 
     // MARK: - Scripts tab
 
+    /// The compact header shown on an empty Scripts tab, above the recommended userscripts: a glyph, a
+    /// one-line explainer, and the explicit "Add a script" affordance (the toolbar "+" also adds one).
+    private var emptyScriptsIntro: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "doc.text.magnifyingglass")
+                .font(.system(size: 40, weight: .light))
+                .foregroundStyle(BBTheme.Color.accent.opacity(0.7))
+            Text("No userscripts yet").font(.headline).foregroundStyle(BBTheme.Color.textPrimary)
+            Text("Install a recommended script below, or add your own from the + button.")
+                .font(.subheadline)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(BBTheme.Color.textSecondary)
+            Button { addingScript = true } label: {
+                Text("Add a script").fontWeight(.semibold)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(BBTheme.Color.accent)
+            .padding(.top, 2)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 18)
+    }
+
     private var scriptsTab: some View {
         NavigationStack {
             Group {
                 if model.scripts.isEmpty {
-                    DashboardEmptyState(
-                        systemImage: "doc.text.magnifyingglass",
-                        title: "No userscripts yet",
-                        message: "Install a script to customize any site, or write a background script that runs on a schedule.",
-                        action: { addingScript = true },
-                        actionTitle: "Add a script"
-                    )
+                    // No scripts yet: a compact get-started hint, then the curated userscripts to install
+                    // in a tap — so the empty Scripts tab is a starting point, not a dead end.
+                    List {
+                        Section {
+                            emptyScriptsIntro
+                        }
+                        .listRowBackground(Color.clear)
+                        RecommendedScriptsSections()
+                    }
+                    .scrollContentBackground(.hidden)
                 } else {
                     List {
                         Section {
@@ -107,6 +133,11 @@ struct BrownBearDashboardView: View {
                         } header: {
                             Text("\(model.scripts.count) installed · \(model.enabledCount) enabled")
                                 .foregroundStyle(BBTheme.Color.textSecondary)
+                        }
+                        // The curated userscripts live with the userscripts (not the Extensions tab); hide
+                        // them while searching so a query only narrows the installed list.
+                        if model.scriptSearch.isEmpty {
+                            RecommendedScriptsSections(installedNames: model.scripts.map(\.displayName))
                         }
                     }
                     .scrollContentBackground(.hidden)
