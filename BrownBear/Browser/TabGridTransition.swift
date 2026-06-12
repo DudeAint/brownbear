@@ -94,14 +94,13 @@ final class TabGridTransitionAnimator: NSObject, UIViewControllerAnimatedTransit
             container.insertSubview(browserView, belowSubview: gridView)
         }
 
-        // The hero card sits on top, starting at the tapped card's frame and growing into the page.
-        // It grows to the page WIDTH, top-anchored, keeping the card's own aspect ratio (so the final
-        // frame has the same proportions as the image). That makes the whole motion a UNIFORM scale by
-        // width — the content enlarges at the same rate the frame does (≈2×), gently, instead of the
-        // aspect-fill "cover" that magnifies it ~3× to fill the much-taller screen (the aggressive zoom).
-        // The live page is revealed below the growing card, then the card dissolves into it.
+        // The hero is the page's own snapshot (≈ screen aspect ratio), so it grows from the tapped card's
+        // picture straight to the FULL page and ends perfectly centered on the live page beneath. Because
+        // the image and the screen share an aspect, aspect-fill scales it by ~the width ratio (≈2×, gentle)
+        // with only a sliver of crop — not the ~3× magnify you'd get filling a screen with a square-ish
+        // card thumbnail. Then the snapshot dissolves into the live page.
         let hero = UIImageView(image: image)
-        hero.contentMode = .scaleAspectFill   // aspect already matches the frame, so this never distorts
+        hero.contentMode = .scaleAspectFill
         let startCorner = BrownBearTheme.Metrics.cellCornerRadius
         hero.frame = heroFrame
         hero.layer.cornerRadius = startCorner
@@ -109,9 +108,7 @@ final class TabGridTransitionAnimator: NSObject, UIViewControllerAnimatedTransit
         hero.clipsToBounds = true
         container.addSubview(hero)
 
-        let imageAspect = image.size.width / max(image.size.height, 1)   // == the card frame's aspect
-        let finalFrame = CGRect(x: pageFrame.minX, y: pageFrame.minY,
-                                width: pageFrame.width, height: pageFrame.width / max(imageAspect, 0.01))
+        let finalFrame = pageFrame
 
         // Round the corners out to a square page edge. A CABasicAnimation is the reliable way to animate
         // a layer corner alongside a UIView animation (UIView.animate doesn't always carry cornerRadius).
@@ -137,8 +134,8 @@ final class TabGridTransitionAnimator: NSObject, UIViewControllerAnimatedTransit
             context.completeTransition(!context.transitionWasCancelled)
         }
 
-        // Dissolve the grown card into the live page over the back half, so the seam where the card image
-        // meets the real page (and a page that no longer matches its snapshot) cross-fades in cleanly.
+        // Dissolve the full-screen snapshot into the live page over the back half, so a page that no longer
+        // matches its snapshot cross-fades in rather than popping.
         UIView.animate(withDuration: duration * 0.45, delay: duration * 0.5,
                        options: [.curveEaseInOut]) {
             hero.alpha = 0
