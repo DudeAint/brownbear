@@ -75,6 +75,9 @@ final class BrownBearBrowserViewController: UIViewController {
     /// extensions button. Managed in BrownBearBrowserViewController+ExtensionsToolbar.swift.
     var extensionsChangeObserver: NSObjectProtocol?
     var extensionsToolbarPrefObserver: NSObjectProtocol?
+    /// App-foreground observer so the toolbar extensions icon re-shows after a cold relaunch (the
+    /// viewDidLoad refresh can race the extension store's first load). Managed in +ExtensionsToolbar.
+    var extensionsToolbarActiveObserver: NSObjectProtocol?
     /// The enabled extensions (with a chrome.action) the toolbar icon stands for, cached so a tap can act
     /// without re-fetching: one → open its popup, several → the list popover.
     var pinnedExtensionItems: [ExtensionListItem] = []
@@ -163,12 +166,21 @@ final class BrownBearBrowserViewController: UIViewController {
         refreshExtensionsToolbarIcon()
     }
 
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        // Re-evaluate the toolbar extensions icon once the view is fully on screen — the viewDidLoad
+        // refresh can run before the extension store's first load completes on a cold relaunch, which
+        // left the icon missing for an enabled, un-hidden extension. Idempotent, so no flicker.
+        refreshExtensionsToolbarIcon()
+    }
+
     deinit {
         if let chromeLayoutObserver { NotificationCenter.default.removeObserver(chromeLayoutObserver) }
         if let keyboardObserver { NotificationCenter.default.removeObserver(keyboardObserver) }
         if let openURLObserver { NotificationCenter.default.removeObserver(openURLObserver) }
         if let extensionsChangeObserver { NotificationCenter.default.removeObserver(extensionsChangeObserver) }
         if let extensionsToolbarPrefObserver { NotificationCenter.default.removeObserver(extensionsToolbarPrefObserver) }
+        if let extensionsToolbarActiveObserver { NotificationCenter.default.removeObserver(extensionsToolbarActiveObserver) }
     }
 
     override var preferredStatusBarStyle: UIStatusBarStyle {
