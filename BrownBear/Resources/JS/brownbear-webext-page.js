@@ -28,6 +28,65 @@
     catch (e) { return _Promise.reject(e); }
   }
 
+  // --- window.localStorage / sessionStorage polyfill ------------------------------------------------
+  // WKWebView gives the chrome-extension:// custom-scheme PAGE origin NO DOM storage, so window.localStorage
+  // is undefined. A page that touches it then throws "null is not an object" at init and never renders —
+  // ScriptCat's editor does `localStorage.getItem(...)` / `localStorage.lightMode = …`, Momentum reads
+  // `localStorage.firstSynchronized`, etc. Install a SYNCHRONOUS Storage polyfill (the only shape that
+  // works — localStorage is sync) so those pages run. A Proxy backs BOTH the method API (getItem/setItem/
+  // removeItem/clear/key/length) AND direct property access (`localStorage.foo = "x"`), exactly like a real
+  // Storage object; values are coerced to strings per spec.
+  //
+  // SCOPE: in-memory per page load for now — values do NOT yet persist across reloads (a native-backed
+  // snapshot is the follow-up). Unblocking the init-time crash is the immediate win; a page that re-reads
+  // its own writes within a session works fully. Installed at document-start, before any page script.
+  (function () {
+    function makeStorage() {
+      var store = _Object.create(null);
+      var api = {
+        getItem: function (k) { k = String(k); return _Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null; },
+        setItem: function (k, v) { store[String(k)] = String(v); },
+        removeItem: function (k) { delete store[String(k)]; },
+        clear: function () { for (var k in store) { delete store[k]; } },
+        key: function (i) { var ks = _Object.keys(store); i = i >> 0; return (i >= 0 && i < ks.length) ? ks[i] : null; }
+      };
+      return new Proxy(api, {
+        get: function (t, prop) {
+          if (prop === "length") { return _Object.keys(store).length; }
+          if (prop in t) { return t[prop]; }
+          if (typeof prop === "symbol") { return undefined; }
+          var k = String(prop);
+          return _Object.prototype.hasOwnProperty.call(store, k) ? store[k] : undefined;
+        },
+        set: function (t, prop, value) {
+          if (prop === "length" || prop in t) { return true; }   // never let a page clobber the API surface
+          store[String(prop)] = String(value); return true;
+        },
+        has: function (t, prop) { return prop === "length" || prop in t || _Object.prototype.hasOwnProperty.call(store, String(prop)); },
+        deleteProperty: function (t, prop) { if (prop in t) { return true; } delete store[String(prop)]; return true; },
+        ownKeys: function () { return _Object.keys(store); },
+        getOwnPropertyDescriptor: function (t, prop) {
+          var k = String(prop);
+          if (_Object.prototype.hasOwnProperty.call(store, k)) { return { value: store[k], writable: true, enumerable: true, configurable: true }; }
+          return _Object.getOwnPropertyDescriptor(t, prop);
+        }
+      });
+    }
+    // Only polyfill when the real one is missing or non-functional (a write/read round-trip that throws or
+    // doesn't stick) — never override a working Storage.
+    function needsPolyfill(name) {
+      try {
+        var s = W[name];
+        if (!s) { return true; }
+        var probe = "__bb_ls_probe__";
+        s.setItem(probe, "1"); var ok = s.getItem(probe) === "1"; s.removeItem(probe);
+        return !ok;
+      } catch (e) { return true; }
+    }
+    try { if (needsPolyfill("localStorage")) { _Object.defineProperty(W, "localStorage", { value: makeStorage(), configurable: true }); } } catch (e) {}
+    try { if (needsPolyfill("sessionStorage")) { _Object.defineProperty(W, "sessionStorage", { value: makeStorage(), configurable: true }); } } catch (e) {}
+  })();
+
   // navigator.serviceWorker BRIDGE. WKWebView exposes no Service Worker for the custom chrome-/moz-
   // extension:// scheme, so navigator.serviceWorker.controller is null and `.ready` never resolves.
   // Some popups talk to their MV3 worker ENTIRELY over SW client messaging — Stylus does
