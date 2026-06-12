@@ -40,6 +40,12 @@ final class BrownBearTabGridController: UIViewController {
     private var collectionView: UICollectionView!
     private var dataSource: UICollectionViewDiffableDataSource<Int, UUID>!
 
+    /// Snapshot + on-screen frame (window coordinates) of the card the user just tapped, captured at
+    /// selection time so the browser's hero transition can expand exactly that card into the full page.
+    /// Read once by the browser right after `didSelect`, then it presents/dismisses.
+    private(set) var selectedCardSnapshot: UIView?
+    private(set) var selectedCardFrame: CGRect = .zero
+
     /// The tabs currently displayed, scoped to the active mode.
     private var displayedTabs: [Tab] { showingPrivate ? tabManager.privateTabs : tabManager.normalTabs }
 
@@ -363,7 +369,21 @@ extension BrownBearTabGridController: UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         guard let tabID = dataSource.itemIdentifier(for: indexPath),
               let tab = tabManager.tab(for: tabID) else { return }
+        captureSelectedCard(at: indexPath)
         gridDelegate?.tabGrid(self, didSelect: tab)
+    }
+
+    /// Grab a lightweight snapshot of the tapped card and its frame in the window, for the hero
+    /// expand-into-page transition. If the cell isn't on screen (it always is on tap) we leave the
+    /// fields empty and the transition falls back to its soft fade.
+    private func captureSelectedCard(at indexPath: IndexPath) {
+        guard let cell = collectionView.cellForItem(at: indexPath) else {
+            selectedCardSnapshot = nil
+            selectedCardFrame = .zero
+            return
+        }
+        selectedCardSnapshot = cell.snapshotView(afterScreenUpdates: false)
+        selectedCardFrame = cell.convert(cell.bounds, to: nil)   // window coordinates == transition container
     }
 
     /// Per-tab long-press menu (Chrome/Safari pattern): act on a tab without first switching to it.
