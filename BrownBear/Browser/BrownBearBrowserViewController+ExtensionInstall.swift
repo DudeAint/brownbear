@@ -14,6 +14,14 @@ import UIKit
 
 extension BrownBearBrowserViewController {
 
+    /// The anchor a floating bottom affordance (the install banner, the toast) should sit ABOVE: the
+    /// toolbar in top-address-bar mode, but the omnibox container (`topChrome`) in BOTTOM-bar mode — where
+    /// the search bar sits between the toolbar and the content, so anchoring to the toolbar would land the
+    /// pill on top of the search bar.
+    private var bottomAffordanceTopAnchor: NSLayoutYAxisAnchor {
+        AppSettings.addressBarPosition == .bottom ? topChrome.topAnchor : toolbar.topAnchor
+    }
+
     /// Show, hide, or restyle the install banner based on whether `url` is an extension store *detail*
     /// page (Chrome, Edge, or Firefox) and whether that extension is already installed. Called on every
     /// active-tab navigation tick and after the banner's own Add/Remove completes.
@@ -168,7 +176,7 @@ extension BrownBearBrowserViewController {
             stack.bottomAnchor.constraint(equalTo: banner.bottomAnchor, constant: -10),
             banner.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
             banner.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
-            banner.bottomAnchor.constraint(equalTo: toolbar.topAnchor, constant: -10)
+            banner.bottomAnchor.constraint(equalTo: bottomAffordanceTopAnchor, constant: -10)
         ])
 
         UIView.animate(withDuration: 0.25) { banner.alpha = 1 }
@@ -230,7 +238,7 @@ extension BrownBearBrowserViewController {
             container.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             container.leadingAnchor.constraint(greaterThanOrEqualTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
             container.trailingAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
-            container.bottomAnchor.constraint(equalTo: toolbar.topAnchor, constant: -12)
+            container.bottomAnchor.constraint(equalTo: bottomAffordanceTopAnchor, constant: -12)
         ])
 
         UIView.animate(withDuration: 0.25, animations: { container.alpha = 1 }) { _ in
