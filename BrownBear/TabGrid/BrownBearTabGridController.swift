@@ -390,24 +390,24 @@ extension BrownBearTabGridController: UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         guard let tabID = dataSource.itemIdentifier(for: indexPath),
               let tab = tabManager.tab(for: tabID) else { return }
-        captureSelectedCard(at: indexPath)
+        captureSelectedCard(tab: tab, at: indexPath)
         gridDelegate?.tabGrid(self, didSelect: tab)
     }
 
-    /// Capture just the tapped card's PAGE PICTURE (its snapshot region, excluding the title strip) plus
-    /// that region's frame in the window, for the hero expand-into-page transition — so the picture grows
-    /// on its own and isn't shifted up by the title bar beneath it. The image lets the transition scale it
-    /// uniformly without stretch. Empty (→ the transition falls back to its fade) if the cell isn't on
-    /// screen or is showing a placeholder rather than a real snapshot.
-    private func captureSelectedCard(at indexPath: IndexPath) {
-        guard let cell = collectionView.cellForItem(at: indexPath) as? TabGridCell,
-              let hero = cell.heroSnapshot() else {
+    /// Capture what the hero transition needs to expand the tapped card into the page: the tab's own page
+    /// SNAPSHOT (≈ screen aspect, so it grows to a centered full screen gently) and the card's picture
+    /// region frame on screen (where it starts from — excluding the title strip). Empty (→ the transition
+    /// falls back to its fade) if the cell isn't on screen or the tab has no snapshot yet.
+    private func captureSelectedCard(tab: Tab, at indexPath: IndexPath) {
+        guard let snapshot = tab.snapshot,
+              let cell = collectionView.cellForItem(at: indexPath) as? TabGridCell,
+              let frame = cell.snapshotRegionFrame() else {
             selectedCardImage = nil
             selectedCardFrame = .zero
             return
         }
-        selectedCardImage = hero.image
-        selectedCardFrame = hero.frame   // window coordinates == transition container
+        selectedCardImage = snapshot
+        selectedCardFrame = frame   // window coordinates == transition container
     }
 
     /// Per-tab long-press menu (Chrome/Safari pattern): act on a tab without first switching to it.
