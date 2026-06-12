@@ -206,8 +206,15 @@ final class TabManager {
         let normals = normalTabs
         let records = normals.map { tab in
             TabSessionStore.Record(url: (tab.pendingURL ?? tab.state.url)?.absoluteString,
-                                   title: tab.state.displayTitle)
+                                   title: tab.state.displayTitle,
+                                   id: tab.id.uuidString)
         }
+        // Persist each tab's thumbnail (best-effort) so the grid shows a preview after relaunch, and drop
+        // snapshots for tabs no longer open so the cache can't grow without bound.
+        for tab in normals {
+            if let snapshot = tab.snapshot { TabSnapshotStore.save(snapshot, id: tab.id.uuidString) }
+        }
+        TabSnapshotStore.prune(keeping: Set(normals.map { $0.id.uuidString }))
         let activeIndex = activeTab.flatMap { active in normals.firstIndex { $0.id == active.id } }
         TabSessionStore.save(records: records, activeIndex: activeIndex)
     }

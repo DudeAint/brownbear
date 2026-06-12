@@ -14,9 +14,12 @@ import Foundation
 enum TabSessionStore {
 
     /// One restorable tab. `url` is nil for a tab sitting on the built-in New Tab page (no navigation yet).
+    /// `id` is the tab's stable id at persist time — the key for its saved thumbnail in TabSnapshotStore.
+    /// Optional so sessions written before snapshots existed still decode (their `id` is just nil).
     struct Record: Codable, Equatable {
         let url: String?
         let title: String
+        var id: String?
     }
 
     /// The restored session: the ordered records and the index (within them) of the tab that was active.

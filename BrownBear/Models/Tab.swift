@@ -168,6 +168,17 @@ final class Tab {
 
     // MARK: - Snapshot
 
+    /// Seed the title / url / thumbnail for a tab restored from the saved session, so the tab grid shows
+    /// the real title and preview BEFORE the tab is activated and actually loads. The pending URL still
+    /// drives the lazy load on activation; this only fills what the chrome shows in the meantime, and is
+    /// replaced by the live page's real state the moment the tab loads. (recomputeState doesn't run again
+    /// for an un-loaded tab, so the seeded values survive until then.)
+    func restoreForDisplay(url: URL?, title: String?, snapshot: UIImage?) {
+        if let url { state.url = url }
+        if let title, !title.isEmpty { state.title = title }
+        if let snapshot { self.snapshot = snapshot }
+    }
+
     /// Capture a thumbnail of the current page for the tab grid. No-op if the view has no size.
     func refreshSnapshot(completion: (() -> Void)? = nil) {
         guard webView.bounds.width > 0, webView.bounds.height > 0 else { completion?(); return }

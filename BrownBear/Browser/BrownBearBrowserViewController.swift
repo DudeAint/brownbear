@@ -227,15 +227,20 @@ final class BrownBearBrowserViewController: UIViewController {
 
         var restored: [Tab] = []
         for record in records {
+            // The saved title + thumbnail, seeded so the tab grid shows the real title and a preview for a
+            // restored tab BEFORE it's activated and actually loads (otherwise every tab read "New Tab").
+            let snapshot = record.id.flatMap { TabSnapshotStore.load(id: $0) }
             if let string = record.url, let url = URL(string: string),
                ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
                 let tab = tabManager.createTab(loading: url, activate: false)   // pending; loads on activate
                 tab.delegate = self
+                tab.restoreForDisplay(url: url, title: record.title, snapshot: snapshot)
                 restored.append(tab)
             } else {
                 let tab = tabManager.createTab(activate: false)
                 tab.delegate = self
                 loadNewTabPage(in: tab)
+                tab.restoreForDisplay(url: nil, title: record.title, snapshot: snapshot)
                 restored.append(tab)
             }
         }
