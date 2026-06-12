@@ -63,6 +63,12 @@ enum BrownBearTheme {
         //   og    → amber, exactly as before.
         /// Primary accent — cursor, active/selected glyphs, links, primary CTA fill.
         static let accent = themed(cleanLight: 0x1C1C1E, cleanDark: 0xF2F2F7, ogLight: 0xE0832F, ogDark: 0xFFB454)
+        /// The "on" fill for switches/toggles. The knob is white, so the fill must contrast with WHITE in
+        /// every mode — and plain `accent` is near-white in clean dark, which makes an on-switch read
+        /// white-on-white. Clean dark therefore uses a mid grey the white knob pops against (and that still
+        /// reads brighter than the dark off-track); the other families keep their accent, already a colour
+        /// the knob shows against.
+        static let toggleOn = themed(cleanLight: 0x1C1C1E, cleanDark: 0x8E8E93, ogLight: 0xE0832F, ogDark: 0xFFB454)
         /// A brighter pop for glows and the progress-bar head.
         static let accentBright = themed(cleanLight: 0x000000, cleanDark: 0xFFFFFF, ogLight: 0xFFB454, ogDark: 0xFFB454)
         /// Pressed/highlighted state of an accent fill.

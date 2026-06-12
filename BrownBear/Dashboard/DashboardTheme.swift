@@ -12,6 +12,9 @@ enum BBTheme {
 
     enum Color {
         static let accent = SwiftUI.Color(uiColor: BrownBearTheme.Palette.accent)
+        /// The "on" fill for switches/toggles — contrasts with the white knob in dark mode (plain `accent`
+        /// is near-white there, which made on-switches read white-on-white).
+        static let toggleOn = SwiftUI.Color(uiColor: BrownBearTheme.Palette.toggleOn)
         static let accentBright = SwiftUI.Color(uiColor: BrownBearTheme.Palette.accentBright)
         static let background = SwiftUI.Color(uiColor: BrownBearTheme.Palette.background)
         static let chrome = SwiftUI.Color(uiColor: BrownBearTheme.Palette.chrome)

@@ -55,7 +55,7 @@ struct ScriptRowView: View {
                 set: { newValue in Task { await model.setEnabled(script, newValue) } }
             ))
             .labelsHidden()
-            .tint(BBTheme.Color.accent)
+            .tint(BBTheme.Color.toggleOn)
         }
         .padding(.vertical, 6)
         .contentShape(Rectangle())

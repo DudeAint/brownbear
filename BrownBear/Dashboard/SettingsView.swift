@@ -56,6 +56,7 @@ struct SettingsView: View {
                     NotificationCenter.default.post(name: .brownBearChromeLayoutChanged, object: nil)
                 }
                 Toggle("Hide bar while scrolling", isOn: $hideBarsOnScroll)
+                    .tint(BBTheme.Color.toggleOn)
                 Text("The address bar slides away as you scroll down a page and returns when you scroll up. "
                     + "Set it at the top or, Safari-style, at the bottom (where the toolbar hides with it).")
                     .font(.caption)
@@ -64,6 +65,7 @@ struct SettingsView: View {
 
             Section("Media") {
                 Toggle("Keep videos inline", isOn: $keepVideosInline)
+                    .tint(BBTheme.Color.toggleOn)
                 Text("Stops a site or player from forcing a video fullscreen, so it stays in the page — handy "
                     + "for automation that needs the page visible while a video plays. You can still go "
                     + "fullscreen yourself with the video's button. Reopen BrownBear to apply.")
@@ -73,6 +75,7 @@ struct SettingsView: View {
 
             Section("Userscripts") {
                 Toggle("Update scripts automatically", isOn: $autoUpdateScripts)
+                    .tint(BBTheme.Color.toggleOn)
                 Text("Checks each script's @updateURL/@downloadURL for a newer @version and reinstalls it.")
                     .font(.caption)
                     .foregroundStyle(BBTheme.Color.textSecondary)
