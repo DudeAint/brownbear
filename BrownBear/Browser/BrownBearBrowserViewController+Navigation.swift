@@ -170,6 +170,32 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
             // conservative — explicit main_frame, no domain conditions, no self/no-op target), and capped at
             // a few redirects in a row so a misconfigured pair of rules can't loop. Anything else falls
             // through to .allow — a normal navigation is never broken.
+            // Diagnostic (Logs tab): a userstyle `.user.css` navigation that ISN'T diverted to the
+            // manager's install page (Stylus "install does nothing / the URL flickers then bounces back").
+            // Surfaces, on the very click, whether ANY DNR redirect rule is active and whether one matched
+            // this URL — so the failure is pinpointable (rules=0 → the rule never reached the matcher;
+            // rules=N matched=none → a URL/regex mismatch; matched=<install page> → the redirect computed
+            // but didn't apply) instead of the .user.css silently becoming a download. Gated to the rare
+            // install URL, logged under the extension(s) that own redirect rules (Stylus), so it's visible.
+            if isMainFrame, scheme == "http" || scheme == "https",
+               url.absoluteString.range(of: #"\.user\.(?:css|less|styl)(?:[?#]|$)"#, options: .regularExpression) != nil {
+                let ruleCount = injection.contentBlocker.redirectRules.count
+                let ownerIDs = Set(injection.contentBlocker.redirectRules.map(\.extensionID))
+                let matched = injection.contentBlocker.redirectTarget(
+                    for: url.absoluteString,
+                    extensionOrigin: { "\(WebExtensionSchemeHandler.scheme)://\($0)" })?.absoluteString
+                let urlStr = url.absoluteString
+                Task { @MainActor in
+                    let runtime = BrownBearServices.shared.webExtensionRuntime
+                    let targets = ownerIDs.isEmpty
+                        ? await BrownBearServices.shared.webExtensionStore.enabledExtensions().map(\.id)
+                        : Array(ownerIDs)
+                    for id in targets {
+                        await runtime.logFromPage(extensionID: id, level: "info",
+                            message: "[bb-install] \(urlStr) → dnrRedirectRules=\(ruleCount) matched=\(matched ?? "none")")
+                    }
+                }
+            }
             let key = ObjectIdentifier(webView)
             if isMainFrame, scheme == "http" || scheme == "https",
                (extensionRedirectDepth[key] ?? 0) < 5,
