@@ -69,13 +69,29 @@ extension WebExtensionBackgroundContext {
             let path = Self.packagePath(from: spec)
             guard !path.isEmpty else { return nil }
             let semaphore = DispatchSemaphore(value: 0)
-            var source: String?
+            var data: Data?
             Task {
-                source = await BrownBearServices.shared.webExtensionStore.text(extensionID: extensionID, path: path)
+                data = await BrownBearServices.shared.webExtensionStore.file(extensionID: extensionID, path: path)
                 semaphore.signal()
             }
             semaphore.wait()
-            return source
+            guard let data else {
+                // The packaged script wasn't found — importScripts throws and the WHOLE background fails to
+                // boot. Name the resolved path on the Logs tab so a missing/mis-pathed file is diagnosable
+                // instead of a bare "importScripts failed to load".
+                Task { @MainActor in
+                    await BrownBearServices.shared.webExtensionRuntime.logFromPage(
+                        extensionID: extensionID, level: "error",
+                        message: "importScripts: packaged file not found: '\(path)' (from '\(spec)')")
+                }
+                return nil
+            }
+            // LOSSY UTF-8 decode. A large packaged script — "I don't care about cookies" ships a big
+            // rules.js — with a single stray non-UTF-8 byte in a comment/string would make a STRICT
+            // String(data:encoding:.utf8) return nil and fail the whole import (its background never booted).
+            // Decode lossily (invalid bytes → U+FFFD) so the script still loads + parses; valid UTF-8 is
+            // byte-identical, so no regression for everyone else.
+            return String(decoding: data, as: UTF8.self)
         }
         context.setObject(importScript, forKeyedSubscript: "__bb_import_script" as NSString)
 
