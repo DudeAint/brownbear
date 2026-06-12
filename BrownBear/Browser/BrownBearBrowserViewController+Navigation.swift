@@ -143,10 +143,33 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
                 return
             }
 
-            // One-tap userscript install: opening a *.user.js in the main frame shows the install
-            // card instead of dumping raw JavaScript — the Tampermonkey/Greasemonkey behavior.
             let isMainFrame = navigationAction.targetFrame?.isMainFrame ?? true
             let scheme = url.scheme?.lowercased() ?? ""
+
+            // chrome.webRequest blocking on a SUB-FRAME navigation — the iframe-ad / redirect-tracker case
+            // WKWebView actually lets us intercept (WKNavigationDelegate). Static subresources have no hook,
+            // but ad IFRAMES do, so an MV2 webRequest blocker (uBO/ABP/AdBlock) can block them here. Gated on
+            // a blocking webRequest extension being present (read synchronously — zero cost otherwise). We run
+            // the extension's onBeforeRequest listeners in its worker; cancel/redirect → block the iframe (a
+            // redirect to a surrogate is treated as a block — close enough for ad-blocking, and avoids
+            // reloading the subframe). Async, so the decision handler is held and called EXACTLY once.
+            if !isMainFrame, scheme == "http" || scheme == "https",
+               BrownBearServices.shared.webExtensionRuntime.hasBlockingWebRequest {
+                let urlStr = url.absoluteString
+                let tabExtId = tabManager.tabs.first { $0.webView === webView }.map { webExtTabRegistry.id(for: $0.id) } ?? -1
+                Task { @MainActor in
+                    let outcome = await BrownBearServices.shared.webExtensionRuntime
+                        .webRequestNavDecision(url: urlStr, type: "sub_frame", tabId: tabExtId)
+                    switch outcome {
+                    case .allow: decisionHandler(.allow, preferences)
+                    case .cancel, .redirect: decisionHandler(.cancel, preferences)
+                    }
+                }
+                return
+            }
+
+            // One-tap userscript install: opening a *.user.js in the main frame shows the install
+            // card instead of dumping raw JavaScript — the Tampermonkey/Greasemonkey behavior.
             if isMainFrame,
                ["http", "https", "file"].contains(scheme),
                UserScriptInstaller.isUserScriptURL(url) {

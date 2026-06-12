@@ -300,6 +300,34 @@ class WebExtensionRuntime {
         return ids
     }
 
+    // MARK: - Blocking webRequest on frame navigations
+
+    /// The outcome of evaluating blocking webRequest.onBeforeRequest listeners for a frame navigation.
+    enum WebRequestNavOutcome { case allow, cancel, redirect(String) }
+
+    /// Whether any running worker has a (non-userscript) blocking webRequest.onBeforeRequest listener. Set
+    /// by the worker (via __bb_note_blocking_webrequest) the moment one registers, and read SYNCHRONOUSLY on
+    /// the navigation hot path so the per-frame decision dispatch is skipped entirely for everyone without
+    /// such an extension. Stays true for the session — a stale flag only costs a cheap allow-decision.
+    private(set) var hasBlockingWebRequest = false
+    func noteBlockingWebRequest(extensionID: String) { hasBlockingWebRequest = true }
+
+    /// The webRequest decision for a FRAME navigation across all running workers: the first listener that
+    /// cancels or redirects wins (Chrome's blocking precedence). `type` is "main_frame" / "sub_frame". This
+    /// is the one request class WKWebView lets us intercept (WKNavigationDelegate), so an MV2 webRequest
+    /// blocker can block ad iframes / redirect-trackers even though static subresources have no hook.
+    func webRequestNavDecision(url: String, type: String, tabId: Int) async -> WebRequestNavOutcome {
+        for extID in contexts.keys.sorted() {
+            guard let context = contexts[extID] else { continue }
+            let json = await context.webRequestNavDecision(url: url, type: type, tabId: tabId)
+            guard !json.isEmpty, let data = json.data(using: .utf8),
+                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { continue }
+            if (obj["cancel"] as? Bool) == true { return .cancel }
+            if let redirect = obj["redirectUrl"] as? String, !redirect.isEmpty { return .redirect(redirect) }
+        }
+        return .allow
+    }
+
     /// Hand a `.user.js` navigation to ONE userscript manager's worker (picker routing), through BOTH
     /// detection channels a manager may use — webRequest.onBeforeRequest (Violentmonkey) AND webNavigation
     /// onBeforeNavigate/onCommitted/onCompleted (Tampermonkey, whose default `scriptUrlDetection:"auto"`

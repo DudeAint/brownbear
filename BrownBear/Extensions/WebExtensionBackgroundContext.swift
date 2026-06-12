@@ -319,6 +319,26 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
         }
     }
 
+    /// Run this worker's BLOCKING webRequest.onBeforeRequest listeners for a FRAME navigation (the one
+    /// request class WKWebView lets us intercept) and return the decision JSON the worker produced:
+    /// `{"cancel":true}`, `{"redirectUrl":"…"}`, or `""` (allow). Lets an MV2 webRequest blocker block ad
+    /// iframes / redirect-trackers; static subresources have no WebKit hook (declarativeNetRequest covers
+    /// those). `type` is `"main_frame"` or `"sub_frame"`.
+    func webRequestNavDecision(url: String, type: String, tabId: Int) async -> String {
+        await withCheckedContinuation { (continuation: CheckedContinuation<String, Never>) in
+            queue.async { [self] in
+                guard isAlive, let context else { continuation.resume(returning: ""); return }
+                context.setObject(url, forKeyedSubscript: "__bbPendingWRUrl" as NSString)
+                context.setObject(type, forKeyedSubscript: "__bbPendingWRType" as NSString)
+                context.setObject(tabId, forKeyedSubscript: "__bbPendingWRTab" as NSString)
+                let result = context.evaluateScript(
+                    "(typeof __bbWebRequestNavDecision === 'function')"
+                    + " ? String(__bbWebRequestNavDecision(__bbPendingWRUrl, __bbPendingWRType, __bbPendingWRTab) || '') : ''")
+                continuation.resume(returning: result?.toString() ?? "")
+            }
+        }
+    }
+
     /// Fire a synthetic `webNavigation` sequence (onBeforeNavigate → onCommitted → onCompleted) for a
     /// `.user.js` main-frame navigation into THIS worker, with a REAL tab id. The webRequest twin above
     /// covers managers that install from `onBeforeRequest` (Violentmonkey); this covers managers that
@@ -383,6 +403,15 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
             self.logSink(self.makeLog(LogEntry.Level(rawValue: level) ?? .info, message))
         }
         context.setObject(log, forKeyedSubscript: "__bb_log" as NSString)
+
+        // The worker flags itself the first time a (non-userscript) blocking webRequest.onBeforeRequest
+        // listener registers, so the navigation delegate consults it on frame loads (the only request class
+        // WKWebView lets us intercept) instead of paying that cost for every extension.
+        let extID = extensionID
+        let noteBlockingWR: @convention(block) () -> Void = {
+            Task { @MainActor in BrownBearServices.shared.webExtensionRuntime.noteBlockingWebRequest(extensionID: extID) }
+        }
+        context.setObject(noteBlockingWR, forKeyedSubscript: "__bb_note_blocking_webrequest" as NSString)
 
         installStorageNatives(into: context)
         installAlarmNatives(into: context)
