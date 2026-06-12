@@ -357,6 +357,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
         installCookiesNatives(into: context)
         installNotificationNatives(into: context)
         installActionNatives(into: context)
+        installSidePanelNatives(into: context)
         installWindowsManagementPermissionsNatives(into: context)
         installDNRAndUserScriptNatives(into: context)
         installCryptoNatives(into: context)

@@ -2806,6 +2806,14 @@
       __bb_action(method, JSON.stringify(args || {}), function (resJSON) { resolve(parseJSON(resJSON)); });
     });
   }
+  // chrome.sidePanel ↔ native bridge (__bb_sidepanel). Resolves null when the bridge is absent
+  // (headless / tests), so the sidePanel methods degrade to graceful no-ops there.
+  function sidePanelCall(method, args) {
+    return new Promise(function (resolve) {
+      if (typeof __bb_sidepanel !== 'function') { resolve(null); return; }
+      __bb_sidepanel(method, JSON.stringify(args || {}), function (resJSON) { resolve(parseJSON(resJSON)); });
+    });
+  }
   function actionSetter(method) {
     return function (details, cb) {
       details = details || {};
@@ -4138,17 +4146,36 @@
         try { return (element && element.shadowRoot) || null; } catch (e) { return null; }
       }
     },
-    // chrome.sidePanel — Chrome 114+ side-panel API. Grammarly, Bing, and several productivity
-    // extensions register a side panel. iOS has no persistent side-panel surface, so these resolve
-    // as graceful no-ops (open/setOptions resolve; getOptions returns {}) rather than throwing
-    // "chrome.sidePanel is undefined" and killing the background worker's init flow.
+    // chrome.sidePanel — Chrome 114+ side-panel API. iOS has no docked panel surface, so open() presents
+    // the extension's side-panel page as a sheet (the real page, full chrome.* bridge), and the
+    // setOptions/setPanelBehavior state is held natively so getOptions/getPanelBehavior round-trip and a
+    // toolbar tap can open the panel when openPanelOnActionClick is set. Routed through __bb_sidepanel; if
+    // that native bridge is absent (headless/test) the calls resolve as graceful no-ops.
     sidePanel: {
-      open: function (options, cb) { return settleBg(Promise.resolve(undefined), cb); },
-      setOptions: function (options, cb) { return settleBg(Promise.resolve(undefined), cb); },
-      getOptions: function (options, cb) { return settleBg(Promise.resolve({}), cb); },
+      open: function (options, cb) {
+        if (typeof options === 'function') { cb = options; options = undefined; }
+        return settleBg(sidePanelCall('open', (options && typeof options === 'object') ? options : {})
+          .then(function () { return undefined; }), cb);
+      },
+      setOptions: function (options, cb) {
+        return settleBg(sidePanelCall('setOptions', (options && typeof options === 'object') ? options : {})
+          .then(function () { return undefined; }), cb);
+      },
+      getOptions: function (options, cb) {
+        if (typeof options === 'function') { cb = options; options = undefined; }
+        return settleBg(sidePanelCall('getOptions', (options && typeof options === 'object') ? options : {})
+          .then(function (r) { return r || {}; }), cb);
+      },
+      setPanelBehavior: function (behavior, cb) {
+        return settleBg(sidePanelCall('setPanelBehavior', (behavior && typeof behavior === 'object') ? behavior : {})
+          .then(function () { return undefined; }), cb);
+      },
+      getPanelBehavior: function (cb) {
+        return settleBg(sidePanelCall('getPanelBehavior', {})
+          .then(function (r) { return r || { openPanelOnActionClick: false }; }), cb);
+      },
+      // setPanel is the deprecated pre-114 form; keep it a resolved no-op (no native state behind it).
       setPanel: function (options, cb) { return settleBg(Promise.resolve(undefined), cb); },
-      setPanelBehavior: function (behavior, cb) { return settleBg(Promise.resolve(undefined), cb); },
-      getPanelBehavior: function (cb) { return settleBg(Promise.resolve({ openPanelOnActionClick: false }), cb); },
       onShown: makeEvent([]),
       onHidden: makeEvent([])
     },
