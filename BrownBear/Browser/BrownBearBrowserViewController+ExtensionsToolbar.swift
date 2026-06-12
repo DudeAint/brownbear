@@ -61,6 +61,15 @@ extension BrownBearBrowserViewController {
             }
             self.pinnedExtensionItems = items
             self.toolbar.setExtensionsIconVisible(!AppSettings.extensionsToolbarHidden && !items.isEmpty)
+            // A single pinned extension → the toolbar icon IS that extension (its own icon + live badge),
+            // since a tap opens it directly. Several → the generic puzzle glyph.
+            if let only = items.first, items.count == 1 {
+                self.toolbar.setExtensionsIcon(image: only.icon, badge: only.badge,
+                                               badgeBackground: only.badgeBackground,
+                                               badgeForeground: only.badgeForeground)
+            } else {
+                self.toolbar.setExtensionsIcon(image: nil, badge: nil, badgeBackground: nil, badgeForeground: nil)
+            }
         }
     }
 
@@ -129,16 +138,39 @@ extension BrownBearBrowserViewController {
         }
     }
 
-    /// Long-press: manage extensions, or hide the button from the toolbar (re-show it from the
-    /// Extensions tab's "Show in toolbar" toggle).
+    /// Long-press: when a SINGLE extension is pinned (the icon IS that extension), offer its actions
+    /// directly — open popup/options/side panel, Manage Extensions, Uninstall — plus Unpin. With several
+    /// pinned (a tap opens the list popover where each row has its own hold-menu), just Manage / Unpin.
     func toolbarDidLongPressExtensions(_ toolbar: BrowserToolbar) {
+        let items = pinnedExtensionItems
         let sheet = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
+        if let item = items.first, items.count == 1 {
+            if item.hasPopup {
+                sheet.addAction(UIAlertAction(title: "Open Popup", style: .default) { [weak self] _ in
+                    self?.presentActionPopup(extensionID: item.id)
+                })
+            }
+            if item.hasOptions {
+                sheet.addAction(UIAlertAction(title: "Options", style: .default) { [weak self] _ in
+                    _ = self?.webExtOpenOptionsPage(extensionID: item.id)
+                })
+            }
+            if item.hasSidebar {
+                sheet.addAction(UIAlertAction(title: "Side Panel", style: .default) { [weak self] _ in
+                    self?.webExtPresentSidePanel(extensionID: item.id)
+                })
+            }
+        }
         sheet.addAction(UIAlertAction(title: "Manage Extensions", style: .default) { [weak self] _ in
             self?.presentDashboard(initialTab: .extensions)
         })
-        sheet.addAction(UIAlertAction(title: "Hide from Toolbar", style: .default) { _ in
-            AppSettings.extensionsToolbarHidden = true
-            NotificationCenter.default.post(name: .brownBearExtensionsToolbarChanged, object: nil)
+        if let item = items.first, items.count == 1 {
+            sheet.addAction(UIAlertAction(title: "Uninstall \(item.name)", style: .destructive) { [weak self] _ in
+                self?.handleExtensionRowAction(.uninstall, item)
+            })
+        }
+        sheet.addAction(UIAlertAction(title: "Unpin from Toolbar", style: .default) { [weak self] _ in
+            self?.unpinExtensionsToolbarIcon()
         })
         sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         // iPad anchors an action sheet to a source rect; harmless on iPhone (presents from the bottom).

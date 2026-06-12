@@ -77,6 +77,15 @@ final class BrowserToolbar: UIView {
         extensionsButton.isHidden = !visible
     }
 
+    /// Drive the pinned button's appearance: with a SINGLE pinned extension, show ITS own icon and live
+    /// action badge (a tap opens it directly, so the icon canonically IS that extension, like Chrome);
+    /// with several, fall back to the generic puzzle glyph and no badge.
+    func setExtensionsIcon(image: UIImage?, badge: String?,
+                           badgeBackground: UIColor?, badgeForeground: UIColor?) {
+        extensionsButton.setCustomImage(image, fallbackSymbol: "puzzlepiece.extension.fill")
+        extensionsButton.setBadge(badge, background: badgeBackground, foreground: badgeForeground)
+    }
+
     func update(canGoBack: Bool, canGoForward: Bool, tabCount: Int) {
         backButton.isEnabled = canGoBack
         forwardButton.isEnabled = canGoForward
