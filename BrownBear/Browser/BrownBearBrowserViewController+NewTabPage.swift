@@ -28,10 +28,42 @@ extension BrownBearBrowserViewController {
             return
         }
         Task { @MainActor in
+            // A chrome_url_overrides.newtab extension (Momentum, Tabliss, …) replaces the New Tab page.
+            // Normal tabs can't load chrome-extension:// (their config has no per-extension scheme handler),
+            // so swap this placeholder for a tab carrying the extension's page-session configuration. We
+            // create the replacement BEFORE closing the placeholder so there's never a no-active-tab gap.
+            // Skipped for private tabs (Chrome doesn't apply newtab overrides in incognito) and the common
+            // no-override case, so the built-in NTP is unaffected for everyone without such an extension.
+            if let (ext, path) = await firstNewTabOverride() {
+                let session = WebExtensionPageSession(ext: ext, kind: .newtab, path: path)
+                if session.pageURL != nil {
+                    let configuration = await session.makeConfiguration()
+                    guard let url = session.pageURL else { return }
+                    let wasActive = tabManager.activeTabID == tab.id
+                    let newTab = tabManager.createTab(adopting: configuration, activate: wasActive, isPrivate: false)
+                    newTab.delegate = self
+                    newTab.onClose = { session.invalidate() }   // retain the session for the tab's life
+                    session.bind(to: newTab.webView)            // wire ports + live storage/cookie push before load
+                    newTab.load(url)
+                    tabManager.closeTab(id: tab.id)             // drop the placeholder now that newTab exists + is active
+                    return
+                }
+            }
             let bookmarks = await BrownBearServices.shared.bookmarkStore.all()
             let visited = await BrownBearServices.shared.historyStore.topSites(limit: 8)
             tab.webView.loadHTMLString(Self.newTabHTML(bookmarks: bookmarks, visited: visited), baseURL: nil)
         }
+    }
+
+    /// The first enabled extension that overrides the New Tab page (`chrome_url_overrides.newtab`) with its
+    /// override path, or nil when none declares one (the common case, so the built-in NTP is untouched).
+    /// The store's enabled order is a deterministic precedence; Chrome's last-installed-wins isn't modeled
+    /// (rare to have two newtab-override extensions enabled at once).
+    private func firstNewTabOverride() async -> (ext: WebExtension, path: String)? {
+        for ext in await BrownBearServices.shared.webExtensionStore.enabledExtensions() {
+            if let path = ext.manifest?.newTabOverride, !path.isEmpty { return (ext, path) }
+        }
+        return nil
     }
 
     // MARK: - HTML builders

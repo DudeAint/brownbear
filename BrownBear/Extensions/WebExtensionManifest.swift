@@ -90,6 +90,10 @@ struct WebExtensionManifest: Equatable {
     var contentSecurityPolicy: String?
     var declarativeNetRequest: [DNRRuleset]
     var commands: [Command]
+    /// `chrome_url_overrides.newtab` — a packaged page that replaces the browser's New Tab page
+    /// (Momentum, Tabliss, …). Same key in MV2 and MV3. nil when the extension declares no override.
+    /// Defaulted so the synthesized memberwise initializer stays source-compatible with existing callers.
+    var newTabOverride: String? = nil
 
     // MARK: - Parsing
 
@@ -154,6 +158,9 @@ struct WebExtensionManifest: Equatable {
             optionsOpenInTab = true
         }
 
+        // chrome_url_overrides.newtab — a packaged page replacing the New Tab page (same key MV2/MV3).
+        let newTabOverride = (json["chrome_url_overrides"] as? [String: Any])?["newtab"] as? String
+
         let csp: String?
         if let cspString = json["content_security_policy"] as? String {
             csp = cspString
@@ -192,7 +199,8 @@ struct WebExtensionManifest: Equatable {
             optionsOpenInTab: optionsOpenInTab,
             contentSecurityPolicy: csp,
             declarativeNetRequest: dnr,
-            commands: commands)
+            commands: commands,
+            newTabOverride: newTabOverride)
     }
 
     // MARK: - Field parsers
