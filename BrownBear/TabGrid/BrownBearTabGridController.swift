@@ -78,20 +78,35 @@ final class BrownBearTabGridController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        // On first open, center the grid on the tab you're currently in instead of always snapping to the
-        // top — you land near the open tab. Once only, after the layout has a real size, so any scrolling
-        // you do afterwards sticks.
-        guard !didCenterOnActiveTab, collectionView.bounds.height > 0 else { return }
-        didCenterOnActiveTab = true
-        centerOnActiveTab(animated: false)
+        centerOnActiveTabIfNeeded()
     }
 
-    /// Scroll so the active tab's card is centered (clamped at the ends). No-op if it isn't in the current
-    /// mode's set — but the grid opens in the active tab's mode, so on first open it always is.
-    private func centerOnActiveTab(animated: Bool) {
-        guard let activeID = tabManager.activeTabID,
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        // Safety net: if the layout passes during presentation never resolved a real content size (so the
+        // primary attempt above hasn't run yet), center now that everything is laid out. Flag-guarded, so
+        // it's a no-op in the normal case where viewDidLayoutSubviews already handled it.
+        centerOnActiveTabIfNeeded()
+    }
+
+    /// On first open, center the grid on the tab you're currently in instead of always snapping to the top.
+    /// Done once, so manual scrolling afterwards sticks — but ONLY once the layout has a real content size:
+    /// `updateItemSize()` runs in viewWillLayoutSubviews and invalidates the flow layout, so the first
+    /// viewDidLayoutSubviews here can still hold a stale/zero content size, and scrolling then just clamps
+    /// to the top (the "always starts at the top" bug). Force the pending layout to resolve and only commit
+    /// the one-shot once there's actually a laid-out grid to scroll within.
+    private func centerOnActiveTabIfNeeded() {
+        guard !didCenterOnActiveTab,
+              collectionView.bounds.height > 0,
+              let activeID = tabManager.activeTabID,
               let indexPath = dataSource.indexPath(for: activeID) else { return }
-        collectionView.scrollToItem(at: indexPath, at: .centeredVertically, animated: animated)
+        collectionView.layoutIfNeeded()   // resolve the item-size invalidation → real contentSize
+        let contentHeight = collectionView.collectionViewLayout.collectionViewContentSize.height
+        guard contentHeight > 0 else { return }   // not laid out yet — retry on the next layout pass
+        didCenterOnActiveTab = true
+        // If the whole grid already fits, the active card is on screen — nothing to scroll.
+        guard contentHeight > collectionView.bounds.height else { return }
+        collectionView.scrollToItem(at: indexPath, at: .centeredVertically, animated: false)
     }
 
     // MARK: - Header
