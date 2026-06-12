@@ -342,6 +342,14 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
         }
         context.setObject(noteBlockingWR, forKeyedSubscript: "__bb_note_blocking_webrequest" as NSString)
 
+        // The worker flags itself the first time an action/pageAction.onClicked listener registers, so the
+        // toolbar-tap path can tell a click-handling extension from a configure-only one: a no-popup action
+        // with no onClicked handler opens the extension's options page instead of firing a click into the void.
+        let noteActionClicked: @convention(block) () -> Void = {
+            Task { @MainActor in BrownBearServices.shared.webExtensionRuntime.noteActionClickedListener(extensionID: extID) }
+        }
+        context.setObject(noteActionClicked, forKeyedSubscript: "__bb_note_action_onclicked" as NSString)
+
         installStorageNatives(into: context)
         installAlarmNatives(into: context)
         installTimerNatives(into: context)
