@@ -12,8 +12,14 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # A PR's runs supersede each other (a fresh push cancels the last, sparing the macOS runner pool), but
+  # every push to main gets a UNIQUE per-commit group that is NEVER cancelled. Previously the group was
+  # keyed only on `github.ref`, which is `refs/heads/main` for ALL main pushes — so merging two PRs close
+  # together made the second merge's run cancel the first merge's still-running main CI, leaving merged
+  # commits with a cancelled (never-completed) run on main. Now: PRs key on the PR number (supersede on),
+  # pushes key on the commit SHA (supersede off), so each merge keeps its own complete main CI run.
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
