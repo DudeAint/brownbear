@@ -100,6 +100,19 @@ final class WebExtensionManifestTests: XCTestCase {
         XCTAssertEqual(meta.webAccessibleResources.first?.resources, ["img/*"])
         XCTAssertEqual(meta.contentSecurityPolicy, "script-src 'self'")
         XCTAssertFalse(meta.isFirefoxBuild, "a plain Chrome MV3 manifest is not a Firefox build")
+        XCTAssertNil(meta.newTabOverride, "no chrome_url_overrides → no newtab override")
+    }
+
+    /// `chrome_url_overrides.newtab` (Momentum, Tabliss) — the page that replaces the New Tab page. Same
+    /// key in MV2 and MV3; absent → nil so the built-in NTP stays in effect.
+    func testParsesNewTabOverride() throws {
+        let mv3 = #"{"manifest_version":3,"name":"M","version":"1","chrome_url_overrides":{"newtab":"index.html"}}"#
+        XCTAssertEqual(try WebExtensionManifest.parse(Data(mv3.utf8)).newTabOverride, "index.html")
+        let mv2 = #"{"manifest_version":2,"name":"M","version":"1","chrome_url_overrides":{"newtab":"page/start.html"}}"#
+        XCTAssertEqual(try WebExtensionManifest.parse(Data(mv2.utf8)).newTabOverride, "page/start.html")
+        // Only `newtab` is consumed here; a bookmarks/history override (or none) yields nil.
+        let other = #"{"manifest_version":3,"name":"M","version":"1","chrome_url_overrides":{"history":"h.html"}}"#
+        XCTAssertNil(try WebExtensionManifest.parse(Data(other.utf8)).newTabOverride)
     }
 
     /// Firefox builds (declaring `browser_specific_settings.gecko` or the legacy `applications.gecko`)

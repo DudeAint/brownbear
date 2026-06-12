@@ -23,12 +23,18 @@ final class WebExtensionPageSession {
         /// An MV3 `chrome.offscreen` document — the same page engine, but hosted in a hidden WKWebView
         /// (no UI) so a DOM-less service worker can do DOM work. Always loads an explicit packaged path.
         case offscreen
+        /// A `chrome_url_overrides.newtab` page (Momentum, Tabliss, …) shown in a real tab IN PLACE of the
+        /// built-in New Tab page. Same page engine as options (full UI + chrome.* bridge); always loads an
+        /// explicit packaged path. Normal tabs can't load chrome-extension://, so a new tab that should show
+        /// an override is created with this session's per-extension configuration instead.
+        case newtab
 
         var title: String {
             switch self {
             case .popup: return "Popup"
             case .options: return "Options"
             case .offscreen: return "Offscreen document"
+            case .newtab: return "New Tab"
             }
         }
 
@@ -41,6 +47,7 @@ final class WebExtensionPageSession {
             case .popup: return "popup"
             case .options: return "options"
             case .offscreen: return "offscreen"
+            case .newtab: return "newtab"
             }
         }
     }
@@ -102,6 +109,7 @@ final class WebExtensionPageSession {
         case .popup: return ext.manifest?.action?.defaultPopup
         case .options: return ext.manifest?.optionsPage
         case .offscreen: return nil   // offscreen always supplies an explicit path (handled above)
+        case .newtab: return ext.manifest?.newTabOverride
         }
     }
 
@@ -316,7 +324,7 @@ extension WebExtensionPageSession: WebExtensionEventReceiver {
         let contextType: String
         switch kind {
         case .popup: contextType = "POPUP"
-        case .options: contextType = "TAB"
+        case .options, .newtab: contextType = "TAB"
         case .offscreen: contextType = "OFFSCREEN_DOCUMENT"
         }
         // An offscreen document isn't associated with a top frame or a window — Chrome reports
