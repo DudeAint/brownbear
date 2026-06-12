@@ -196,6 +196,22 @@ final class TabManager {
         tabs = reordered + rest
     }
 
+    // MARK: - Session persistence
+
+    /// Persist the current NORMAL tabs (url + title, in order) and which one is active, so they're
+    /// restored after the app closes. Private tabs are excluded (incognito leaves no trace). A tab still
+    /// on the New Tab page (or one restored-but-not-yet-loaded) keeps its pending URL so the right page
+    /// comes back. Cheap; call on app background and after structural tab changes.
+    func persistSession() {
+        let normals = normalTabs
+        let records = normals.map { tab in
+            TabSessionStore.Record(url: (tab.pendingURL ?? tab.state.url)?.absoluteString,
+                                   title: tab.state.displayTitle)
+        }
+        let activeIndex = activeTab.flatMap { active in normals.firstIndex { $0.id == active.id } }
+        TabSessionStore.save(records: records, activeIndex: activeIndex)
+    }
+
     // MARK: - Recently closed
 
     /// Record a closed normal tab so it can be reopened. Private tabs leave no trace.
