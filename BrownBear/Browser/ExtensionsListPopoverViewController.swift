@@ -270,7 +270,9 @@ final class ExtensionsListPopoverViewController: UIViewController {
             open.append(UIAction(title: "Side Panel", image: UIImage(systemName: "sidebar.right")) { [weak self] _ in self?.act(.sidebar, item) })
         }
         let manage = UIAction(title: "Manage Extensions", image: UIImage(systemName: "gearshape")) { [weak self] _ in self?.act(.manage, item) }
-        let uninstall = UIAction(title: "Uninstall \(item.name)", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in self?.act(.uninstall, item) }
+        let uninstall = UIAction(title: "Uninstall \(item.name)",
+                                 image: UIImage(systemName: "trash"),
+                                 attributes: .destructive) { [weak self] _ in self?.act(.uninstall, item) }
         // Inline sections so Manage sits right above Uninstall, both below the open actions.
         var sections: [UIMenuElement] = []
         if !open.isEmpty { sections.append(UIMenu(options: .displayInline, children: open)) }
