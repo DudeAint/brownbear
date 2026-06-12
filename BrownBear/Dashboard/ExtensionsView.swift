@@ -168,7 +168,7 @@ struct ExtensionsView: View {
                 Label("Show in toolbar", systemImage: "puzzlepiece.extension")
                     .foregroundStyle(BBTheme.Color.textPrimary)
             }
-            .tint(BBTheme.Color.accent)
+            .tint(BBTheme.Color.toggleOn)
             .listRowBackground(BBTheme.Color.card)
         } footer: {
             Text("Adds a quick extensions button to the browser's bottom toolbar. Long-press it to hide it again.")
@@ -288,7 +288,7 @@ struct ExtensionsView: View {
                 get: { ext.enabled },
                 set: { newValue in Task { await model.setEnabled(ext, newValue) } }
             ))
-            .labelsHidden().tint(BBTheme.Color.accent)
+            .labelsHidden().tint(BBTheme.Color.toggleOn)
         }
         .padding(.vertical, 4)
         .swipeActions {

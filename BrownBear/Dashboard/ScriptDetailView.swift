@@ -134,7 +134,7 @@ struct ScriptDetailView: View {
                         get: { current.enabled },
                         set: { newValue in Task { await model.setEnabled(current, newValue) } }
                     ))
-                    .labelsHidden().tint(BBTheme.Color.accent)
+                    .labelsHidden().tint(BBTheme.Color.toggleOn)
                 }
                 if let description = meta.descriptionText, !description.isEmpty {
                     Text(description).font(.subheadline).foregroundStyle(BBTheme.Color.textSecondary)
