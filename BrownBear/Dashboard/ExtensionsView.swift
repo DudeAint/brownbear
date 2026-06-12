@@ -100,6 +100,7 @@ struct ExtensionsView: View {
                 toolbarSection
             }
             recommendedSections
+            userscriptSections
         }
         .scrollContentBackground(.hidden)
         .overlay {
@@ -203,6 +204,64 @@ struct ExtensionsView: View {
             Text("Opens the store in BrownBear, where the Add to BrownBear button installs any extension in one tap.")
                 .font(.caption).foregroundStyle(BBTheme.Color.textSecondary)
         }
+    }
+
+    /// The "recommended userscripts" block + the userscript repositories, shown below the extension
+    /// recommendations. Userscripts run on BrownBear's own engine, so these need no manager extension.
+    @ViewBuilder private var userscriptSections: some View {
+        Section {
+            ForEach(Self.recommendedUserscripts) { userscriptRow($0) }
+        } header: {
+            Text("Recommended userscripts").foregroundStyle(BBTheme.Color.textSecondary)
+        } footer: {
+            Text("Tap Get to open the script on Greasy Fork, then Install — BrownBear's userscript engine handles the rest.")
+                .font(.caption).foregroundStyle(BBTheme.Color.textSecondary)
+        }
+        Section {
+            ForEach(Self.userscriptStores) { store in storeRow(store) }
+        } header: {
+            Text("Find more userscripts").foregroundStyle(BBTheme.Color.textSecondary)
+        }
+    }
+
+    /// A recommended-userscript row: favicon, name, blurb, and a Get button that opens the script's Greasy
+    /// Fork page in BrownBear (where Install hands the .user.js to the userscript engine).
+    private func userscriptRow(_ script: RecommendedUserscript) -> some View {
+        HStack(spacing: 12) {
+            AsyncImage(url: script.iconURL) { phase in
+                if case .success(let image) = phase {
+                    image.resizable().scaledToFit().padding(7)
+                } else {
+                    Image(systemName: "doc.text.fill").font(.system(size: 16))
+                        .foregroundStyle(BBTheme.Color.textSecondary)
+                }
+            }
+            .frame(width: 40, height: 40)
+            .background(BBTheme.Color.fieldFill, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(script.name).font(.body.weight(.semibold)).foregroundStyle(BBTheme.Color.textPrimary)
+                    Text("Open source")
+                        .font(.caption2.weight(.semibold)).foregroundStyle(BBTheme.Color.secure)
+                }
+                Text(script.blurb)
+                    .font(.caption)
+                    .foregroundStyle(BBTheme.Color.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Button {
+                if let url = script.pageURL {
+                    NotificationCenter.default.post(name: .brownBearOpenURL, object: nil, userInfo: ["url": url])
+                }
+            } label: {
+                Text("Get").font(.subheadline.weight(.bold))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .tint(BBTheme.Color.accent)
+        }
+        .listRowBackground(BBTheme.Color.card)
     }
 
     /// A row that opens an extension store's homepage in BrownBear (the browser handles the
@@ -407,6 +466,19 @@ struct ExtensionStoreLink: Identifiable {
     var iconURL: URL? { URL(string: "https://www.google.com/s2/favicons?domain=\(iconDomain)&sz=64") }
 }
 
+/// A curated userscript. Tapping "Get" opens its Greasy Fork page in BrownBear, where the "Install this
+/// script" button hands the `.user.js` to BrownBear's own userscript engine. `gfID` is the Greasy Fork
+/// script id (its page URL is stable by id); `iconDomain` fetches a favicon for the script's main site.
+struct RecommendedUserscript: Identifiable {
+    let id: Int          // Greasy Fork script id
+    let name: String
+    let blurb: String
+    let iconDomain: String
+
+    var pageURL: URL? { URL(string: "https://greasyfork.org/en/scripts/\(id)") }
+    var iconURL: URL? { URL(string: "https://www.google.com/s2/favicons?domain=\(iconDomain)&sz=64") }
+}
+
 extension ExtensionsView {
     /// Category display order for the recommended sections (small, non-intrusive labels).
     static let recommendedCategories = ["Userscripts", "Ad blocking & privacy", "Productivity", "Media", "Appearance"]
@@ -526,5 +598,40 @@ extension ExtensionsView {
                              category: "Appearance", iconDomain: "momentumdash.com",
                              blurb: "A calm, beautiful new-tab dashboard with photos, focus, and to-dos.",
                              openSource: false)
+    ]
+
+    /// Curated userscripts — popular, reputable, and deliberately distinct from the recommended
+    /// extensions above (no overlapping function) and useful on a touch browser. They run on BrownBear's
+    /// own userscript engine; "Get" opens the script's Greasy Fork page to install.
+    static let recommendedUserscripts: [RecommendedUserscript] = [
+        RecommendedUserscript(id: 431691, name: "Bypass All Shortlinks",
+                              blurb: "Skips ad-link shorteners — AdFly, Linkvertise, and more — straight to the destination.",
+                              iconDomain: "greasyfork.org"),
+        RecommendedUserscript(id: 4881, name: "AdsBypasser",
+                              blurb: "Auto-skips ad gateways, “continue” pages, and countdown timers on file and image hosts.",
+                              iconDomain: "greasyfork.org"),
+        RecommendedUserscript(id: 419215, name: "AutoPager",
+                              blurb: "Seamlessly appends the next page — endless scrolling on search results and forums.",
+                              iconDomain: "greasyfork.org"),
+        RecommendedUserscript(id: 23772, name: "Absolute Enable Right Click & Copy",
+                              blurb: "Re-enables copy, text selection, and right-click on sites that block them.",
+                              iconDomain: "greasyfork.org"),
+        RecommendedUserscript(id: 4255, name: "Linkify Plus Plus",
+                              blurb: "Turns plain-text URLs into real clickable links, everywhere.",
+                              iconDomain: "greasyfork.org"),
+        RecommendedUserscript(id: 412245, name: "GitHub High-Speed Download",
+                              blurb: "Faster GitHub file and release downloads via mirror services.",
+                              iconDomain: "github.com")
+    ]
+
+    /// The userscript repositories, for browsing anything not listed. Opened in BrownBear, where tapping a
+    /// script's "Install" hands its `.user.js` to BrownBear's userscript engine. (Reuses ExtensionStoreLink.)
+    static let userscriptStores: [ExtensionStoreLink] = [
+        ExtensionStoreLink(id: "greasyfork", name: "Greasy Fork", iconDomain: "greasyfork.org",
+                           urlString: "https://greasyfork.org/en/scripts"),
+        ExtensionStoreLink(id: "scriptcat", name: "ScriptCat", iconDomain: "scriptcat.org",
+                           urlString: "https://scriptcat.org/en/search"),
+        ExtensionStoreLink(id: "openuserjs", name: "OpenUserJS", iconDomain: "openuserjs.org",
+                           urlString: "https://openuserjs.org/")
     ]
 }
