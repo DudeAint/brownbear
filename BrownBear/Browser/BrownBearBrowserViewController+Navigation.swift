@@ -116,18 +116,20 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
            ["http", "https", "about", "file", "data"].contains(scheme) {
             pendingNavTargets[ObjectIdentifier(webView)] = dest.absoluteString
         }
-        let isStore = destination.map(Self.isChromeWebStoreURL) ?? false
+        let storeUA = destination.flatMap { Self.storeUserAgent(for: $0) }
+        let isStore = storeUA != nil
         if let tab = tabManager.tabs.first(where: { $0.webView === webView }) {
-            // Chrome Web Store pages only render their real "Add to Chrome" button (and skip the
-            // "you're not on Chrome" banner) for a desktop Chrome client, so force that for store
-            // hosts regardless of the tab's toggle; otherwise honor the user's Desktop choice.
-            if isStore {
+            // An extension store (Chrome / Edge / AMO) renders its real "Add to <Browser>" install button
+            // (and skips the "you're not on <Browser>" CTA) only for that browser's desktop client, so
+            // force the matching desktop UA for store hosts regardless of the tab's toggle; otherwise honor
+            // the user's Desktop choice.
+            if let storeUA {
                 preferences.preferredContentMode = .desktop
-                webView.customUserAgent = Self.desktopChromeUserAgent
+                webView.customUserAgent = storeUA
             } else {
                 preferences.preferredContentMode = tab.prefersDesktop ? .desktop : .mobile
-                // Clear the store UA when leaving the store (but don't clobber a manual Desktop UA).
-                if webView.customUserAgent == Self.desktopChromeUserAgent {
+                // Clear any store UA when leaving a store (but don't clobber a manual Desktop UA).
+                if Self.isStoreUserAgent(webView.customUserAgent) {
                     webView.customUserAgent = tab.prefersDesktop ? Self.desktopSafariUserAgent : nil
                 }
             }
