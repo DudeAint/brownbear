@@ -101,13 +101,22 @@ final class ContentBlocklistUpdater {
         return json
     }
 
+    /// Whether a non-trivial merged cache exists, checked by file SIZE rather than by reading the whole
+    /// multi-MB file — so the launch-time staleness check doesn't block the main thread on a big read.
+    /// (">2" rejects an empty file and a bare "[]".)
+    nonisolated static func cachedListIsPresent() -> Bool {
+        guard let size = (try? FileManager.default.attributesOfItem(atPath: cacheFileURL().path))?[.size] as? Int
+        else { return false }
+        return size > 2
+    }
+
     /// Kick off a refresh if the cache is missing or stale. Fire-and-forget; safe to call on launch.
     func updateIfStale(now: Date = Date()) {
         if let stampData = try? Data(contentsOf: stampURL),
            let stampString = String(data: stampData, encoding: .utf8),
            let epoch = TimeInterval(stampString.trimmingCharacters(in: .whitespacesAndNewlines)),
            now.timeIntervalSince1970 - epoch < Self.refreshInterval,
-           cachedMergedJSON != nil {
+           Self.cachedListIsPresent() {   // cheap size check, not a multi-MB read on the main thread
             return   // fresh enough
         }
         Task { await update(now: now) }

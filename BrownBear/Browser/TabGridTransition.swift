@@ -18,15 +18,17 @@
 import UIKit
 
 /// Animates one direction of the tab-grid transition. `isPresenting` selects open vs. close; on close,
-/// a non-nil `heroSnapshot` switches the soft fade for the expand-from-card morph.
+/// a non-nil `heroImage` switches the soft fade for the expand-from-card morph.
 final class TabGridTransitionAnimator: NSObject, UIViewControllerAnimatedTransitioning {
 
     private let isPresenting: Bool
     private let shrunk = CGAffineTransform(scaleX: 0.92, y: 0.92)
 
-    /// Set by the controller when dismissing because the user selected a card: a snapshot of that card
-    /// and its on-screen frame (window coordinates), so the dismiss expands exactly that card.
-    var heroSnapshot: UIView?
+    /// Set by the controller when dismissing because the user selected a card: an IMAGE of that card and
+    /// its on-screen frame (window coordinates), so the dismiss expands exactly that card. An image (not a
+    /// snapshot VIEW) so it can scale with aspect-fill — the card and the page have different aspect ratios,
+    /// and stretching a snapshot view's frame between them squashes/stretches the content vertically.
+    var heroImage: UIImage?
     var heroFrame: CGRect = .zero
 
     init(presenting: Bool) {
@@ -36,14 +38,14 @@ final class TabGridTransitionAnimator: NSObject, UIViewControllerAnimatedTransit
 
     func transitionDuration(using context: UIViewControllerContextTransitioning?) -> TimeInterval {
         if isPresenting { return 0.42 }
-        return heroSnapshot != nil ? 0.40 : 0.32
+        return heroImage != nil ? 0.40 : 0.32
     }
 
     func animateTransition(using context: UIViewControllerContextTransitioning) {
         if isPresenting {
             animatePresent(using: context)
-        } else if let hero = heroSnapshot, heroFrame != .zero {
-            animateHeroExpand(hero, using: context)
+        } else if let image = heroImage, heroFrame != .zero {
+            animateHeroExpand(image, using: context)
         } else {
             animateDismissFade(using: context)
         }
@@ -75,7 +77,7 @@ final class TabGridTransitionAnimator: NSObject, UIViewControllerAnimatedTransit
 
     // MARK: - Enter a tab (expand the selected card into the page)
 
-    private func animateHeroExpand(_ hero: UIView, using context: UIViewControllerContextTransitioning) {
+    private func animateHeroExpand(_ image: UIImage, using context: UIViewControllerContextTransitioning) {
         let container = context.containerView
         guard let gridView = context.view(forKey: .from) else {
             context.completeTransition(false)
@@ -93,6 +95,10 @@ final class TabGridTransitionAnimator: NSObject, UIViewControllerAnimatedTransit
         }
 
         // The hero card sits on top, starting at the tapped card's frame and growing to fill the page.
+        // Aspect-fill so the card image scales UNIFORMLY as the (differently-proportioned) frame grows —
+        // it crops the overflow instead of stretching the content vertically.
+        let hero = UIImageView(image: image)
+        hero.contentMode = .scaleAspectFill
         let startCorner = BrownBearTheme.Metrics.cellCornerRadius
         hero.frame = heroFrame
         hero.layer.cornerRadius = startCorner
@@ -163,7 +169,7 @@ final class TabGridTransitionController: NSObject, UIViewControllerTransitioning
     /// Set by the browser immediately before a *select* dismiss, so the dismiss animator expands the
     /// tapped card into the page. Consumed (cleared) when the dismiss animator is vended, so a later
     /// Done/back dismiss falls back to the soft fade.
-    var selectedCardSnapshot: UIView?
+    var selectedCardImage: UIImage?
     var selectedCardFrame: CGRect = .zero
 
     func animationController(forPresented presented: UIViewController,
@@ -175,9 +181,9 @@ final class TabGridTransitionController: NSObject, UIViewControllerTransitioning
     func animationController(forDismissed dismissed: UIViewController)
     -> UIViewControllerAnimatedTransitioning? {
         let animator = TabGridTransitionAnimator(presenting: false)
-        animator.heroSnapshot = selectedCardSnapshot
+        animator.heroImage = selectedCardImage
         animator.heroFrame = selectedCardFrame
-        selectedCardSnapshot = nil
+        selectedCardImage = nil
         selectedCardFrame = .zero
         return animator
     }

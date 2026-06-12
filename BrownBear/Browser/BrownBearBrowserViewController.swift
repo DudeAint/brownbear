@@ -625,7 +625,7 @@ extension BrownBearBrowserViewController: BrownBearTabGridControllerDelegate {
         // Activate first so the page is installed behind the grid, then hand the tapped card to the
         // transition so the dismiss expands that card into the now-live page (Safari/Arc morph).
         tabManager.setActiveTab(tab)
-        tabGridTransition.selectedCardSnapshot = controller.selectedCardSnapshot
+        tabGridTransition.selectedCardImage = controller.selectedCardImage
         tabGridTransition.selectedCardFrame = controller.selectedCardFrame
         controller.dismiss(animated: true)
     }
