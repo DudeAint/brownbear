@@ -160,6 +160,7 @@ final class BrownBearBrowserViewController: UIViewController {
         buildHierarchy()
         registerChromeLayoutObservers()
         registerExtensionsToolbarObservers()
+        startTabSessionPersistence()   // save open tabs on background so they survive app close
         refreshExtensionsToolbarIcon()
     }
 
@@ -191,12 +192,62 @@ final class BrownBearBrowserViewController: UIViewController {
 
     // MARK: - Public entry points (called by SceneDelegate)
 
-    /// Open the first tab on the branded New Tab page if no tabs exist yet.
+    /// Open the first tab on the branded New Tab page if no tabs exist yet — restoring the user's last
+    /// session (the tabs they had open when they closed the app) when there is one.
     func openInitialTabIfNeeded() {
         guard tabManager.isEmpty else { return }
+        if restoreSavedSession() { return }
         let tab = tabManager.createTab()
         loadNewTabPage(in: tab)
         refreshChrome()
+    }
+
+    /// Recreate the tabs persisted at the last app background. Only the ACTIVE tab loads now; the rest keep
+    /// a pending URL and load lazily when first selected — so restoring many tabs doesn't stall launch.
+    /// Returns false (→ fall back to a fresh New Tab) when there's nothing worth restoring.
+    @discardableResult
+    private func restoreSavedSession() -> Bool {
+        let session = TabSessionStore.load()
+        let records = session.records
+        guard !records.isEmpty else { return false }
+        // A lone blank New Tab is identical to the default fresh start — don't bother "restoring" it.
+        if records.count == 1, records[0].url == nil { return false }
+
+        var restored: [Tab] = []
+        for record in records {
+            if let string = record.url, let url = URL(string: string),
+               ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
+                let tab = tabManager.createTab(loading: url, activate: false)   // pending; loads on activate
+                tab.delegate = self
+                restored.append(tab)
+            } else {
+                let tab = tabManager.createTab(activate: false)
+                tab.delegate = self
+                loadNewTabPage(in: tab)
+                restored.append(tab)
+            }
+        }
+        // Activate the saved active tab (installs + loads only it); fall back to the first.
+        let index = session.activeIndex.flatMap { restored.indices.contains($0) ? $0 : nil } ?? 0
+        if restored.indices.contains(index) {
+            tabManager.setActiveTab(restored[index])
+        }
+        refreshChrome()
+        return true
+    }
+
+    /// Observe app backgrounding so the open tabs are persisted before the app can be terminated. Called
+    /// once during setup. Selector-based (not a closure) so the callback runs synchronously on the main
+    /// thread — the persist must complete before the app is suspended — without iOS-17-only isolation APIs.
+    func startTabSessionPersistence() {
+        NotificationCenter.default.addObserver(self, selector: #selector(persistTabSession),
+                                               name: UIApplication.didEnterBackgroundNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(persistTabSession),
+                                               name: UIApplication.willResignActiveNotification, object: nil)
+    }
+
+    @objc private func persistTabSession() {
+        tabManager.persistSession()
     }
 
     /// Open a URL handed to us by the system (deep link / "open in").
