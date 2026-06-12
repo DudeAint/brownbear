@@ -50,7 +50,7 @@ jobs:
           if [ -z "$APP" ]; then echo "::error::No .app produced"; exit 1; fi
           mkdir -p Payload && cp -R "$APP" Payload/
           zip -qr BrownBear-nightly.ipa Payload
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: BrownBear-nightly-ipa
           path: BrownBear-nightly.ipa
