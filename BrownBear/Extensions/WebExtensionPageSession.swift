@@ -324,7 +324,7 @@ extension WebExtensionPageSession: WebExtensionEventReceiver {
         let contextType: String
         switch kind {
         case .popup: contextType = "POPUP"
-        case .options: contextType = "TAB"
+        case .options, .newtab: contextType = "TAB"
         case .offscreen: contextType = "OFFSCREEN_DOCUMENT"
         }
         // An offscreen document isn't associated with a top frame or a window — Chrome reports
