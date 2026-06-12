@@ -100,18 +100,22 @@ and save-time metadata validation**.
 <tr>
 <td colspan="2" valign="top">
 
-### 🧩 Chrome Web Store Extensions
+### 🧩 Browser Extensions (Chrome · Edge · Firefox)
 Install and run **real browser extensions** (MV2 **and** MV3) from the Chrome Web Store, Edge
-Add-ons, or Firefox AMO — paste a link or install a `.crx`/`.zip`. A broad native-backed
+Add-ons, or Firefox AMO. Browse any of the three stores in-app and their install button becomes
+**Add to BrownBear** (it survives the store's single-page navigation), or use a curated one-tap
+**recommended** list, paste a link, or open a `.crx`/`.zip`/`.xpi`. A broad native-backed
 `chrome.*` / `browser.*` surface: **service workers** (classic *and* ES-module, e.g. uBlock Origin
-Lite) in a headless `JSContext`, **content scripts**, **popup/options pages** over a
+Lite) in a headless `JSContext`, **content scripts**, **popup / options / side-panel pages** over a
 `chrome-extension://` scheme, `storage` · `tabs` · `windows` · `webNavigation` · `scripting` ·
-`cookies` · `notifications` · `contextMenus` · `identity` · `alarms` · `i18n` · `runtime`
-messaging + long-lived ports, **`declarativeNetRequest`** ad-blocking via `WKContentRuleList`,
-a polyfilled **IndexedDB**, and web platform APIs JavaScriptCore lacks (`fetch`/`Headers`/`Request`/
-`Response`/`AbortController`/`FormData`/`Blob`/`File`/`XMLHttpRequest`/Web Crypto/`structuredClone`).
-Userscript-manager extensions (e.g. **ScriptCat**) are first-class — a `.user.js` link can be
-handed off to them. Constrained, partial, and unsupported APIs are [documented honestly](docs/WEB_EXTENSIONS.md).
+`cookies` · `notifications` · `contextMenus` · `identity` · `alarms` · `idle` · `downloads` ·
+`sidePanel` · `i18n` · `runtime` messaging + long-lived ports, **`declarativeNetRequest`** ad-blocking
+via `WKContentRuleList` **plus `webRequest` frame-navigation blocking**, an extension **New Tab page**
+(`chrome_url_overrides`), a polyfilled **IndexedDB**, and web platform APIs JavaScriptCore lacks
+(`fetch`/`Headers`/`Request`/`Response`/`AbortController`/`FormData`/`Blob`/`File`/`XMLHttpRequest`/
+Web Crypto/`structuredClone`). Userscript-manager extensions (e.g. **ScriptCat**) are first-class — a
+`.user.js` link can be handed off to them. Constrained, partial, and unsupported APIs are
+[documented honestly](docs/WEB_EXTENSIONS.md).
 
 </td>
 </tr>
