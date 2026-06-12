@@ -394,19 +394,20 @@ extension BrownBearTabGridController: UICollectionViewDelegate {
         gridDelegate?.tabGrid(self, didSelect: tab)
     }
 
-    /// Render the tapped card to an IMAGE (not a snapshot view) plus its frame in the window, for the hero
-    /// expand-into-page transition. An image lets the transition scale it with aspect-fill so the content
-    /// doesn't stretch as the card grows into the differently-proportioned page. If the cell isn't on
-    /// screen (it always is on tap) we leave the fields empty and the transition falls back to its fade.
+    /// Capture just the tapped card's PAGE PICTURE (its snapshot region, excluding the title strip) plus
+    /// that region's frame in the window, for the hero expand-into-page transition — so the picture grows
+    /// on its own and isn't shifted up by the title bar beneath it. The image lets the transition scale it
+    /// uniformly without stretch. Empty (→ the transition falls back to its fade) if the cell isn't on
+    /// screen or is showing a placeholder rather than a real snapshot.
     private func captureSelectedCard(at indexPath: IndexPath) {
-        guard let cell = collectionView.cellForItem(at: indexPath) else {
+        guard let cell = collectionView.cellForItem(at: indexPath) as? TabGridCell,
+              let hero = cell.heroSnapshot() else {
             selectedCardImage = nil
             selectedCardFrame = .zero
             return
         }
-        let renderer = UIGraphicsImageRenderer(bounds: cell.bounds)
-        selectedCardImage = renderer.image { _ in cell.drawHierarchy(in: cell.bounds, afterScreenUpdates: false) }
-        selectedCardFrame = cell.convert(cell.bounds, to: nil)   // window coordinates == transition container
+        selectedCardImage = hero.image
+        selectedCardFrame = hero.frame   // window coordinates == transition container
     }
 
     /// Per-tab long-press menu (Chrome/Safari pattern): act on a tab without first switching to it.
