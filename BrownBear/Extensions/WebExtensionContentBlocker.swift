@@ -12,6 +12,7 @@
 //
 
 import WebKit
+import CryptoKit
 
 @MainActor
 final class WebExtensionContentBlocker {
@@ -71,6 +72,17 @@ final class WebExtensionContentBlocker {
         } while refreshRequested
     }
 
+    /// The result of preparing one extension's DNR rules off the main actor: the WebKit rule-list JSON to
+    /// compile (nil when nothing compiles — redirect-only or empty), the main-frame redirect rules to apply
+    /// at navigation time, and the counts/warning for the dashboard report.
+    private struct PreparedExtensionRules {
+        let json: String?
+        let redirect: [WebExtensionDNRRedirect.Rule]
+        let compiledCount: Int
+        let skippedCount: Int
+        let warning: String?
+    }
+
     private func performRefresh(into userContentController: WKUserContentController) async {
         var newReports: [Report] = []
         var compiledLists: [WKContentRuleList] = []
@@ -90,53 +102,75 @@ final class WebExtensionContentBlocker {
                 // Enabled static rulesets = manifest defaults overlaid with updateEnabledRulesets().
                 let manifestDefaults = manifest.declarativeNetRequest.filter(\.enabled).map(\.id)
                 let enabledIDs = await dnrStore.enabledRulesetIDs(extensionID: ext.id, manifestDefaults: manifestDefaults)
-                var staticRules: [[String: Any]] = []
+                // Gather the raw inputs on the main actor (these awaits only SUSPEND — no CPU here). The
+                // parse/merge/compile happens off-main below so a big ruleset can't freeze the UI.
+                var staticRuleData: [Data] = []
                 for ruleset in manifest.declarativeNetRequest where enabledIDs.contains(ruleset.id) {
-                    guard let data = await store.file(extensionID: ext.id, path: ruleset.path),
-                          let arr = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { continue }
-                    staticRules.append(contentsOf: arr)
+                    if let data = await store.file(extensionID: ext.id, path: ruleset.path) { staticRuleData.append(data) }
                 }
                 let dynamicRules = await dnrStore.getDynamicRules(extensionID: ext.id)
                 let sessionRules = await dnrStore.getSessionRules(extensionID: ext.id)
                 // Nothing to enforce for this extension (no static rulesets AND no runtime rules).
-                if staticRules.isEmpty && dynamicRules.isEmpty && sessionRules.isEmpty { continue }
+                if staticRuleData.isEmpty && dynamicRules.isEmpty && sessionRules.isEmpty { continue }
 
-                // Merge so dynamic/session override static by rule id (Chrome precedence), then compile
-                // ONE rule list per extension.
-                let merged = DeclarativeNetRequestRuleMerge.merge(staticRules: staticRules,
-                                                                  dynamicRules: dynamicRules,
-                                                                  sessionRules: sessionRules)
-                // Extract main-frame redirect rules BEFORE compiling — the content-rule-list compiler
-                // .skip()s `redirect`, so an extension whose ONLY rules are redirects compiles to nothing
-                // (result.isEmpty → continue below) but its redirect rules must still be applied at nav time.
-                newRedirect.append(contentsOf: WebExtensionDNRRedirect.redirectRules(from: merged, extensionID: ext.id))
-                let result = DeclarativeNetRequest.compile(rules: merged)
-                let identifier = "brownbear-dnr-\(ext.id)"
-                guard !result.isEmpty else {
+                // Parse + merge + DNR-compile + unbreak + exclusions OFF the main actor — this is the
+                // per-extension CPU cost that would otherwise freeze scrolling/taps at launch. Pure
+                // transform of the gathered inputs; the WebKit compile + install stay on the main actor.
+                let extID = ext.id
+                let prepared = await Task.detached(priority: .utility) { () -> PreparedExtensionRules in
+                    var staticRules: [[String: Any]] = []
+                    for data in staticRuleData {
+                        if let arr = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] {
+                            staticRules.append(contentsOf: arr)
+                        }
+                    }
+                    // Merge so dynamic/session override static by rule id (Chrome precedence).
+                    let merged = DeclarativeNetRequestRuleMerge.merge(staticRules: staticRules,
+                                                                      dynamicRules: dynamicRules,
+                                                                      sessionRules: sessionRules)
+                    // Extract main-frame redirect rules BEFORE compiling — the content-rule-list compiler
+                    // .skip()s `redirect`, so an extension whose ONLY rules are redirects compiles to
+                    // nothing but its redirect rules must still be applied at nav time.
+                    let redirect = WebExtensionDNRRedirect.redirectRules(from: merged, extensionID: extID)
+                    let result = DeclarativeNetRequest.compile(rules: merged)
+                    guard !result.isEmpty else {
+                        return PreparedExtensionRules(json: nil, redirect: redirect, compiledCount: 0,
+                                                      skippedCount: result.skippedCount,
+                                                      warning: result.warnings.first ?? "no rules compiled")
+                    }
+                    // Exclude shields-off hosts from every extension rule that can carry an exclusion (a
+                    // rule already pinned with `if-domain` can't also take `unless-domain`, so it is left
+                    // unchanged — BrownBear's built-in list still honors the shields-off host). Strip any
+                    // page-breaking-agent block this extension's rules would compile in (an extension list
+                    // is isolated). No endpoint block — the built-in list already carries those.
+                    let unbroken = Self.applyUnbreak(to: result.json, includeEndpointBlocks: false)
+                    let scopedJSON = Self.applyExclusions(to: unbroken, hosts: exclusions)
+                    return PreparedExtensionRules(json: scopedJSON, redirect: redirect,
+                                                  compiledCount: result.compiledCount,
+                                                  skippedCount: result.skippedCount, warning: nil)
+                }.value
+
+                // A redirect-only (or empty) extension contributes no compiled list, but its redirect
+                // rules still apply at navigation time.
+                newRedirect.append(contentsOf: prepared.redirect)
+                guard let scopedJSON = prepared.json else {
                     newReports.append(Report(extensionID: ext.id, extensionName: ext.displayName,
                                              rulesetID: "(merged)", compiledCount: 0,
-                                             skippedCount: result.skippedCount,
-                                             error: result.warnings.first ?? "no rules compiled"))
+                                             skippedCount: prepared.skippedCount,
+                                             error: prepared.warning ?? "no rules compiled"))
                     continue
                 }
-                // Exclude shields-off hosts from every extension rule that can carry an exclusion
-                // (a rule already pinned with `if-domain` can't also take `unless-domain`, so it is
-                // left unchanged — BrownBear's built-in list still honors the shields-off host).
-                // Strip any page-breaking-agent block this extension's rules would compile in (an
-                // extension list is isolated, so a built-in-list-only unbreak can't reach it). No endpoint
-                // block here — the built-in list already carries those.
-                let unbrokenExt = Self.applyUnbreak(to: result.json, includeEndpointBlocks: false)
-                let scopedJSON = Self.applyExclusions(to: unbrokenExt, hosts: exclusions)
+                let identifier = "brownbear-dnr-\(ext.id)"
                 do {
                     let list = try await compile(store: ruleListStore, identifier: identifier, json: scopedJSON)
                     compiledLists.append(list)
                     newReports.append(Report(extensionID: ext.id, extensionName: ext.displayName,
-                                             rulesetID: "(merged)", compiledCount: result.compiledCount,
-                                             skippedCount: result.skippedCount, error: nil))
+                                             rulesetID: "(merged)", compiledCount: prepared.compiledCount,
+                                             skippedCount: prepared.skippedCount, error: nil))
                 } catch {
                     newReports.append(Report(extensionID: ext.id, extensionName: ext.displayName,
                                              rulesetID: "(merged)", compiledCount: 0,
-                                             skippedCount: result.skippedCount,
+                                             skippedCount: prepared.skippedCount,
                                              error: error.localizedDescription))
                 }
             }
@@ -161,7 +195,18 @@ final class WebExtensionContentBlocker {
 
     private func compile(store: WKContentRuleListStore,
                          identifier: String, json: String) async throws -> WKContentRuleList {
-        try await withCheckedThrowingContinuation { continuation in
+        // WKContentRuleListStore persists each compiled list to disk by identifier, but
+        // compileContentRuleList RECOMPILES from scratch on every call — and compiling a large list
+        // (EasyList/EasyPrivacy, uBO Lite) takes seconds. On a cold relaunch the rules are almost always
+        // byte-for-byte the same as last time, so we hash the source: if it matches what we last compiled
+        // under this identifier, reuse the already-compiled list via lookUp (a fast deserialize) instead of
+        // paying the full compile again. This is the main lever against the cold-start freeze.
+        let hash = Self.stableHash(json)
+        if Self.persistedHash(forIdentifier: identifier) == hash,
+           let cached = await Self.lookUp(store: store, identifier: identifier) {
+            return cached
+        }
+        let list = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<WKContentRuleList, Error>) in
             store.compileContentRuleList(forIdentifier: identifier, encodedContentRuleList: json) { list, error in
                 if let list {
                     continuation.resume(returning: list)
@@ -170,26 +215,66 @@ final class WebExtensionContentBlocker {
                 }
             }
         }
+        Self.setPersistedHash(hash, forIdentifier: identifier)
+        return list
+    }
+
+    /// Fetch an already-compiled list from the store by identifier; nil on a miss (never compiled or
+    /// evicted), so the caller falls back to a fresh compile. Off the main thread (the store's own queue).
+    private static func lookUp(store: WKContentRuleListStore, identifier: String) async -> WKContentRuleList? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<WKContentRuleList?, Never>) in
+            store.lookUpContentRuleList(forIdentifier: identifier) { list, _ in
+                continuation.resume(returning: list)
+            }
+        }
+    }
+
+    // MARK: - Compiled-list source hashing (skip recompiling unchanged rule lists across launches)
+
+    private static let compiledHashesKey = "com.brownbear.dnr.compiledRuleListHashes.v1"
+
+    /// A launch-stable hash of a rule-list's source JSON (Swift's `Hasher` is per-process-randomized, so
+    /// it can't be persisted — SHA-256 is stable across launches).
+    static func stableHash(_ string: String) -> String {
+        let digest = SHA256.hash(data: Data(string.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func persistedHash(forIdentifier identifier: String) -> String? {
+        (UserDefaults.standard.dictionary(forKey: compiledHashesKey) as? [String: String])?[identifier]
+    }
+
+    private static func setPersistedHash(_ hash: String, forIdentifier identifier: String) {
+        var all = (UserDefaults.standard.dictionary(forKey: compiledHashesKey) as? [String: String]) ?? [:]
+        all[identifier] = hash
+        UserDefaults.standard.set(all, forKey: compiledHashesKey)
     }
 
     /// Compile BrownBear's built-in tracker/ad list with the shields-off hosts excluded. Returns nil
     /// (and installs nothing) if the bundled list is missing or fails to compile — a built-in-list
     /// failure must never take the extension lists down with it.
     private func compileBuiltInList(excluding hosts: [String]) async -> WKContentRuleList? {
-        guard let ruleListStore, let json = Self.builtInBlocklistJSON(excluding: hosts) else { return nil }
+        guard let ruleListStore else { return nil }
+        // Building this JSON means running applyUnbreak + applyExclusions over the full merged
+        // EasyList/EasyPrivacy blob (multi-MB) — heavy string work that would freeze the UI if done on the
+        // main actor. It's pure (hosts in, JSON out), so run it on a background thread.
+        let json = await Task.detached(priority: .utility) { Self.builtInBlocklistJSONOffMain(excluding: hosts) }.value
+        guard let json else { return nil }
         return try? await compile(store: ruleListStore, identifier: "brownbear-builtin-blocklist", json: json)
     }
 
     // MARK: - Built-in list + per-site exclusions (pure helpers, unit-testable)
 
-    /// BrownBear's bundled tracker/ad blocklist, already in WebKit content-rule-list JSON, with the
-    /// shields-off hosts injected as a global `unless-domain` so blocking is suppressed there. Returns
-    /// nil if the bundled resource is missing or empty (then no built-in list is installed).
-    static func builtInBlocklistJSON(excluding hosts: [String]) -> String? {
-        // Prefer the network-updated merged list (EasyList/EasyPrivacy/Peter Lowe — uBlock-style, kept
-        // fresh by ContentBlocklistUpdater); fall back to the small bundled starter list offline / on
-        // first launch before the first successful fetch.
-        var json: String? = ContentBlocklistUpdater.shared.cachedMergedJSON
+    /// BrownBear's bundled/network-updated tracker-ad blocklist as WebKit content-rule-list JSON, with the
+    /// shields-off hosts injected as a global `unless-domain` so blocking is suppressed there. Prefers the
+    /// merged EasyList/EasyPrivacy/Peter Lowe list kept fresh by ContentBlocklistUpdater, falling back to the
+    /// small bundled starter list offline / before the first fetch. Nil if neither source is usable.
+    ///
+    /// Fully off the main actor: it reads the cached merged list via the nonisolated file reader (not the
+    /// @MainActor singleton property), so the multi-MB disk read AND the unbreak/exclusion transforms all run
+    /// on a background thread instead of freezing the UI at launch.
+    nonisolated static func builtInBlocklistJSONOffMain(excluding hosts: [String]) -> String? {
+        var json = ContentBlocklistUpdater.loadCachedMergedJSON()
         if json == nil {
             if let url = Bundle.main.url(forResource: "brownbear-blocklist", withExtension: "json", subdirectory: nil)
                 ?? Bundle.main.url(forResource: "brownbear-blocklist", withExtension: "json", subdirectory: "JS"),
@@ -230,7 +315,7 @@ final class WebExtensionContentBlocker {
     /// URL; a cheap second-level-label pre-filter keeps us from compiling all ~50k patterns. The telemetry
     /// endpoint (`nr-data.net`) never matches an agent host, so its block survives. Fails safe (unparseable
     /// JSON returned unchanged). Pure — unit-tested.
-    static func applyUnbreak(to json: String, includeEndpointBlocks: Bool) -> String {
+    nonisolated static func applyUnbreak(to json: String, includeEndpointBlocks: Bool) -> String {
         guard let data = json.data(using: .utf8),
               var rules = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return json }
         // A representative URL per agent host (host-targeting tracker rules match any path).
@@ -267,7 +352,7 @@ final class WebExtensionContentBlocker {
     /// rules that already pin `if-domain` (WebKit forbids both in one trigger). A leading `*` makes
     /// each entry match the host and all its subdomains (DNR/WebKit subdomain semantics). With no
     /// hosts the input JSON is returned unchanged.
-    static func applyExclusions(to json: String, hosts: [String]) -> String {
+    nonisolated static func applyExclusions(to json: String, hosts: [String]) -> String {
         guard !hosts.isEmpty,
               let data = json.data(using: .utf8),
               var rules = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return json }

@@ -281,13 +281,15 @@ final class InjectionOrchestrator {
                 .map(\.host)
             await contentBlocker.refresh(into: controller, shieldsDisabledHosts: disabled)
             // Refresh the host set the page-world counter matches against, so the Shields "N blocked"
-            // figure reflects the SAME lists WebKit is blocking with. The parse can be large (tens of
-            // thousands of rules), so run it off the main actor and hop back to store the result.
-            if ShieldBlockCounter.isEnabled, let json = WebExtensionContentBlocker.builtInBlocklistJSON(excluding: []) {
-                let hosts = await Task.detached(priority: .utility) {
-                    ShieldBlockCounter.extractHosts(fromContentRuleJSON: json)
+            // figure reflects the SAME lists WebKit is blocking with. BUILDING that JSON (reading the
+            // multi-MB cache + unbreak/exclusions) AND parsing it are both large, so do all of it off the
+            // main actor and hop back only to store the result — otherwise it freezes the UI at launch.
+            if ShieldBlockCounter.isEnabled {
+                let hosts = await Task.detached(priority: .utility) { () -> Set<String>? in
+                    guard let json = WebExtensionContentBlocker.builtInBlocklistJSONOffMain(excluding: []) else { return nil }
+                    return ShieldBlockCounter.extractHosts(fromContentRuleJSON: json)
                 }.value
-                ShieldBlockCounter.shared.setBlockedHosts(hosts)
+                if let hosts { ShieldBlockCounter.shared.setBlockedHosts(hosts) }
             }
         }
     }
