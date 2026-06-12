@@ -55,6 +55,20 @@ final class TabGridCell: UICollectionViewCell {
         setActive(isActive)
     }
 
+    /// Render just the page-snapshot region (excluding the title strip below it) as an image, paired with
+    /// its frame in the window — for the hero "card expands into the page" transition, so the page picture
+    /// grows on its own and isn't pushed up by the title bar. Nil for a placeholder card (no snapshot yet),
+    /// so the transition falls back to its plain fade.
+    func heroSnapshot() -> (image: UIImage, frame: CGRect)? {
+        guard snapshotView.image != nil else { return nil }
+        let bounds = snapshotView.bounds
+        guard bounds.width > 1, bounds.height > 1 else { return nil }
+        let image = UIGraphicsImageRenderer(bounds: bounds).image { _ in
+            snapshotView.drawHierarchy(in: bounds, afterScreenUpdates: false)
+        }
+        return (image, snapshotView.convert(bounds, to: nil))
+    }
+
     private func setActive(_ active: Bool) {
         card.layer.borderWidth = active ? 2.5 : BrownBearTheme.Metrics.hairline
         card.layer.borderColor = (active ? BrownBearTheme.Palette.accent
