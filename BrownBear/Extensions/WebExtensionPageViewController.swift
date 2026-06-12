@@ -26,10 +26,12 @@ final class WebExtensionPageViewController: UIViewController {
 
     init(ext: WebExtension,
          kind: Kind,
+         path: String? = nil,
          store: WebExtensionStore = BrownBearServices.shared.webExtensionStore,
          storage: WebExtensionStorage = BrownBearServices.shared.webExtensionStorage,
          runtime: WebExtensionRuntime = BrownBearServices.shared.webExtensionRuntime) {
-        self.session = WebExtensionPageSession(ext: ext, kind: kind, store: store, storage: storage, runtime: runtime)
+        self.session = WebExtensionPageSession(ext: ext, kind: kind, path: path,
+                                               store: store, storage: storage, runtime: runtime)
         super.init(nibName: nil, bundle: nil)
     }
 

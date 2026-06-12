@@ -218,6 +218,58 @@ class WebExtensionRuntime {
     func noteActionClickedListener(extensionID: String) { actionClickedExtensionIDs.insert(extensionID) }
     func hasActionClickedListener(extensionID: String) -> Bool { actionClickedExtensionIDs.contains(extensionID) }
 
+    // MARK: - chrome.sidePanel / sidebar_action
+
+    /// Per-extension side-panel state mutated by chrome.sidePanel.setOptions/setPanelBehavior. `path` is a
+    /// runtime override of the manifest's `side_panel.default_path`; `enabled` gates whether open() shows it;
+    /// `openOnActionClick` mirrors setPanelBehavior({openPanelOnActionClick}) — when true the toolbar tap
+    /// opens the panel (Chrome's primary way a side panel is surfaced). tabId scoping isn't modeled (iOS is
+    /// single-window); the most recent global setOptions wins.
+    private struct SidePanelState { var path: String?; var enabled = true; var openOnActionClick = false }
+    private var sidePanelStates: [String: SidePanelState] = [:]
+
+    /// chrome.sidePanel.setOptions — update the path and/or enabled flag (each applied only when provided,
+    /// matching Chrome's partial-update semantics).
+    func setSidePanelOptions(extensionID: String, path: String?, enabled: Bool?) {
+        var state = sidePanelStates[extensionID] ?? SidePanelState()
+        if let path { state.path = path }
+        if let enabled { state.enabled = enabled }
+        sidePanelStates[extensionID] = state
+    }
+
+    /// chrome.sidePanel.setPanelBehavior — whether a toolbar action click opens the side panel.
+    func setSidePanelBehavior(extensionID: String, openOnActionClick: Bool) {
+        var state = sidePanelStates[extensionID] ?? SidePanelState()
+        state.openOnActionClick = openOnActionClick
+        sidePanelStates[extensionID] = state
+    }
+
+    /// chrome.sidePanel.getOptions — the current `{path, enabled}` (path is NSNull when none is set yet).
+    func sidePanelOptions(extensionID: String) -> [String: Any] {
+        let state = sidePanelStates[extensionID]
+        return ["path": state?.path ?? NSNull(), "enabled": state?.enabled ?? true]
+    }
+
+    /// chrome.sidePanel.getPanelBehavior — the current `{openPanelOnActionClick}`.
+    func sidePanelBehavior(extensionID: String) -> [String: Any] {
+        ["openPanelOnActionClick": sidePanelStates[extensionID]?.openOnActionClick ?? false]
+    }
+
+    /// A runtime path override from setOptions, or nil to fall back to the manifest's default path.
+    func sidePanelPathOverride(extensionID: String) -> String? { sidePanelStates[extensionID]?.path }
+    /// Whether a toolbar action click should open the side panel (setPanelBehavior opt-in).
+    func sidePanelOpensOnActionClick(extensionID: String) -> Bool { sidePanelStates[extensionID]?.openOnActionClick ?? false }
+    /// Whether the side panel is enabled (setOptions({enabled:false}) suppresses open()).
+    func sidePanelEnabled(extensionID: String) -> Bool { sidePanelStates[extensionID]?.enabled ?? true }
+
+    /// chrome.sidePanel.open — present the extension's side-panel page over the browser (a sheet on iOS),
+    /// routed to the live browser through the bridge host. A no-op if the panel is disabled or the host has
+    /// no window yet.
+    func presentSidePanel(extensionID: String) {
+        guard sidePanelEnabled(extensionID: extensionID) else { return }
+        host?.webExtPresentSidePanel(extensionID: extensionID)
+    }
+
     // MARK: - chrome.offscreen
 
     /// chrome.offscreen.createDocument — create the extension's single hidden offscreen document.

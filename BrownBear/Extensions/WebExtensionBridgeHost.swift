@@ -120,6 +120,12 @@ protocol WebExtensionBridgeHost: AnyObject {
     /// if one is resolved for the active tab, otherwise fire chrome.action.onClicked into the worker.
     func webExtTriggerAction(extensionID: String)
 
+    /// chrome.sidePanel.open (or a toolbar tap when openPanelOnActionClick is set) — present the
+    /// extension's side-panel page over the browser. The browser resolves the page path from the runtime
+    /// setOptions override or the manifest's `side_panel.default_path` and hosts it as a sheet; a no-op if
+    /// the extension declares no side panel.
+    func webExtPresentSidePanel(extensionID: String)
+
     /// chrome.windows.get / getCurrent / getLastFocused — the lone synthetic window (iOS is single-
     /// window). `populate` includes the tab list in the record.
     func webExtWindow(populate: Bool) -> [String: Any]
