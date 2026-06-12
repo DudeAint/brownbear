@@ -30,12 +30,24 @@ extension WebExtensionMessageRouter {
            let activeId = host.webExtActionActiveTabId(), record["id"] as? Int == activeId {
             return true
         }
-        // Gate on host_permissions ONLY — content_scripts.matches lets a script INJECT but confers no
-        // host access in Chrome (declare-permissions). Unioning content-script matches into the gate would
-        // let a content-script-only host silently read cookies / fetch cross-origin / executeScript there.
-        let matcher = URLMatcher(matches: manifest.hostPermissions,
+        // Gate on EFFECTIVE host access (declared host_permissions ∪ user-granted optional origins) —
+        // NOT content_scripts.matches, which lets a script INJECT but confers no host access in Chrome
+        // (unioning those would let a content-script-only host silently read cookies / fetch cross-origin).
+        let matcher = URLMatcher(matches: await effectiveHostOrigins(extensionID: extensionID, manifest: manifest),
                                  includes: [], excludes: [], excludeMatches: [])
         return matcher.matches(tabURL)
+    }
+
+    /// An extension's EFFECTIVE host-permission origins: its declared `host_permissions` (always in
+    /// effect) UNION the optional origins the user granted at runtime via `chrome.permissions.request`.
+    /// Gating cookies / host-fetch / injection on the DECLARED set ALONE wrongly rejected an extension
+    /// whose host access is OPTIONAL and granted later — Cookie-Editor declares no host_permissions and
+    /// requests the current site's origin from its popup, so every `cookies.getAll` was rejected even
+    /// after the user granted it. Granted origins are user-consented (the permission prompt), so honoring
+    /// them is Chrome-correct and is NOT the content_scripts-widening the per-gate comments warn against.
+    func effectiveHostOrigins(extensionID: String, manifest: WebExtensionManifest?) async -> [String] {
+        let granted = await BrownBearServices.shared.webExtensionPermissionGrants.granted(extensionID: extensionID)
+        return (manifest?.hostPermissions ?? []) + Array(granted.origins)
     }
 
     // MARK: - chrome.cookies
@@ -64,11 +76,11 @@ extension WebExtensionMessageRouter {
                 }
                 return await host.webExtGetAllCookies(filter: details, storeId: storeId)
             }
-            // Unscoped getAll({}) must NOT return every cookie — filter to the extension's host
-            // permissions ONLY (a content_scripts match is not host access in Chrome; else "cookies"
-            // alone exfiltrates all sessions). Fail closed.
+            // Unscoped getAll({}) must NOT return every cookie — filter to the extension's EFFECTIVE host
+            // access (declared host_permissions ∪ user-granted optional origins; a content_scripts match is
+            // not host access in Chrome; else "cookies" alone exfiltrates all sessions). Fail closed.
             guard let manifest = await store.ext(for: extensionID)?.manifest else { return [] }
-            let matcher = URLMatcher(matches: manifest.hostPermissions,
+            let matcher = URLMatcher(matches: await effectiveHostOrigins(extensionID: extensionID, manifest: manifest),
                                      includes: [], excludes: [], excludeMatches: [])
             let all = await host.webExtGetAllCookies(filter: details, storeId: storeId)
             return all.filter { cookie in
@@ -104,10 +116,10 @@ extension WebExtensionMessageRouter {
 
     func cookieHostAllowed(extensionID: String, details: [String: Any]) async throws -> Bool {
         guard let manifest = await store.ext(for: extensionID)?.manifest else { return false }
-        // Gate on host_permissions ONLY — content_scripts.matches lets a script INJECT but confers no
-        // host access in Chrome (declare-permissions). Unioning content-script matches into the gate would
-        // let a content-script-only host silently read cookies / fetch cross-origin / executeScript there.
-        let matcher = URLMatcher(matches: manifest.hostPermissions,
+        // Effective host access (declared host_permissions ∪ user-granted optional origins). Cookie-Editor
+        // declares NO host_permissions and requests the active site's origin from its popup, so gating on
+        // the declared set alone rejected every cookies.getAll even after the user granted access.
+        let matcher = URLMatcher(matches: await effectiveHostOrigins(extensionID: extensionID, manifest: manifest),
                                  includes: [], excludes: [], excludeMatches: [])
         // Gate on the cookie's EFFECTIVE domain (an explicit `domain` wins over `url`) — see
         // WebExtensionCookieMapper.scopeAllowed. Closes the cross-domain cookies.set bypass.
@@ -131,7 +143,8 @@ extension WebExtensionMessageRouter {
             return ["error": "invalid URL"]
         }
         guard let manifest = await store.ext(for: extensionID)?.manifest else { return ["notPermitted": true] }
-        let matcher = URLMatcher(matches: manifest.hostPermissions,
+        let effectiveOrigins = await effectiveHostOrigins(extensionID: extensionID, manifest: manifest)
+        let matcher = URLMatcher(matches: effectiveOrigins,
                                  includes: [], excludes: [], excludeMatches: [])
         guard matcher.matches(urlString) else { return ["notPermitted": true] }
 
@@ -147,7 +160,7 @@ extension WebExtensionMessageRouter {
         }
         // A redirect-guarded session: a permitted host can't 30x-redirect the request onto an undeclared/
         // internal host (the gate above only sees the initial URL). Invalidate it once the request settles.
-        let session = WebExtensionFetchSecurity.redirectGuardedSession(hostPatterns: manifest.hostPermissions)
+        let session = WebExtensionFetchSecurity.redirectGuardedSession(hostPatterns: effectiveOrigins)
         defer { session.finishTasksAndInvalidate() }
         do {
             let (data, response) = try await session.data(for: request)
