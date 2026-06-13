@@ -100,6 +100,13 @@ final class InjectionOrchestrator {
     // MARK: - Setup
 
     private func configure() {
+        // Mirror every completed GM_xmlhttpRequest into the Network inspector (Logs → Network). The sink
+        // runs on the URLSession delegate queue, so it just hands the entry to the actor-backed store.
+        let networkLogStore = BrownBearServices.shared.networkLogStore
+        network.networkLogger = { entry in
+            Task { await networkLogStore.append(entry) }
+        }
+
         // requestIdleCallback / cancelIdleCallback polyfill — FIRST, so it precedes every other script in
         // both worlds. WebKit ships neither in any JS world (Safari has never implemented them); Chrome has
         // both in every window context, so an extension content script or userscript that calls

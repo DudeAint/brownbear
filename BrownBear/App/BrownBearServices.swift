@@ -18,6 +18,8 @@ final class BrownBearServices {
     let scriptStore = ScriptStore()
     let valueStore = GMValueStore()
     let logStore = LogStore()
+    /// In-memory recent network requests for the Logs → Network inspector (not persisted).
+    let networkLogStore = NetworkLogStore()
     let scheduleStore = ScheduleStateStore()
     let bookmarkStore = BookmarkStore()
     let historyStore = HistoryStore()

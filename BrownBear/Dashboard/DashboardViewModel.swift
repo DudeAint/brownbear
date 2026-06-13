@@ -38,6 +38,37 @@ final class DashboardViewModel: ObservableObject {
     @Published var updateMessage: String?
     @Published private(set) var isCheckingUpdates = false
 
+    /// Recent network requests for the Logs → Network tab (newest first), and its search field.
+    @Published private(set) var recentNetworkLogs: [NetworkLogEntry] = []
+    @Published var networkSearch = ""
+
+    /// Live-refreshes the Network tab as requests land (the store coalesces bursts before posting).
+    private var networkObserver: NSObjectProtocol?
+
+    init() {
+        networkObserver = NotificationCenter.default.addObserver(
+            forName: .brownBearNetworkLogDidChange, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in await self?.loadNetworkLogs() }
+        }
+    }
+
+    deinit {
+        if let networkObserver { NotificationCenter.default.removeObserver(networkObserver) }
+    }
+
+    /// `recentNetworkLogs` narrowed by the search field (URL, method, status, or originating script).
+    var filteredNetworkLogs: [NetworkLogEntry] {
+        let query = networkSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return recentNetworkLogs }
+        return recentNetworkLogs.filter { entry in
+            entry.url.lowercased().contains(query)
+                || entry.method.lowercased().contains(query)
+                || String(entry.statusCode).contains(query)
+                || entry.kind.displayName.lowercased().contains(query)
+                || (entry.scriptName?.lowercased().contains(query) ?? false)
+        }
+    }
+
     /// Installed scripts narrowed by the search field (name + match/include/crontab rules), so a
     /// power user with dozens of scripts can find one without scrolling the whole store-ordered list.
     var filteredScripts: [UserScript] {
@@ -103,6 +134,19 @@ final class DashboardViewModel: ObservableObject {
         self.scripts = loaded
         self.recentLogs = logs
         self.scheduleStates = states
+        await loadNetworkLogs()
+    }
+
+    /// Re-read the in-memory network log (newest first). Called from `load()` and on each change
+    /// notification, so the Network tab stays current while it's open.
+    func loadNetworkLogs() async {
+        recentNetworkLogs = await BrownBearServices.shared.networkLogStore.recent(limit: 300)
+    }
+
+    /// Empty the Network tab.
+    func clearNetworkLogs() async {
+        await BrownBearServices.shared.networkLogStore.clear()
+        recentNetworkLogs = []
     }
 
     func logs(for scriptID: UUID) async -> [LogEntry] {

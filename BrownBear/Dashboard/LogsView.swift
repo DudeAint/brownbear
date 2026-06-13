@@ -2,8 +2,9 @@
 //  LogsView.swift
 //  BrownBear
 //
-//  The execution log viewer — every line of GM_log/console output and background run results,
-//  newest first, with the originating script and a level color.
+//  The execution log viewer, now split into two tabs: "Console" (every line of GM_log/console output and
+//  background run results) and "Network" (each GM_xmlhttpRequest / fetch / XHR — domain + status + type in
+//  a collapsed row, tap the arrow to see the full request/response detail).
 //
 
 import SwiftUI
@@ -13,36 +14,60 @@ struct LogsView: View {
 
     @ObservedObject var model: DashboardViewModel
     @AppStorage(PageConsoleHandler.captureDefaultsKey) private var capturePageConsole = true
+    @State private var section: LogTab = .console
+
+    /// The two tabs inside the Logs screen.
+    enum LogTab: String, CaseIterable, Identifiable {
+        case console = "Console"
+        case network = "Network"
+        var id: String { rawValue }
+    }
+
+    private var searchPrompt: String {
+        section == .console ? "Search logs" : "Search requests"
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            if !model.recentLogs.isEmpty {
-                Picker("Filter", selection: $model.logFilter) {
-                    ForEach(LogFilter.allCases) { Text($0.title).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .padding(.bottom, 4)
+            Picker("Section", selection: $section) {
+                ForEach(LogTab.allCases) { Text($0.rawValue).tag($0) }
             }
-            content
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
+
+            switch section {
+            case .console: consoleSection
+            case .network: NetworkLogList(model: model)
+            }
         }
         .background(BBTheme.backgroundGradient)
-        .searchable(text: $model.logSearch, prompt: "Search logs")
+        .searchable(text: section == .console ? $model.logSearch : $model.networkSearch,
+                    prompt: Text(searchPrompt))
         .navigationTitle("Logs")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
-                    Toggle(isOn: $capturePageConsole) {
-                        Label("Capture page console", systemImage: "doc.text.magnifyingglass")
+                    if section == .console {
+                        Toggle(isOn: $capturePageConsole) {
+                            Label("Capture page console", systemImage: "doc.text.magnifyingglass")
+                        }
+                        Button(role: .destructive) {
+                            Task { await model.clearAllLogs() }
+                        } label: {
+                            Label("Clear logs", systemImage: "trash")
+                        }
+                        .disabled(model.recentLogs.isEmpty)
+                    } else {
+                        Button(role: .destructive) {
+                            Task { await model.clearNetworkLogs() }
+                        } label: {
+                            Label("Clear network log", systemImage: "trash")
+                        }
+                        .disabled(model.recentNetworkLogs.isEmpty)
                     }
-                    Button(role: .destructive) {
-                        Task { await model.clearAllLogs() }
-                    } label: {
-                        Label("Clear logs", systemImage: "trash")
-                    }
-                    .disabled(model.recentLogs.isEmpty)
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
@@ -50,38 +75,193 @@ struct LogsView: View {
         }
     }
 
+    // MARK: - Console tab
+
     @ViewBuilder
-    private var content: some View {
+    private var consoleSection: some View {
         if model.recentLogs.isEmpty {
-            emptyState
-        } else if model.filteredLogs.isEmpty {
             DashboardEmptyState(
-                systemImage: "line.3.horizontal.decrease.circle",
-                title: "No matching logs",
-                message: model.logSearch.isEmpty
-                    ? "No entries match the “\(model.logFilter.title)” filter."
-                    : "No entries match “\(model.logSearch)”."
+                systemImage: "list.bullet.rectangle",
+                title: "No logs yet",
+                message: "Output from your scripts — GM_log, console.log, and background runs — appears here."
             )
         } else {
-            // One UITextView holding the whole filtered log, not a SwiftUI Text per row. SwiftUI's
-            // `.textSelection(.enabled)` makes each Text its own selection island — you can only ever
-            // drag-select and copy a single line. A read-only UITextView gives native cross-line
-            // selection, the magnifier, Select All, and Copy, so the user can grab the entire log at
-            // once. The filter Picker stays pinned above (this view scrolls internally).
-            SelectableLogTextView(logs: model.filteredLogs)
-        }
-    }
+            VStack(spacing: 0) {
+                Picker("Filter", selection: $model.logFilter) {
+                    ForEach(LogFilter.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 4)
 
-    private var emptyState: some View {
-        DashboardEmptyState(
-            systemImage: "list.bullet.rectangle",
-            title: "No logs yet",
-            message: "Output from your scripts — GM_log, console.log, and background runs — appears here."
-        )
+                if model.filteredLogs.isEmpty {
+                    DashboardEmptyState(
+                        systemImage: "line.3.horizontal.decrease.circle",
+                        title: "No matching logs",
+                        message: model.logSearch.isEmpty
+                            ? "No entries match the “\(model.logFilter.title)” filter."
+                            : "No entries match “\(model.logSearch)”."
+                    )
+                } else {
+                    // One UITextView holding the whole filtered log gives native cross-line selection,
+                    // the magnifier, Select All, and Copy — SwiftUI Text can only select one line.
+                    SelectableLogTextView(logs: model.filteredLogs)
+                }
+            }
+        }
     }
 }
 
-/// A read-only, fully selectable rendering of the log as a single scrolling text view.
+// MARK: - Network tab
+
+/// The Network tab: a list of recent requests, newest first, each an expandable row.
+struct NetworkLogList: View {
+    @ObservedObject var model: DashboardViewModel
+
+    var body: some View {
+        if model.recentNetworkLogs.isEmpty {
+            DashboardEmptyState(
+                systemImage: "network",
+                title: "No network requests yet",
+                message: "GM_xmlhttpRequest, fetch, and XHR calls from your scripts and the pages you "
+                    + "visit show up here — tap a row's arrow for the full detail."
+            )
+        } else if model.filteredNetworkLogs.isEmpty {
+            DashboardEmptyState(
+                systemImage: "line.3.horizontal.decrease.circle",
+                title: "No matching requests",
+                message: "No requests match “\(model.networkSearch)”."
+            )
+        } else {
+            List {
+                ForEach(model.filteredNetworkLogs) { entry in
+                    NetworkLogRow(entry: entry)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparatorTint(BBTheme.Color.textSecondary.opacity(0.15))
+                }
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+        }
+    }
+}
+
+/// One request: a collapsed summary (status badge · host · method/type/path) that expands to full detail.
+struct NetworkLogRow: View {
+    let entry: NetworkLogEntry
+    @State private var expanded = false
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) {
+            NetworkLogDetail(entry: entry)
+                .padding(.top, 4)
+        } label: {
+            summary
+        }
+        .tint(BBTheme.Color.textSecondary)
+    }
+
+    private var summary: some View {
+        HStack(spacing: 10) {
+            statusBadge
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.host)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(BBTheme.Color.textPrimary)
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(entry.method)
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(BBTheme.Color.textSecondary)
+                    Text(entry.kind.displayName)
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(BBTheme.Color.accent)
+                    if !entry.pathAndQuery.isEmpty {
+                        Text(entry.pathAndQuery)
+                            .font(.system(size: 11))
+                            .foregroundStyle(BBTheme.Color.textSecondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var statusBadge: some View {
+        Text(entry.statusCode == 0 ? "ERR" : "\(entry.statusCode)")
+            .font(.system(size: 11, weight: .bold, design: .monospaced))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(statusColor)
+            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+    }
+
+    private var statusColor: Color {
+        switch entry.statusCode {
+        case 200..<300: return .green
+        case 300..<400: return .blue
+        case 400..<600: return .red
+        default: return entry.error != nil ? .red : .gray
+        }
+    }
+}
+
+/// The expanded detail for one request: the full URL, timing, sizes, and request/response headers/body —
+/// all selectable so a single line or the whole block can be copied.
+struct NetworkLogDetail: View {
+    let entry: NetworkLogEntry
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            field("URL", entry.url)
+            field("Method", entry.method)
+            field("Type", entry.kind.displayName)
+            field("Status", entry.statusCode == 0 ? "— (failed)" : "\(entry.statusCode)")
+            if let ms = entry.durationMs { field("Duration", "\(ms) ms") }
+            if let bytes = entry.responseBytes { field("Response size", "\(bytes) bytes") }
+            if let name = entry.scriptName { field("Script", name) }
+            if let error = entry.error { field("Error", error) }
+            if !entry.requestHeaders.isEmpty { headers("Request headers", entry.requestHeaders) }
+            if let body = entry.requestBody, !body.isEmpty { field("Request body", body) }
+            if !entry.responseHeaders.isEmpty { headers("Response headers", entry.responseHeaders) }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 4)
+        .textSelection(.enabled)
+    }
+
+    private func field(_ key: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(key.uppercased())
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(BBTheme.Color.textSecondary)
+            Text(value)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(BBTheme.Color.textPrimary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func headers(_ title: String, _ headers: [String: String]) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(title.uppercased())
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(BBTheme.Color.textSecondary)
+            ForEach(headers.sorted(by: { $0.key < $1.key }), id: \.key) { header in
+                Text("\(header.key): \(header.value)")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(BBTheme.Color.textPrimary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+}
+
+/// A read-only, fully selectable rendering of the console log as a single scrolling text view.
 ///
 /// SwiftUI can't select across separate `Text` views, so copying "the logs" really meant copying one
 /// line. This wraps a `UITextView` (non-editable, selectable) whose attributed string is the whole

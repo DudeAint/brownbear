@@ -614,7 +614,8 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         }
 
         network.start(requestID: requestID, payload: request,
-                      connects: effectiveConnects, pageHost: pageHost, emit: emit)
+                      connects: effectiveConnects, pageHost: pageHost,
+                      scriptName: session.name, emit: emit)
     }
 
     /// Decide whether `host` may be connected to for this script: a prior user grant proceeds
