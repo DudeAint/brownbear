@@ -27,11 +27,12 @@ How scripts run (why complex scripts work):
 | `GM_getResourceText` / `GM_getResourceURL` | `@resource` fetched natively; URL served as a `data:` URL |
 | `GM_log` | Routed to the dashboard log viewer |
 | `GM_info` | `scriptHandler: "BrownBear"`, metadata block, parsed script object |
-| `unsafeWindow` | The page window |
+| `unsafeWindow` | The page window — for `@grant none` (and `@inject-into page`/`auto` with no grants) the script runs in the page's real main world, so `unsafeWindow === window ===` the page's own globals; a granted script runs in the isolated world (see `@inject-into`) |
 | `GM.*` (Promise variants) | `GM.getValue/setValue/…/xmlHttpRequest/addStyle/…` |
 | `@require` / `@resource` | Native fetch (no CORS) |
 | `@match` / `@include` / `@exclude` / `@exclude-match` | Chrome match patterns + glob/regex |
 | `@run-at` | `document-start` / `document-end` / `document-idle` |
+| `@inject-into` | `page` / `content` / `auto` (default). `content` = our isolated world. `page`/`auto` run in the page's REAL main world (CSP-immune native eval) **when the script takes no GM grants** (`@grant none`) so page globals are reachable; a granted script needs the GM bridge, which lives only in the isolated world, so it stays there |
 | `@grant` (incl. `none`) | Native + JS-enforced |
 | `@connect` | Enforced for `GM_xmlhttpRequest` |
 | `@noframes` | |
@@ -44,6 +45,7 @@ How scripts run (why complex scripts work):
 | `GM_addValueChangeListener` | Fires for changes in the **same execution context**. Cross-tab `remote: true` broadcast is not yet wired (each tab is a separate WebKit content process). |
 | `@run-at document-idle` | Simulated via the `window` load event (WebKit has no native document-idle). |
 | `GM_xmlhttpRequest` `responseType` | `text`/`json`/`arraybuffer`/`blob` supported; `document`/`stream` are best-effort. |
+| `@inject-into page` **with** GM grants | Page-world execution is grant-none only — the GM bridge is reachable solely from the isolated world. A script that declares `@inject-into page` but also takes `@grant GM_*` runs in the isolated world (and logs a one-line notice); use `@grant none` for true page-window access. |
 
 ## Not yet implemented (planned)
 
