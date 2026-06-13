@@ -2,49 +2,67 @@
 //  BrownBearBrowserViewController+TabSwipe.swift
 //  BrownBear
 //
-//  Safari-style "swipe the address bar to change tabs". A horizontal pan on the omnibox bar interactively
-//  slides the current tab off and the ADJACENT tab in — and, exactly like iOS, the ADDRESS BAR moves with
-//  the tab: the current URL pill slides out while the neighbour's slides in, in lockstep with the content.
-//  Each tab's already-captured snapshot is used so the neighbour appears instantly "preloaded" — no flash,
-//  no wait. Past a distance/velocity threshold the gesture commits to the neighbour; short of it, both the
-//  content and the bar spring back, and an edge tab rubber-bands rather than dragging into empty space.
+//  Safari-style bottom-bar gestures on the address bar:
 //
-//  Why the bar and not the page: WKWebView owns its own interactive back/forward edge-swipe; driving tab
-//  switching from the page would fight it. Anchoring the gesture to the address bar (exactly what the user
-//  reaches for) keeps the two completely separate. The pan never cancels touches, so tapping the bar to
-//  edit the URL still works; it only begins on a clearly-horizontal drag while not editing.
+//   • Swipe LEFT/RIGHT — the page + its address-bar pill track your finger 1:1 like a horizontal carousel
+//     of cards, the neighbour tab sliding in from the opposite edge (drag right → the PREVIOUS tab comes in
+//     from the left; drag left → the NEXT tab comes in from the right). Release past ~halfway OR with a
+//     flick to complete (a velocity-aware spring carries it); short and slow springs back; an edge tab
+//     rubber-bands. Each tab carries its own URL pill, so the bars drift with their pages.
 //
-//  The neighbour set is the active tab's OWN privacy set (normal vs private), matching the tab grid. The
-//  live web-view swap happens through the normal TabManager.setActiveTab path once the slide settles; the
-//  snapshot overlays (content + bar) cover the swap, then fade.
+//   • Swipe UP — opens the tab switcher (the page settles into its grid card via the existing zoom
+//     transition). A deliberate up-drag (or an upward flick) on the bar triggers it.
+//
+//  Anchored to the address bar (topChrome), NOT the page, so it never fights WKWebView's own back/forward
+//  edge-swipe. The pan never cancels touches, so tapping the bar to edit the URL still works; it only begins
+//  on a clearly-horizontal drag (with a neighbour) or a clearly-upward drag, and never while editing.
 //
 
 import UIKit
 
-/// Transient state for one in-flight address-bar swipe. Lives only between `.began` and the settle
-/// animation's completion; `BrownBearBrowserViewController.tabSwipeSession` is nil whenever idle.
+/// Transient state for one in-flight bar gesture. Lives only between `.began` and the settle animation's
+/// completion; `BrownBearBrowserViewController.tabSwipeSession` is nil whenever idle.
 final class TabSwipeSession {
-    /// The content overlay holding the three side-by-side layers (previous | current | next).
-    let contentHolder: UIView
-    /// The address-bar overlay holding the matching three bar layers; translated in lockstep with content.
-    let barHolder: UIView
+    enum Axis { case horizontal, verticalUp }
+    let axis: Axis
+    /// Content overlay (previous | current | next) — horizontal only.
+    let contentHolder: UIView?
+    /// Matching address-bar overlay, translated in lockstep with content — horizontal only.
+    let barHolder: UIView?
     /// The content width one tab occupies — the full commit translation and rubber-band reference.
     let width: CGFloat
     /// The tab revealed by a rightward swipe (the one before the active tab), or nil at the left edge.
     let leftTab: Tab?
     /// The tab revealed by a leftward swipe (the one after the active tab), or nil at the right edge.
     let rightTab: Tab?
+    /// verticalUp: guards the one-shot tab-grid open.
+    var gridOpened = false
 
+    /// Horizontal tab-switch session.
     init(contentHolder: UIView, barHolder: UIView, width: CGFloat, leftTab: Tab?, rightTab: Tab?) {
+        self.axis = .horizontal
         self.contentHolder = contentHolder
         self.barHolder = barHolder
         self.width = width
         self.leftTab = leftTab
         self.rightTab = rightTab
     }
+
+    /// Vertical (swipe-up → tab grid) session — no overlays.
+    init() {
+        self.axis = .verticalUp
+        self.contentHolder = nil
+        self.barHolder = nil
+        self.width = 0
+        self.leftTab = nil
+        self.rightTab = nil
+    }
 }
 
 extension BrownBearBrowserViewController: UIGestureRecognizerDelegate {
+
+    /// Distance you must drag up before a release opens the tab grid (also the mid-drag trigger).
+    private var tabSwipeUpThreshold: CGFloat { 70 }
 
     /// Attach the pan to the address bar. Called once from viewDidLoad after the chrome is built.
     func installTabSwipeGesture() {
@@ -58,14 +76,17 @@ extension BrownBearBrowserViewController: UIGestureRecognizerDelegate {
 
     // MARK: - Gesture delegate
 
-    /// Begin only on a clearly-horizontal drag, while not editing the URL, and only when the active tab
-    /// has a same-privacy neighbour to move to.
+    /// Begin on a clearly-horizontal drag (with a same-privacy neighbour to switch to) OR a clearly-upward
+    /// drag (to open the tab grid), while not editing the URL.
     func gestureRecognizerShouldBegin(_ gesture: UIGestureRecognizer) -> Bool {
         guard gesture === tabSwipePan else { return true }
         guard tabSwipeSession == nil, !omnibox.isEditingURL else { return false }
-        guard let neighbours = tabSwipeNeighbours(), neighbours.set.count > 1 else { return false }
         let velocity = tabSwipePan.velocity(in: topChrome)
-        return abs(velocity.x) > abs(velocity.y)
+        if abs(velocity.y) > abs(velocity.x) {
+            return velocity.y < 0   // upward → tab grid (always allowed, even with one tab)
+        }
+        guard let neighbours = tabSwipeNeighbours(), neighbours.set.count > 1 else { return false }
+        return true
     }
 
     /// Coexist with the bar's other recognizers (and the omnibox's own controls) rather than blocking them.
@@ -79,18 +100,52 @@ extension BrownBearBrowserViewController: UIGestureRecognizerDelegate {
     @objc func handleTabSwipePan(_ pan: UIPanGestureRecognizer) {
         switch pan.state {
         case .began:
-            beginTabSwipe()
+            let velocity = pan.velocity(in: contentContainer)
+            if abs(velocity.y) > abs(velocity.x) {
+                tabSwipeSession = TabSwipeSession()   // verticalUp → tab grid
+            } else {
+                beginTabSwipe()
+            }
         case .changed:
-            updateTabSwipe(translationX: pan.translation(in: contentContainer).x)
+            guard let session = tabSwipeSession else { return }
+            if session.axis == .verticalUp {
+                updateVerticalUp(translationY: pan.translation(in: contentContainer).y, session: session)
+            } else {
+                updateTabSwipe(translationX: pan.translation(in: contentContainer).x)
+            }
         case .ended, .cancelled, .failed:
-            finishTabSwipe(translationX: pan.translation(in: contentContainer).x,
-                           velocityX: pan.velocity(in: contentContainer).x)
+            guard let session = tabSwipeSession else { return }
+            if session.axis == .verticalUp {
+                finishVerticalUp(translationY: pan.translation(in: contentContainer).y,
+                                 velocityY: pan.velocity(in: contentContainer).y, session: session)
+            } else {
+                finishTabSwipe(translationX: pan.translation(in: contentContainer).x,
+                               velocityX: pan.velocity(in: contentContainer).x)
+            }
         default:
             break
         }
     }
 
-    // MARK: - Phases
+    // MARK: - Swipe up → tab grid
+
+    private func updateVerticalUp(translationY: CGFloat, session: TabSwipeSession) {
+        // Open the grid as soon as the up-drag is committed, so it feels responsive (the grid's own zoom
+        // transition then settles the page into its card).
+        guard !session.gridOpened, translationY < -tabSwipeUpThreshold else { return }
+        session.gridOpened = true
+        toolbarDidTapTabs(toolbar)
+    }
+
+    private func finishVerticalUp(translationY: CGFloat, velocityY: CGFloat, session: TabSwipeSession) {
+        if !session.gridOpened, translationY < -tabSwipeUpThreshold || velocityY < -800 {
+            session.gridOpened = true
+            toolbarDidTapTabs(toolbar)
+        }
+        clearTabSwipeSession(session)
+    }
+
+    // MARK: - Swipe left/right → tab switch
 
     private func beginTabSwipe() {
         guard tabSwipeSession == nil, let neighbours = tabSwipeNeighbours() else { return }
@@ -134,20 +189,23 @@ extension BrownBearBrowserViewController: UIGestureRecognizerDelegate {
     }
 
     private func updateTabSwipe(translationX: CGFloat) {
-        guard let session = tabSwipeSession else { return }
+        guard let session = tabSwipeSession,
+              let contentHolder = session.contentHolder, let barHolder = session.barHolder else { return }
         let dx = effectiveTranslation(translationX, session: session)
         let transform = CGAffineTransform(translationX: dx, y: 0)
-        session.contentHolder.transform = transform
-        session.barHolder.transform = transform
+        contentHolder.transform = transform
+        barHolder.transform = transform
     }
 
     private func finishTabSwipe(translationX: CGFloat, velocityX: CGFloat) {
-        guard let session = tabSwipeSession else { return }
+        guard let session = tabSwipeSession,
+              let contentHolder = session.contentHolder, let barHolder = session.barHolder else { return }
         let width = session.width
-        let distanceThreshold = width * 0.32
-        let flingThreshold: CGFloat = 700
+        let distanceThreshold = width * 0.5      // commit past roughly halfway…
+        let flingThreshold: CGFloat = 500        // …or on a flick, even a short one.
 
-        // Swipe RIGHT (positive) reveals the previous (left) tab; swipe LEFT reveals the next (right) tab.
+        // Drag RIGHT (positive) reveals the PREVIOUS (left) tab from the left edge; drag LEFT reveals the
+        // NEXT (right) tab from the right edge — the content moves WITH the finger (Safari carousel).
         var target: Tab?
         var settle: CGFloat = 0
         if (translationX > distanceThreshold || velocityX > flingThreshold), let left = session.leftTab {
@@ -158,42 +216,58 @@ extension BrownBearBrowserViewController: UIGestureRecognizerDelegate {
             settle = -width
         }
 
+        let current = effectiveTranslation(translationX, session: session)
+        let destination = target == nil ? 0 : settle
+        let springVelocity = springVelocity(for: velocityX, from: current, to: destination)
+
         guard let target else {
             // No commit: spring content and bar back to centre together, then tear the overlays down.
-            UIView.animate(withDuration: 0.25, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) {
-                session.contentHolder.transform = .identity
-                session.barHolder.transform = .identity
+            UIView.animate(withDuration: 0.45, delay: 0, usingSpringWithDamping: 0.82,
+                           initialSpringVelocity: springVelocity,
+                           options: [.curveEaseOut, .allowUserInteraction]) {
+                contentHolder.transform = .identity
+                barHolder.transform = .identity
             } completion: { [weak self] _ in
-                session.contentHolder.removeFromSuperview()
-                session.barHolder.removeFromSuperview()
+                contentHolder.removeFromSuperview()
+                barHolder.removeFromSuperview()
                 self?.clearTabSwipeSession(session)
             }
             return
         }
 
         let settleTransform = CGAffineTransform(translationX: settle, y: 0)
-        UIView.animate(withDuration: 0.28, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) {
-            session.contentHolder.transform = settleTransform
-            session.barHolder.transform = settleTransform
+        UIView.animate(withDuration: 0.4, delay: 0, usingSpringWithDamping: 0.86,
+                       initialSpringVelocity: springVelocity,
+                       options: [.curveEaseOut, .allowUserInteraction]) {
+            contentHolder.transform = settleTransform
+            barHolder.transform = settleTransform
         } completion: { [weak self] _ in
             guard let self else { return }
             // Swap in the neighbour's LIVE web view (and refresh the real omnibox to its URL) behind the
             // now-full-screen snapshots, then fade the overlays out to reveal them — no flash.
             self.tabManager.setActiveTab(target)
-            self.contentContainer.bringSubviewToFront(session.contentHolder)
-            self.topChrome.bringSubviewToFront(session.barHolder)
+            self.contentContainer.bringSubviewToFront(contentHolder)
+            self.topChrome.bringSubviewToFront(barHolder)
             UIView.animate(withDuration: 0.18) {
-                session.contentHolder.alpha = 0
-                session.barHolder.alpha = 0
+                contentHolder.alpha = 0
+                barHolder.alpha = 0
             } completion: { _ in
-                session.contentHolder.removeFromSuperview()
-                session.barHolder.removeFromSuperview()
+                contentHolder.removeFromSuperview()
+                barHolder.removeFromSuperview()
             }
             self.clearTabSwipeSession(session)
         }
     }
 
     // MARK: - Helpers
+
+    /// A normalized initial spring velocity (UIView spring units = fraction of the remaining distance per
+    /// second) from the pan's point/sec velocity, so a fast flick keeps its momentum into the settle.
+    private func springVelocity(for velocityX: CGFloat, from current: CGFloat, to destination: CGFloat) -> CGFloat {
+        let remaining = abs(destination - current)
+        guard remaining > 1 else { return 0 }
+        return min(abs(velocityX) / remaining, 6)
+    }
 
     /// The active tab's same-privacy set and the active tab's index within it.
     private func tabSwipeNeighbours() -> (set: [Tab], index: Int)? {
