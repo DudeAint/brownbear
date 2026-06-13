@@ -39,6 +39,9 @@ final class TabSwipeSession {
     let hero: UIView?
     /// verticalUp: the darkening backdrop behind the shrinking page.
     let dimView: UIView?
+    /// verticalUp: the page image (same as `hero`'s) handed to the grid on release so it can finish the
+    /// shrink into the active card's real frame.
+    let pageImage: UIImage?
     /// verticalUp: the page snapshot's full-screen start frame (the content area).
     let startFrame: CGRect
     /// verticalUp: the (approx) grid-card frame the page shrinks into.
@@ -56,12 +59,13 @@ final class TabSwipeSession {
         self.rightTab = rightTab
         self.hero = nil
         self.dimView = nil
+        self.pageImage = nil
         self.startFrame = .zero
         self.targetFrame = .zero
     }
 
     /// Interactive swipe-up → tab grid: the page snapshot shrinks from `startFrame` toward `targetFrame`.
-    init(hero: UIView, dimView: UIView, startFrame: CGRect, targetFrame: CGRect) {
+    init(hero: UIView, dimView: UIView, pageImage: UIImage?, startFrame: CGRect, targetFrame: CGRect) {
         self.axis = .verticalUp
         self.contentHolder = nil
         self.barHolder = nil
@@ -70,6 +74,7 @@ final class TabSwipeSession {
         self.rightTab = nil
         self.hero = hero
         self.dimView = dimView
+        self.pageImage = pageImage
         self.startFrame = startFrame
         self.targetFrame = targetFrame
     }
@@ -149,20 +154,23 @@ extension BrownBearBrowserViewController: UIGestureRecognizerDelegate {
 
     // MARK: - Swipe up → tab grid (interactive shrink)
 
-    /// Capture the page as a snapshot that will shrink toward its grid card as the finger drags up.
+    /// Capture the page as an image-backed hero that shrinks toward its grid card as the finger drags up.
+    /// The SAME image is handed to the grid on release so it can fly into the card 1:1 (an image, not a
+    /// snapshot view, so it aspect-fills cleanly into the card instead of stretching).
     private func beginVerticalUp() {
         guard tabSwipeSession == nil else { return }
         let startFrame = contentContainer.frame
-        guard startFrame.width > 0,
-              let snapshot = contentContainer.snapshotView(afterScreenUpdates: false) else {
+        guard startFrame.width > 0, let image = renderImage(of: contentContainer) else {
             // No snapshot — fall back to the plain (non-interactive) grid open on release.
-            tabSwipeSession = TabSwipeSession(hero: UIView(), dimView: UIView(),
+            tabSwipeSession = TabSwipeSession(hero: UIView(), dimView: UIView(), pageImage: nil,
                                               startFrame: .zero, targetFrame: .zero)
             return
         }
-        snapshot.frame = startFrame
-        snapshot.layer.cornerCurve = .continuous
-        snapshot.clipsToBounds = true
+        let hero = UIImageView(image: image)
+        hero.contentMode = .scaleAspectFill
+        hero.frame = startFrame
+        hero.layer.cornerCurve = .continuous
+        hero.clipsToBounds = true
 
         let dim = UIView(frame: view.bounds)
         dim.backgroundColor = .black
@@ -170,10 +178,10 @@ extension BrownBearBrowserViewController: UIGestureRecognizerDelegate {
         dim.isUserInteractionEnabled = false
 
         view.addSubview(dim)
-        view.addSubview(snapshot)
+        view.addSubview(hero)
         contentContainer.isHidden = true   // only the shrinking snapshot shows during the drag
 
-        tabSwipeSession = TabSwipeSession(hero: snapshot, dimView: dim, startFrame: startFrame,
+        tabSwipeSession = TabSwipeSession(hero: hero, dimView: dim, pageImage: image, startFrame: startFrame,
                                           targetFrame: tabGridCardTargetFrame(from: startFrame))
     }
 
@@ -211,19 +219,21 @@ extension BrownBearBrowserViewController: UIGestureRecognizerDelegate {
         let progress = min(max(-translationY / distance, 0), 1)
 
         if progress > 0.4 || velocityY < -700 {
-            // Finish the shrink into the card, then present the grid beneath it (no extra zoom) and clean up.
-            UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseOut]) {
-                hero.frame = session.targetFrame
-                hero.layer.cornerRadius = BrownBearTheme.Metrics.cellCornerRadius
-                dim.alpha = 0.45
-            } completion: { [weak self] _ in
-                guard let self else { return }
-                self.presentTabGridWithoutAnimation()
-                self.contentContainer.isHidden = false
-                hero.removeFromSuperview()
-                dim.removeFromSuperview()
-                self.clearTabSwipeSession(session)
+            // Hand the page off to the grid: present it (no built-in transition) and let it finish the shrink
+            // from where the finger let go into the active card's REAL frame — no approximation, no snap.
+            let releaseFrame = view.convert(hero.frame, to: nil)
+            let corner = hero.layer.cornerRadius
+            hero.removeFromSuperview()
+            dim.removeFromSuperview()
+            contentContainer.isHidden = false
+            if let image = session.pageImage {
+                presentTabGridWithoutAnimation { grid in
+                    grid.prepareFlyIn(image: image, fromWindowFrame: releaseFrame, cornerRadius: corner)
+                }
+            } else {
+                presentTabGrid()
             }
+            clearTabSwipeSession(session)
         } else {
             // Spring the page back to full screen — nothing opens.
             UIView.animate(withDuration: 0.32, delay: 0, usingSpringWithDamping: 0.85, initialSpringVelocity: 0,
@@ -240,39 +250,31 @@ extension BrownBearBrowserViewController: UIGestureRecognizerDelegate {
         }
     }
 
-    /// Tab-icon press: the SAME hero shrink as the interactive swipe-up, run as a fixed animation — the
-    /// page snapshot scales into its grid card, then the grid is presented beneath it (no second zoom), so
-    /// tapping the tab button and swiping up land in the same place with the same motion.
+    /// Tab-icon press: the SAME shrink-into-card motion as the interactive swipe-up, just non-interactive.
+    /// The grid is presented (no built-in transition) and flies the full-screen page snapshot down into the
+    /// active card's real frame — so tapping the tab button and swiping up land in the same place, the same way.
     func animateTabGridShrink() {
         guard tabSwipeSession == nil else { return }   // don't fire mid-swipe
         let startFrame = contentContainer.frame
-        guard startFrame.width > 0,
-              let snapshot = contentContainer.snapshotView(afterScreenUpdates: false) else {
+        guard startFrame.width > 0, let image = renderImage(of: contentContainer) else {
             presentTabGrid()   // can't snapshot — plain animated present
             return
         }
-        snapshot.frame = startFrame
-        snapshot.layer.cornerCurve = .continuous
-        snapshot.clipsToBounds = true
-        let dim = UIView(frame: view.bounds)
-        dim.backgroundColor = .black
-        dim.alpha = 0
-        dim.isUserInteractionEnabled = false
-        view.addSubview(dim)
-        view.addSubview(snapshot)
-        contentContainer.isHidden = true
-        let target = tabGridCardTargetFrame(from: startFrame)
-        UIView.animate(withDuration: 0.32, delay: 0, usingSpringWithDamping: 0.9, initialSpringVelocity: 0,
-                       options: [.curveEaseInOut]) {
-            snapshot.frame = target
-            snapshot.layer.cornerRadius = BrownBearTheme.Metrics.cellCornerRadius
-            dim.alpha = 0.45
-        } completion: { [weak self] _ in
-            guard let self else { return }
-            self.presentTabGridWithoutAnimation()
-            self.contentContainer.isHidden = false
-            snapshot.removeFromSuperview()
-            dim.removeFromSuperview()
+        let releaseFrame = view.convert(startFrame, to: nil)
+        presentTabGridWithoutAnimation { grid in
+            grid.prepareFlyIn(image: image, fromWindowFrame: releaseFrame, cornerRadius: 0)
+        }
+    }
+
+    /// Render a view's current contents to an image — the page hero for the swipe-up shrink and the grid
+    /// hand-off both use it, so the same picture shrinks and then flies into the card.
+    private func renderImage(of target: UIView) -> UIImage? {
+        guard target.bounds.width > 0, target.bounds.height > 0 else { return nil }
+        let format = UIGraphicsImageRendererFormat.default()
+        format.opaque = false
+        let renderer = UIGraphicsImageRenderer(bounds: target.bounds, format: format)
+        return renderer.image { _ in
+            target.drawHierarchy(in: target.bounds, afterScreenUpdates: false)
         }
     }
 

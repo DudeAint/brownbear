@@ -51,6 +51,14 @@ final class BrownBearTabGridController: UIViewController {
     private(set) var selectedCardImage: UIImage?
     private(set) var selectedCardFrame: CGRect = .zero
 
+    /// A handed-over "the page snapshot flies into the active card" intro, set by the browser right before
+    /// it presents the grid with NO transition (the interactive swipe-up / tab-button shrink). The browser
+    /// shrank the page to wherever the finger let go; the grid finishes the motion into the active card's
+    /// REAL frame — not an approximation — so there's no snap. Installed before the first draw, run once.
+    private var pendingFlyIn: (image: UIImage, fromWindowFrame: CGRect, cornerRadius: CGFloat)?
+    private var flyInHero: UIImageView?
+    private var didRunFlyIn = false
+
     /// The tabs currently displayed, scoped to the active mode.
     private var displayedTabs: [Tab] { showingPrivate ? tabManager.privateTabs : tabManager.normalTabs }
 
@@ -83,11 +91,85 @@ final class BrownBearTabGridController: UIViewController {
         centerOnActiveTab()
     }
 
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        // Put the handed-over page snapshot on top BEFORE the grid's first draw, so the page never blinks
+        // out in the gap between the browser tearing down its drag hero and the grid taking over.
+        installFlyInHeroIfNeeded()
+    }
+
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         // The present transition can finish without firing another layout pass, so run one authoritative
         // center on the next runloop once everything has settled. Still gated on user interaction.
         DispatchQueue.main.async { [weak self] in self?.centerOnActiveTab() }
+        runFlyInIfNeeded()
+    }
+
+    // MARK: - Swipe-up / tab-button shrink hand-off
+
+    /// Called by the browser BEFORE `present(animated: false)`. Stores the page snapshot the gesture shrank
+    /// and the window frame it was released at; the grid installs the hero in `viewWillAppear` and animates
+    /// it into the active card's real frame in `viewDidAppear`.
+    func prepareFlyIn(image: UIImage, fromWindowFrame frame: CGRect, cornerRadius: CGFloat) {
+        pendingFlyIn = (image, frame, cornerRadius)
+    }
+
+    private func installFlyInHeroIfNeeded() {
+        guard let fly = pendingFlyIn, flyInHero == nil else { return }
+        let hero = UIImageView(image: fly.image)
+        hero.contentMode = .scaleAspectFill
+        hero.clipsToBounds = true
+        hero.layer.cornerCurve = .continuous
+        hero.layer.cornerRadius = fly.cornerRadius
+        hero.frame = view.convert(fly.fromWindowFrame, from: nil)
+        view.addSubview(hero)
+        flyInHero = hero
+    }
+
+    /// Finish the intro: force the grid to its final centered layout, then spring the page snapshot from its
+    /// release frame into the active tab's REAL card frame and reveal the card. If the card can't be located
+    /// (off-screen / no snapshot yet) the hero just dissolves away.
+    private func runFlyInIfNeeded() {
+        guard !didRunFlyIn, let hero = flyInHero else { return }
+        didRunFlyIn = true
+        pendingFlyIn = nil
+
+        view.layoutIfNeeded()
+        centerOnActiveTab()
+        collectionView.layoutIfNeeded()
+
+        guard let activeID = tabManager.activeTabID,
+              let indexPath = dataSource.indexPath(for: activeID),
+              let cell = collectionView.cellForItem(at: indexPath) as? TabGridCell,
+              let cardWindowFrame = cell.snapshotRegionFrame() else {
+            UIView.animate(withDuration: 0.2, animations: { hero.alpha = 0 }) { [weak self] _ in
+                hero.removeFromSuperview()
+                self?.flyInHero = nil
+            }
+            return
+        }
+
+        let target = view.convert(cardWindowFrame, from: nil)
+        cell.setSnapshotRegionHidden(true)   // hide the real card art while its copy flies into it
+
+        let endCorner = BrownBearTheme.Metrics.cellCornerRadius
+        let corner = CABasicAnimation(keyPath: "cornerRadius")
+        corner.fromValue = hero.layer.cornerRadius
+        corner.toValue = endCorner
+        corner.duration = 0.34
+        corner.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        hero.layer.cornerRadius = endCorner
+        hero.layer.add(corner, forKey: "flyCorner")
+
+        UIView.animate(withDuration: 0.34, delay: 0, usingSpringWithDamping: 0.86, initialSpringVelocity: 0,
+                       options: [.curveEaseOut, .allowUserInteraction]) {
+            hero.frame = target
+        } completion: { [weak self] _ in
+            cell.setSnapshotRegionHidden(false)
+            hero.removeFromSuperview()
+            self?.flyInHero = nil
+        }
     }
 
     /// Keep the grid centered on the active tab UNTIL the user touches it. Re-running on every layout pass

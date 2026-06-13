@@ -65,6 +65,12 @@ final class TabGridCell: UICollectionViewCell {
         return (frame.width > 1 && frame.height > 1) ? frame : nil
     }
 
+    /// Hide just the page-snapshot art (the card frame, border and title stay) while a page hero flies into
+    /// this card during the swipe-up / tab-button shrink, so there aren't two copies of the page mid-flight.
+    func setSnapshotRegionHidden(_ hidden: Bool) {
+        snapshotView.alpha = hidden ? 0 : 1
+    }
+
     private func setActive(_ active: Bool) {
         card.layer.borderWidth = active ? 2.5 : BrownBearTheme.Metrics.hairline
         card.layer.borderColor = (active ? BrownBearTheme.Palette.accent
