@@ -146,6 +146,12 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         "GM_registerMenuCommand", "GM_unregisterMenuCommand", "GM_getTab", "GM_saveTab", "GM_listTabs"
     ]
 
+    /// The GM value-store APIs, dispatched as a group in route() (before the main switch) for the same
+    /// cyclomatic-complexity reason as menuTabAPIs. Keep in sync with routeValueAPIs.
+    private static let valueAPIs: Set<String> = [
+        "GM_getValue", "GM_setValue", "GM_deleteValue", "GM_listValues", "GM_setValues", "GM_deleteValues"
+    ]
+
     init(scriptStore: ScriptStore,
          valueStore: GMValueStore,
          network: GMNetworkService,
@@ -224,66 +230,24 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         // Everything else requires a native-bound session and a grant.
         let session = try resolveSession(token)
 
-        // Page-world execution: the isolated-world runtime asks native to evaluate a grant-none
-        // userscript in this frame's REAL main world (WKContentWorld.page), so `window`/`unsafeWindow`
-        // are the page's own globals (@grant none / @inject-into page — Tampermonkey parity). Like the
-        // extension runtime's page.injectMainWorld, native eval is CSP-immune (unlike an inline
-        // <script>). It needs no GM grant — a grant-none script has no GM surface — but IS gated on a
-        // valid session token (proves the call came from a script this router actually minted), and the
-        // handler is registered ONLY in the isolated world, so a page script can never reach it.
+        // Page-world execution is handled in a helper so route() stays within its cyclomatic-complexity
+        // budget (it needs a valid session token but no GM grant — see handleInjectPageWorld).
         if api == "injectPageWorld" {
-            if let webView, let code = payload["code"] as? String, !code.isEmpty {
-                BBEvaluateJavaScriptInFrame(webView, code, frameInfo, .page)
-            }
-            return NSNull()
+            return handleInjectPageWorld(payload: payload, webView: webView, frameInfo: frameInfo)
         }
 
         try ensureGranted(api: api, session: session)
 
-        // The menu/tab APIs are dispatched here, before the main switch, so route() stays within its
-        // cyclomatic-complexity budget as the GM surface grows (they all share one sub-dispatch).
+        // The menu/tab and value-store APIs are each dispatched here, before the main switch, so route()
+        // stays within its cyclomatic-complexity budget as the GM surface grows (each shares one sub-dispatch).
         if Self.menuTabAPIs.contains(api) {
             return try routeMenuOrTab(api: api, payload: payload, token: token, session: session, webView: webView)
         }
+        if Self.valueAPIs.contains(api) {
+            return try await routeValueAPIs(api: api, payload: payload, token: token, session: session)
+        }
 
         switch api {
-        case "GM_getValue":
-            guard let key = payload["key"] as? String else { throw BrownBearError.bridgeRejected("missing key") }
-            return await valueStore.value(scriptID: session.id, key: key) ?? NSNull()
-
-        case "GM_setValue":
-            guard let key = payload["key"] as? String, let json = payload["value"] as? String else {
-                throw BrownBearError.bridgeRejected("missing key/value")
-            }
-            let old = await valueStore.setValueReturningOld(scriptID: session.id, key: key, jsonValue: json)
-            broadcastValueChanges(scriptID: session.id, originToken: token, changes: [(key, old, json)])
-            return NSNull()
-
-        case "GM_deleteValue":
-            guard let key = payload["key"] as? String else { throw BrownBearError.bridgeRejected("missing key") }
-            let old = await valueStore.deleteValueReturningOld(scriptID: session.id, key: key)
-            broadcastValueChanges(scriptID: session.id, originToken: token, changes: [(key, old, nil)])
-            return NSNull()
-
-        case "GM_listValues":
-            return await valueStore.listValues(scriptID: session.id)
-
-        case "GM_setValues":
-            guard let entries = payload["values"] as? [String: String] else {
-                throw BrownBearError.bridgeRejected("missing values")
-            }
-            let olds = await valueStore.setValuesReturningOld(scriptID: session.id, entries: entries)
-            let changes = olds.map { (key: $0.key, old: $0.old, new: entries[$0.key]) }
-            broadcastValueChanges(scriptID: session.id, originToken: token, changes: changes)
-            return NSNull()
-
-        case "GM_deleteValues":
-            guard let keys = payload["keys"] as? [String] else { throw BrownBearError.bridgeRejected("missing keys") }
-            let olds = await valueStore.deleteValuesReturningOld(scriptID: session.id, keys: keys)
-            let changes = olds.map { (key: $0.key, old: $0.old, new: String?.none) }
-            broadcastValueChanges(scriptID: session.id, originToken: token, changes: changes)
-            return NSNull()
-
         case "GM_setClipboard":
             guard let data = payload["data"] as? String else { throw BrownBearError.bridgeRejected("missing data") }
             UIPasteboard.general.string = data
@@ -783,6 +747,69 @@ extension ScriptMessageRouter {
 // Kept in a same-file extension so they can reach the router's private store/contentWorld while not
 // inflating the main type body. Every payload field is validated; missing/oversized input fails closed.
 extension ScriptMessageRouter {
+
+    /// Page-world execution: the isolated-world runtime asks native to evaluate a grant-none userscript
+    /// in the calling frame's REAL main world (WKContentWorld.page), so `window`/`unsafeWindow` are the
+    /// page's own globals (@grant none / @inject-into page — Tampermonkey parity). Like the extension
+    /// runtime's page.injectMainWorld, native eval is CSP-immune (unlike an inline <script>). The caller
+    /// (route) has already resolved a valid session token, which is the trust anchor — a grant-none
+    /// script has no GM surface, so no further grant is needed — and this handler is registered ONLY in
+    /// the isolated world, so a page script can never reach it.
+    fileprivate func handleInjectPageWorld(payload: [String: Any],
+                                           webView: WKWebView?, frameInfo: WKFrameInfo?) -> Any? {
+        if let webView, let code = payload["code"] as? String, !code.isEmpty {
+            BBEvaluateJavaScriptInFrame(webView, code, frameInfo, .page)
+        }
+        return NSNull()
+    }
+
+    /// Sub-dispatch for the six GM value-store APIs, collapsed under one `route()` case to keep that
+    /// function's cyclomatic complexity within the SwiftLint budget. All six have already passed
+    /// resolveSession + ensureGranted in route(). Bodies are unchanged from the original inline cases.
+    fileprivate func routeValueAPIs(api: String, payload: [String: Any], token: String?,
+                                    session: ScriptSession) async throws -> Any? {
+        switch api {
+        case "GM_getValue":
+            guard let key = payload["key"] as? String else { throw BrownBearError.bridgeRejected("missing key") }
+            return await valueStore.value(scriptID: session.id, key: key) ?? NSNull()
+
+        case "GM_setValue":
+            guard let key = payload["key"] as? String, let json = payload["value"] as? String else {
+                throw BrownBearError.bridgeRejected("missing key/value")
+            }
+            let old = await valueStore.setValueReturningOld(scriptID: session.id, key: key, jsonValue: json)
+            broadcastValueChanges(scriptID: session.id, originToken: token, changes: [(key, old, json)])
+            return NSNull()
+
+        case "GM_deleteValue":
+            guard let key = payload["key"] as? String else { throw BrownBearError.bridgeRejected("missing key") }
+            let old = await valueStore.deleteValueReturningOld(scriptID: session.id, key: key)
+            broadcastValueChanges(scriptID: session.id, originToken: token, changes: [(key, old, nil)])
+            return NSNull()
+
+        case "GM_listValues":
+            return await valueStore.listValues(scriptID: session.id)
+
+        case "GM_setValues":
+            guard let entries = payload["values"] as? [String: String] else {
+                throw BrownBearError.bridgeRejected("missing values")
+            }
+            let olds = await valueStore.setValuesReturningOld(scriptID: session.id, entries: entries)
+            let changes = olds.map { (key: $0.key, old: $0.old, new: entries[$0.key]) }
+            broadcastValueChanges(scriptID: session.id, originToken: token, changes: changes)
+            return NSNull()
+
+        case "GM_deleteValues":
+            guard let keys = payload["keys"] as? [String] else { throw BrownBearError.bridgeRejected("missing keys") }
+            let olds = await valueStore.deleteValuesReturningOld(scriptID: session.id, keys: keys)
+            let changes = olds.map { (key: $0.key, old: $0.old, new: String?.none) }
+            broadcastValueChanges(scriptID: session.id, originToken: token, changes: changes)
+            return NSNull()
+
+        default:
+            return NSNull()
+        }
+    }
 
     /// Sub-dispatch for the five menu/tab APIs, collapsed under one `route()` case to keep that
     /// function's cyclomatic complexity within the SwiftLint budget. All five have already passed
