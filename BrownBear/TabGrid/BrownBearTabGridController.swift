@@ -56,7 +56,10 @@ final class BrownBearTabGridController: UIViewController {
     /// shrank the page to wherever the finger let go; the grid finishes the motion into the active card's
     /// REAL frame — not an approximation — so there's no snap. Installed before the first draw, run once.
     private var pendingFlyIn: (image: UIImage, fromWindowFrame: CGRect, cornerRadius: CGFloat)?
-    private var flyInHero: UIImageView?
+    /// The flying page: a clip view (animates release-frame → card) holding a top-pinned page image, so the
+    /// page's top stays put and lands matching the top-anchored card (same as the open morph).
+    private var flyInClip: UIView?
+    private var flyInPage: UIImageView?
     private var didRunFlyIn = false
 
     /// The tabs currently displayed, scoped to the active mode.
@@ -116,22 +119,27 @@ final class BrownBearTabGridController: UIViewController {
     }
 
     private func installFlyInHeroIfNeeded() {
-        guard let fly = pendingFlyIn, flyInHero == nil else { return }
-        let hero = UIImageView(image: fly.image)
-        hero.contentMode = .scaleAspectFill
-        hero.clipsToBounds = true
-        hero.layer.cornerCurve = .continuous
-        hero.layer.cornerRadius = fly.cornerRadius
-        hero.frame = view.convert(fly.fromWindowFrame, from: nil)
-        view.addSubview(hero)
-        flyInHero = hero
+        guard let fly = pendingFlyIn, flyInClip == nil else { return }
+        let start = view.convert(fly.fromWindowFrame, from: nil)
+        let aspect = fly.image.size.width / max(fly.image.size.height, 1)
+        let clip = UIView(frame: start)
+        clip.clipsToBounds = true
+        clip.layer.cornerCurve = .continuous
+        clip.layer.cornerRadius = fly.cornerRadius
+        let page = UIImageView(image: fly.image)
+        page.contentMode = .scaleToFill   // sized to the page's exact aspect → top-pinned, no distortion
+        page.frame = topAnchoredPageFrame(width: start.width, aspect: aspect)
+        clip.addSubview(page)
+        view.addSubview(clip)
+        flyInClip = clip
+        flyInPage = page
     }
 
-    /// Finish the intro: force the grid to its final centered layout, then spring the page snapshot from its
-    /// release frame into the active tab's REAL card frame and reveal the card. If the card can't be located
-    /// (off-screen / no snapshot yet) the hero just dissolves away.
+    /// Finish the intro: force the grid to its final centered layout, then spring the page from its release
+    /// frame into the active tab's REAL card frame (top-anchored, so it lands matching the card) and reveal
+    /// the card. If the card can't be located (off-screen / no snapshot yet) the page just dissolves away.
     private func runFlyInIfNeeded() {
-        guard !didRunFlyIn, let hero = flyInHero else { return }
+        guard !didRunFlyIn, let clip = flyInClip, let page = flyInPage else { return }
         didRunFlyIn = true
         pendingFlyIn = nil
 
@@ -139,13 +147,16 @@ final class BrownBearTabGridController: UIViewController {
         centerOnActiveTab()
         collectionView.layoutIfNeeded()
 
+        let aspect = page.image.map { $0.size.width / max($0.size.height, 1) } ?? 1
+
         guard let activeID = tabManager.activeTabID,
               let indexPath = dataSource.indexPath(for: activeID),
               let cell = collectionView.cellForItem(at: indexPath) as? TabGridCell,
               let cardWindowFrame = cell.snapshotRegionFrame() else {
-            UIView.animate(withDuration: 0.2, animations: { hero.alpha = 0 }) { [weak self] _ in
-                hero.removeFromSuperview()
-                self?.flyInHero = nil
+            UIView.animate(withDuration: 0.2, animations: { clip.alpha = 0 }) { [weak self] _ in
+                clip.removeFromSuperview()
+                self?.flyInClip = nil
+                self?.flyInPage = nil
             }
             return
         }
@@ -155,21 +166,29 @@ final class BrownBearTabGridController: UIViewController {
 
         let endCorner = BrownBearTheme.Metrics.cellCornerRadius
         let corner = CABasicAnimation(keyPath: "cornerRadius")
-        corner.fromValue = hero.layer.cornerRadius
+        corner.fromValue = clip.layer.cornerRadius
         corner.toValue = endCorner
         corner.duration = 0.34
         corner.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        hero.layer.cornerRadius = endCorner
-        hero.layer.add(corner, forKey: "flyCorner")
+        clip.layer.cornerRadius = endCorner
+        clip.layer.add(corner, forKey: "flyCorner")
 
         UIView.animate(withDuration: 0.34, delay: 0, usingSpringWithDamping: 0.86, initialSpringVelocity: 0,
                        options: [.curveEaseOut, .allowUserInteraction]) {
-            hero.frame = target
+            clip.frame = target
+            page.frame = self.topAnchoredPageFrame(width: target.width, aspect: aspect)
         } completion: { [weak self] _ in
             cell.setSnapshotRegionHidden(false)
-            hero.removeFromSuperview()
-            self?.flyInHero = nil
+            clip.removeFromSuperview()
+            self?.flyInClip = nil
+            self?.flyInPage = nil
         }
+    }
+
+    /// A page image's frame inside its clip: full width, top-pinned (y = 0), height from the page's aspect —
+    /// so the page's top stays put as the clip resizes. Mirrors the open-morph hero (TabGridTransition).
+    private func topAnchoredPageFrame(width: CGFloat, aspect: CGFloat) -> CGRect {
+        CGRect(x: 0, y: 0, width: width, height: aspect > 0 ? width / aspect : width)
     }
 
     /// Keep the grid centered on the active tab UNTIL the user touches it. Re-running on every layout pass
