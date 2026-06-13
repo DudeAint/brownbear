@@ -175,7 +175,10 @@ extension WebExtensionMessageRouter {
                 headerMap[String(describing: key).lowercased()] = String(describing: value)
             }
             recordNetworkLog(extensionID: extensionID, method: method, url: urlString,
-                             status: http.statusCode, bytes: data.count, error: nil)
+                             status: http.statusCode, bytes: data.count,
+                             responseBody: String(data: data.prefix(GMNetworkService.maxLoggedResponseBytes),
+                                                  encoding: .utf8),
+                             error: nil)
             return [
                 "ok": (200...299).contains(http.statusCode),
                 "status": http.statusCode,
@@ -194,13 +197,14 @@ extension WebExtensionMessageRouter {
     /// Mirror an extension-page / service-worker `hostFetch` into the Logs → Network inspector. Fire-and-
     /// forget so it never delays the response; tagged with the extension's name as the request's source.
     func recordNetworkLog(extensionID: String, method: String, url: String,
-                          status: Int, bytes: Int?, error: String?) {
+                          status: Int, bytes: Int?, responseBody: String? = nil, error: String?) {
         let store = self.store
         Task {
             let name = await store.ext(for: extensionID)?.displayName
             await BrownBearServices.shared.networkLogStore.append(
                 NetworkLogEntry(kind: .hostFetch, method: method, url: url, statusCode: status,
-                                scriptName: name, responseBytes: bytes, error: error))
+                                scriptName: name, responseBytes: bytes,
+                                responseBody: responseBody, error: error))
         }
     }
 }

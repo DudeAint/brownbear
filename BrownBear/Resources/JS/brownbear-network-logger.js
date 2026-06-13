@@ -28,8 +28,27 @@
       ? W.performance.now.bind(W.performance)
       : function () { return Date.now(); };
 
+    var MAX_BODY = 16384;            // cap on the response text we keep (bytes-ish); enough to read
+    var MAX_READ = 1048576;          // don't even read a body bigger than this (avoid buffering a download)
+
     function post(record) {
       try { handler.postMessage(record); } catch (e) { /* native gone — ignore */ }
+    }
+
+    function clip(text) {
+      if (!text) { return undefined; }
+      return (text.length > MAX_BODY) ? (text.slice(0, MAX_BODY) + "…") : text;
+    }
+
+    // Read a bounded copy of a fetch Response body WITHOUT consuming the page's own read (clone first).
+    // Skips bodies whose Content-Length is huge, and swallows any failure (opaque/streamed responses).
+    function readFetchBody(response) {
+      try {
+        var len = 0;
+        try { len = parseInt(response.headers.get("content-length") || "0", 10) || 0; } catch (e) { len = 0; }
+        if (len > MAX_READ) { return Promise.resolve("[" + len + " bytes — body not captured]"); }
+        return response.clone().text().then(clip, function () { return undefined; });
+      } catch (e) { return Promise.resolve(undefined); }
     }
 
     // Resolve a fetch input (string, URL, or Request) to an absolute-ish URL string without throwing.
@@ -57,7 +76,13 @@
         return promise.then(function (response) {
           var status = 0;
           try { status = response.status; } catch (e) { /* opaque response */ }
-          post({ kind: "fetch", method: method, url: url, status: status, duration: Math.round(_now() - start) });
+          var duration = Math.round(_now() - start);
+          // Read the body (async, bounded) then report — so the Response block has content.
+          readFetchBody(response).then(function (body) {
+            post({ kind: "fetch", method: method, url: url, status: status, duration: duration, responseBody: body });
+          }, function () {
+            post({ kind: "fetch", method: method, url: url, status: status, duration: duration });
+          });
           return response;
         }, function (error) {
           post({ kind: "fetch", method: method, url: url, status: 0, duration: Math.round(_now() - start),
@@ -86,8 +111,17 @@
           xhr.addEventListener("loadend", function () {
             var status = 0;
             try { status = xhr.status; } catch (e) { /* ignore */ }
+            var body;
+            try {
+              var rt = xhr.responseType;
+              if (rt === "" || rt === "text") {
+                body = clip(xhr.responseText);
+              } else if (rt === "json" && xhr.response != null) {
+                body = clip(JSON.stringify(xhr.response));
+              }
+            } catch (e) { /* responseText throws for some types — leave body undefined */ }
             post({ kind: "xhr", method: xhr.__bbMethod || "GET", url: xhr.__bbUrl || "",
-                   status: status, duration: Math.round(_now() - start) });
+                   status: status, duration: Math.round(_now() - start), responseBody: body });
           });
         } catch (e) { /* listener attach failed — still send */ }
         return origSend.apply(this, arguments);

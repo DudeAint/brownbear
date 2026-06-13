@@ -51,6 +51,8 @@ struct NetworkLogEntry: Identifiable, Equatable, Sendable {
     let requestBody: String?
     /// Response payload size in bytes, when known.
     let responseBytes: Int?
+    /// The response body as text, truncated by the producer (nil for binary / unread responses).
+    let responseBody: String?
     /// A failure reason when `statusCode == 0` (or an explicit transport error).
     let error: String?
 
@@ -66,6 +68,7 @@ struct NetworkLogEntry: Identifiable, Equatable, Sendable {
          responseHeaders: [String: String] = [:],
          requestBody: String? = nil,
          responseBytes: Int? = nil,
+         responseBody: String? = nil,
          error: String? = nil) {
         self.id = id
         self.createdAt = createdAt
@@ -79,6 +82,7 @@ struct NetworkLogEntry: Identifiable, Equatable, Sendable {
         self.responseHeaders = responseHeaders
         self.requestBody = requestBody
         self.responseBytes = responseBytes
+        self.responseBody = responseBody
         self.error = error
     }
 

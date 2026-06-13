@@ -105,7 +105,12 @@ extension WebExtensionBackgroundContext {
                 headerMap[String(describing: key).lowercased()] = String(describing: value)
             }
             self.recordNetworkLog(method: loggedMethod, url: loggedURL, status: http.statusCode,
-                                  bytes: data?.count, error: nil)
+                                  bytes: data?.count,
+                                  responseBody: data.flatMap {
+                                      String(data: $0.prefix(GMNetworkService.maxLoggedResponseBytes),
+                                             encoding: .utf8)
+                                  },
+                                  error: nil)
             self.callBack(callback, with: self.makeFetchResult(
                 status: http.statusCode,
                 statusText: HTTPURLResponse.localizedString(forStatusCode: http.statusCode),
@@ -118,13 +123,15 @@ extension WebExtensionBackgroundContext {
 
     /// Mirror a service-worker / background `fetch` into the Logs → Network inspector. Fire-and-forget so
     /// it never delays the worker's response; tagged with the extension's name as the request's source.
-    private func recordNetworkLog(method: String, url: String, status: Int, bytes: Int?, error: String?) {
+    private func recordNetworkLog(method: String, url: String, status: Int, bytes: Int?,
+                                  responseBody: String? = nil, error: String?) {
         let extensionID = self.extensionID
         Task {
             let name = await BrownBearServices.shared.webExtensionStore.ext(for: extensionID)?.displayName
             await BrownBearServices.shared.networkLogStore.append(
                 NetworkLogEntry(kind: .hostFetch, method: method, url: url, statusCode: status,
-                                scriptName: name, responseBytes: bytes, error: error))
+                                scriptName: name, responseBytes: bytes,
+                                responseBody: responseBody, error: error))
         }
     }
 

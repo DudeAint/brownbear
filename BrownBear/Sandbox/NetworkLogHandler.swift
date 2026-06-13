@@ -20,6 +20,8 @@ final class NetworkLogHandler: NSObject, WKScriptMessageHandler {
     private let store: NetworkLogStore
     /// A request URL longer than this is truncated — a data: URL can be megabytes and has no inspector value.
     private static let maxURLLength = 2048
+    /// Defensive clamp on the response text a page reports (the reporter already caps it ~16 KB).
+    private static let maxResponseBodyChars = 20_000
 
     init(store: NetworkLogStore) {
         self.store = store
@@ -37,12 +39,15 @@ final class NetworkLogHandler: NSObject, WKScriptMessageHandler {
         let status = (body["status"] as? Int) ?? 0
         let duration = body["duration"] as? Int
         let error = (body["error"] as? String).map { String($0.prefix(500)) }
+        // The reporter already bounds the body; clamp again defensively against a hostile page.
+        let responseBody = (body["responseBody"] as? String).map { String($0.prefix(Self.maxResponseBodyChars)) }
 
         let entry = NetworkLogEntry(kind: kind,
                                     method: method,
                                     url: url,
                                     statusCode: status,
                                     durationMs: duration,
+                                    responseBody: responseBody,
                                     error: error)
         Task { await store.append(entry) }
     }

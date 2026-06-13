@@ -82,6 +82,10 @@ final class GMNetworkService: NSObject, @unchecked Sendable {
     /// per request from the URLSession delegate queue (off the main actor); the sink hops to its actor.
     var networkLogger: (@Sendable (NetworkLogEntry) -> Void)?
 
+    /// Cap on the response text kept for the Network inspector's Response block (16 KB) — enough to read,
+    /// bounded so a large download can't bloat the in-memory log.
+    static let maxLoggedResponseBytes = 16_384
+
     private let lock = NSLock()
     private var contexts: [Int: Context] = [:]          // sessionTask.taskIdentifier → context
     private var taskByRequestID: [String: URLSessionTask] = [:]
@@ -285,6 +289,9 @@ extension GMNetworkService: URLSessionDataDelegate {
         guard let logger = networkLogger else { return }
         let request = context.request
         let body = request.body.flatMap { String(data: $0.prefix(4096), encoding: .utf8) }
+        // Decode the response as text for the inspector's Response block; a binary response (image/zip)
+        // won't decode and is left nil. Bounded so a big download can't bloat the in-memory log.
+        let responseBody = String(data: context.received.prefix(Self.maxLoggedResponseBytes), encoding: .utf8)
         let entry = NetworkLogEntry(
             createdAt: context.startedAt,
             kind: .gmXHR,
@@ -297,6 +304,7 @@ extension GMNetworkService: URLSessionDataDelegate {
             responseHeaders: Self.headerDictionary(context.response),
             requestBody: body,
             responseBytes: context.received.count,
+            responseBody: responseBody,
             error: error)
         logger(entry)
     }

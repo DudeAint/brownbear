@@ -14,6 +14,7 @@ struct LogsView: View {
 
     @ObservedObject var model: DashboardViewModel
     @AppStorage(PageConsoleHandler.captureDefaultsKey) private var capturePageConsole = true
+    @AppStorage("bbAlwaysOpenResponse") private var alwaysOpenResponse = false
     @State private var section: LogTab = .console
 
     /// The two tabs inside the Logs screen.
@@ -61,6 +62,9 @@ struct LogsView: View {
                         }
                         .disabled(model.recentLogs.isEmpty)
                     } else {
+                        Toggle(isOn: $alwaysOpenResponse) {
+                            Label("Always open response", systemImage: "chevron.down.square")
+                        }
                         Button(role: .destructive) {
                             Task { await model.clearNetworkLogs() }
                         } label: {
@@ -214,6 +218,9 @@ struct NetworkLogRow: View {
 /// all selectable so a single line or the whole block can be copied.
 struct NetworkLogDetail: View {
     let entry: NetworkLogEntry
+    @AppStorage("bbAlwaysOpenResponse") private var alwaysOpenResponse = false
+    /// nil = follow the "Always open response" setting; a value = the user toggled this row's block.
+    @State private var responseOverride: Bool?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -228,10 +235,32 @@ struct NetworkLogDetail: View {
             if !entry.requestHeaders.isEmpty { headers("Request headers", entry.requestHeaders) }
             if let body = entry.requestBody, !body.isEmpty { field("Request body", body) }
             if !entry.responseHeaders.isEmpty { headers("Response headers", entry.responseHeaders) }
+            if let body = entry.responseBody, !body.isEmpty { responseSection(body) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 4)
         .textSelection(.enabled)
+    }
+
+    /// The collapsible Response block — a monospaced code block. Starts open when "Always open response"
+    /// is on, otherwise the user taps the dropdown to reveal it; a per-row toggle overrides the setting.
+    private func responseSection(_ body: String) -> some View {
+        DisclosureGroup(isExpanded: Binding(get: { responseOverride ?? alwaysOpenResponse },
+                                            set: { responseOverride = $0 })) {
+            Text(body)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(BBTheme.Color.textPrimary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(BBTheme.Color.card.opacity(0.7)))
+                .padding(.top, 2)
+        } label: {
+            Text("RESPONSE")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(BBTheme.Color.textSecondary)
+        }
+        .tint(BBTheme.Color.textSecondary)
     }
 
     private func field(_ key: String, _ value: String) -> some View {
