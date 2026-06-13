@@ -164,12 +164,18 @@ extension WebExtensionMessageRouter {
         defer { session.finishTasksAndInvalidate() }
         do {
             let (data, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse else { return ["error": "no HTTP response"] }
+            guard let http = response as? HTTPURLResponse else {
+                recordNetworkLog(extensionID: extensionID, method: method, url: urlString,
+                                 status: 0, bytes: nil, error: "no HTTP response")
+                return ["error": "no HTTP response"]
+            }
             let clamped = data.count > Self.maxHostFetchBytes ? Data(data.prefix(Self.maxHostFetchBytes)) : data
             var headerMap: [String: String] = [:]
             for (key, value) in http.allHeaderFields {
                 headerMap[String(describing: key).lowercased()] = String(describing: value)
             }
+            recordNetworkLog(extensionID: extensionID, method: method, url: urlString,
+                             status: http.statusCode, bytes: data.count, error: nil)
             return [
                 "ok": (200...299).contains(http.statusCode),
                 "status": http.statusCode,
@@ -179,7 +185,22 @@ extension WebExtensionMessageRouter {
                 "bodyBase64": clamped.base64EncodedString()
             ]
         } catch {
+            recordNetworkLog(extensionID: extensionID, method: method, url: urlString,
+                             status: 0, bytes: nil, error: error.localizedDescription)
             return ["error": error.localizedDescription]
+        }
+    }
+
+    /// Mirror an extension-page / service-worker `hostFetch` into the Logs → Network inspector. Fire-and-
+    /// forget so it never delays the response; tagged with the extension's name as the request's source.
+    func recordNetworkLog(extensionID: String, method: String, url: String,
+                          status: Int, bytes: Int?, error: String?) {
+        let store = self.store
+        Task {
+            let name = await store.ext(for: extensionID)?.displayName
+            await BrownBearServices.shared.networkLogStore.append(
+                NetworkLogEntry(kind: .hostFetch, method: method, url: url, statusCode: status,
+                                scriptName: name, responseBytes: bytes, error: error))
         }
     }
 }

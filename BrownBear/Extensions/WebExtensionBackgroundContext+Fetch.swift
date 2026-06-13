@@ -79,14 +79,20 @@ extension WebExtensionBackgroundContext {
         // Redirect-guarded session: the host_permissions gate above only saw the initial URL, so a
         // permitted host must not 30x-redirect onto an undeclared/internal host (SSRF). Invalidate after.
         let session = WebExtensionFetchSecurity.redirectGuardedSession(hostPatterns: cookieHostPatterns)
+        let loggedMethod = request.httpMethod ?? "GET"
+        let loggedURL = url.absoluteString
         let task = session.dataTask(with: request) { [weak self] data, response, error in
             defer { session.finishTasksAndInvalidate() }
             guard let self else { return }
             if let error {
+                self.recordNetworkLog(method: loggedMethod, url: loggedURL, status: 0, bytes: nil,
+                                      error: error.localizedDescription)
                 self.callBack(callback, with: Self.fetchError(error.localizedDescription))
                 return
             }
             guard let http = response as? HTTPURLResponse else {
+                self.recordNetworkLog(method: loggedMethod, url: loggedURL, status: 0, bytes: nil,
+                                      error: "no HTTP response")
                 self.callBack(callback, with: Self.fetchError("no HTTP response"))
                 return
             }
@@ -98,6 +104,8 @@ extension WebExtensionBackgroundContext {
             for (key, value) in http.allHeaderFields {
                 headerMap[String(describing: key).lowercased()] = String(describing: value)
             }
+            self.recordNetworkLog(method: loggedMethod, url: loggedURL, status: http.statusCode,
+                                  bytes: data?.count, error: nil)
             self.callBack(callback, with: self.makeFetchResult(
                 status: http.statusCode,
                 statusText: HTTPURLResponse.localizedString(forStatusCode: http.statusCode),
@@ -106,6 +114,18 @@ extension WebExtensionBackgroundContext {
                 body: body))
         }
         task.resume()
+    }
+
+    /// Mirror a service-worker / background `fetch` into the Logs → Network inspector. Fire-and-forget so
+    /// it never delays the worker's response; tagged with the extension's name as the request's source.
+    private func recordNetworkLog(method: String, url: String, status: Int, bytes: Int?, error: String?) {
+        let extensionID = self.extensionID
+        Task {
+            let name = await BrownBearServices.shared.webExtensionStore.ext(for: extensionID)?.displayName
+            await BrownBearServices.shared.networkLogStore.append(
+                NetworkLogEntry(kind: .hostFetch, method: method, url: url, statusCode: status,
+                                scriptName: name, responseBytes: bytes, error: error))
+        }
     }
 
     // MARK: - chrome-extension:// (own packaged resources)
