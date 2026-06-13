@@ -59,18 +59,28 @@ final class GMNetworkService: NSObject, @unchecked Sendable {
         let connects: [String]
         let pageHost: String?
         let emit: (String, [String: Any]) -> Void
+        /// The originating userscript's name, for the Network inspector row.
+        let scriptName: String?
+        /// When the request started, for the duration shown in the Network inspector.
+        let startedAt: Date
         var received = Data()
         var response: HTTPURLResponse?
         var expectedLength: Int64 = -1
         init(requestID: String, request: GMXHRRequest, connects: [String], pageHost: String?,
-             emit: @escaping (String, [String: Any]) -> Void) {
+             scriptName: String?, startedAt: Date, emit: @escaping (String, [String: Any]) -> Void) {
             self.requestID = requestID
             self.request = request
             self.connects = connects
             self.pageHost = pageHost
+            self.scriptName = scriptName
+            self.startedAt = startedAt
             self.emit = emit
         }
     }
+
+    /// Set by the orchestrator to mirror each completed request into the Network inspector. Called once
+    /// per request from the URLSession delegate queue (off the main actor); the sink hops to its actor.
+    var networkLogger: (@Sendable (NetworkLogEntry) -> Void)?
 
     private let lock = NSLock()
     private var contexts: [Int: Context] = [:]          // sessionTask.taskIdentifier → context
@@ -91,6 +101,7 @@ final class GMNetworkService: NSObject, @unchecked Sendable {
                payload: [String: Any],
                connects: [String],
                pageHost: String?,
+               scriptName: String? = nil,
                emit: @escaping (String, [String: Any]) -> Void) {
         guard let request = GMXHRRequest(payload: payload) else {
             emit("error", ["error": "invalid request", "readyState": 4])
@@ -112,7 +123,8 @@ final class GMNetworkService: NSObject, @unchecked Sendable {
 
         let task = session.dataTask(with: urlRequest)
         let context = Context(requestID: requestID, request: request,
-                              connects: connects, pageHost: pageHost, emit: emit)
+                              connects: connects, pageHost: pageHost,
+                              scriptName: scriptName, startedAt: Date(), emit: emit)
         lock.lock()
         contexts[task.taskIdentifier] = context
         taskByRequestID[requestID] = task
@@ -257,6 +269,7 @@ extension GMNetworkService: URLSessionDataDelegate {
                 context.emit("error", ["readyState": 4, "error": error.localizedDescription])
             }
             context.emit("loadend", ["readyState": 4])
+            recordNetworkLog(context, status: 0, error: error.localizedDescription)
             return
         }
 
@@ -264,6 +277,38 @@ extension GMNetworkService: URLSessionDataDelegate {
         context.emit("readystatechange", payload)
         context.emit("load", payload)
         context.emit("loadend", payload)
+        recordNetworkLog(context, status: context.response?.statusCode ?? 0, error: nil)
+    }
+
+    /// Mirror a completed GM_xmlhttpRequest into the Network inspector. No-op when no sink is attached.
+    private func recordNetworkLog(_ context: Context, status: Int, error: String?) {
+        guard let logger = networkLogger else { return }
+        let request = context.request
+        let body = request.body.flatMap { String(data: $0.prefix(4096), encoding: .utf8) }
+        let entry = NetworkLogEntry(
+            createdAt: context.startedAt,
+            kind: .gmXHR,
+            method: request.method,
+            url: request.url.absoluteString,
+            statusCode: status,
+            scriptName: context.scriptName,
+            durationMs: Int(Date().timeIntervalSince(context.startedAt) * 1000),
+            requestHeaders: request.headers,
+            responseHeaders: Self.headerDictionary(context.response),
+            requestBody: body,
+            responseBytes: context.received.count,
+            error: error)
+        logger(entry)
+    }
+
+    /// Flatten an HTTPURLResponse's header fields to `[String: String]` for the Network detail view.
+    private static func headerDictionary(_ response: HTTPURLResponse?) -> [String: String] {
+        guard let response else { return [:] }
+        var out: [String: String] = [:]
+        for (key, value) in response.allHeaderFields {
+            out[String(describing: key)] = String(describing: value)
+        }
+        return out
     }
 }
 
