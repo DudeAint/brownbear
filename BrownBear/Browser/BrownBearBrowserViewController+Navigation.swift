@@ -132,10 +132,9 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
                 }
             } else {
                 preferences.preferredContentMode = tab.prefersDesktop ? .desktop : .mobile
-                // Clear any store UA when leaving a store (but don't clobber a manual Desktop UA).
-                if Self.isStoreUserAgent(webView.customUserAgent) {
-                    webView.customUserAgent = tab.prefersDesktop ? Self.desktopSafariUserAgent : nil
-                }
+                // Pin the matching Safari UA so a UA-sniffing site is consistent with the content mode —
+                // mobile Safari (not the bare BrownBear UA) for normal browsing, desktop Safari for desktop.
+                webView.customUserAgent = tab.prefersDesktop ? Self.desktopSafariUserAgent : Self.mobileSafariUserAgent
             }
             applyShields(to: tab, preferences: preferences, navigationAction: navigationAction, destination: destination, isStore: isStore)
         }

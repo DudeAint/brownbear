@@ -93,6 +93,16 @@ extension BrownBearBrowserViewController {
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
         + "(KHTML, like Gecko) Version/17.0 Safari/605.1.15"
 
+    /// The default MOBILE User-Agent for normal browsing — a real iPhone Safari UA. The bare WKWebView UA
+    /// (even with `applicationNameForUserAgent = "BrownBear"`) carries NO `Version/` or `Safari/` token, so
+    /// sites that sniff for Safari treat BrownBear as an unknown browser and serve a broken/fallback path —
+    /// e.g. Edgenuity's video player init'd into a cross-origin-frame SecurityError, the same UA-detection
+    /// class of bug as the Bitwarden popup (it keys off the browser token). Presenting a genuine mobile
+    /// Safari UA — what every other iOS WebKit browser does — makes those sites serve the working path.
+    static let mobileSafariUserAgent =
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 "
+        + "(KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+
     /// The 32-char extension id if `url` is a Chrome Web Store detail page, else nil.
     static func chromeWebStoreExtensionID(for url: URL) -> String? {
         guard isChromeWebStoreURL(url) else { return nil }
