@@ -240,6 +240,42 @@ extension BrownBearBrowserViewController: UIGestureRecognizerDelegate {
         }
     }
 
+    /// Tab-icon press: the SAME hero shrink as the interactive swipe-up, run as a fixed animation — the
+    /// page snapshot scales into its grid card, then the grid is presented beneath it (no second zoom), so
+    /// tapping the tab button and swiping up land in the same place with the same motion.
+    func animateTabGridShrink() {
+        guard tabSwipeSession == nil else { return }   // don't fire mid-swipe
+        let startFrame = contentContainer.frame
+        guard startFrame.width > 0,
+              let snapshot = contentContainer.snapshotView(afterScreenUpdates: false) else {
+            presentTabGrid()   // can't snapshot — plain animated present
+            return
+        }
+        snapshot.frame = startFrame
+        snapshot.layer.cornerCurve = .continuous
+        snapshot.clipsToBounds = true
+        let dim = UIView(frame: view.bounds)
+        dim.backgroundColor = .black
+        dim.alpha = 0
+        dim.isUserInteractionEnabled = false
+        view.addSubview(dim)
+        view.addSubview(snapshot)
+        contentContainer.isHidden = true
+        let target = tabGridCardTargetFrame(from: startFrame)
+        UIView.animate(withDuration: 0.32, delay: 0, usingSpringWithDamping: 0.9, initialSpringVelocity: 0,
+                       options: [.curveEaseInOut]) {
+            snapshot.frame = target
+            snapshot.layer.cornerRadius = BrownBearTheme.Metrics.cellCornerRadius
+            dim.alpha = 0.45
+        } completion: { [weak self] _ in
+            guard let self else { return }
+            self.presentTabGridWithoutAnimation()
+            self.contentContainer.isHidden = false
+            snapshot.removeFromSuperview()
+            dim.removeFromSuperview()
+        }
+    }
+
     private func interpolate(_ a: CGRect, _ b: CGRect, _ t: CGFloat) -> CGRect {
         CGRect(x: a.minX + (b.minX - a.minX) * t,
                y: a.minY + (b.minY - a.minY) * t,

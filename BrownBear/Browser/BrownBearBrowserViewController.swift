@@ -433,9 +433,10 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
     }
 
     func toolbarDidTapTabs(_ toolbar: BrowserToolbar) {
-        tabManager.activeTab?.refreshSnapshot { [weak self] in
-            self?.presentTabGrid()
-        }
+        // Refresh the active tab's snapshot in the background so its grid card is fresh by the time the
+        // grid presents, and start the hero shrink immediately so the tap feels instant (+TabSwipe).
+        tabManager.activeTab?.refreshSnapshot()
+        animateTabGridShrink()
     }
 
     func toolbarDidTapMenu(_ toolbar: BrowserToolbar) {
@@ -473,7 +474,8 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
         present(sheet, animated: true)
     }
 
-    private func presentTabGrid() {
+    /// The plain animated present (fallback when a hero snapshot can't be taken).
+    func presentTabGrid() {
         let grid = BrownBearTabGridController(tabManager: tabManager,
                                              showingPrivate: tabManager.activeTab?.isPrivate ?? false)
         grid.gridDelegate = self
