@@ -482,6 +482,18 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
         present(grid, animated: true)
     }
 
+    /// Present the tab grid with NO built-in animation — the interactive swipe-up shrink (+TabSwipe) is the
+    /// transition, so the grid just appears beneath the page snapshot the gesture already shrank into place.
+    /// The transitioning delegate is still set so tapping a card later dismisses with the zoom-expand.
+    func presentTabGridWithoutAnimation() {
+        let grid = BrownBearTabGridController(tabManager: tabManager,
+                                              showingPrivate: tabManager.activeTab?.isPrivate ?? false)
+        grid.gridDelegate = self
+        grid.modalPresentationStyle = .fullScreen
+        grid.transitioningDelegate = tabGridTransition
+        present(grid, animated: false)
+    }
+
     private func presentMenu() {
         let tab = tabManager.activeTab
         let state = tab?.state ?? NavigationState()

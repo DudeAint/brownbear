@@ -35,8 +35,16 @@ final class TabSwipeSession {
     let leftTab: Tab?
     /// The tab revealed by a leftward swipe (the one after the active tab), or nil at the right edge.
     let rightTab: Tab?
-    /// verticalUp: guards the one-shot tab-grid open.
-    var gridOpened = false
+    /// verticalUp: the page snapshot that shrinks toward its grid card as you drag up.
+    let hero: UIView?
+    /// verticalUp: the darkening backdrop behind the shrinking page.
+    let dimView: UIView?
+    /// verticalUp: the page snapshot's full-screen start frame (the content area).
+    let startFrame: CGRect
+    /// verticalUp: the (approx) grid-card frame the page shrinks into.
+    let targetFrame: CGRect
+    /// verticalUp: guards the one-shot tab-grid open / teardown.
+    var committed = false
 
     /// Horizontal tab-switch session.
     init(contentHolder: UIView, barHolder: UIView, width: CGFloat, leftTab: Tab?, rightTab: Tab?) {
@@ -46,16 +54,24 @@ final class TabSwipeSession {
         self.width = width
         self.leftTab = leftTab
         self.rightTab = rightTab
+        self.hero = nil
+        self.dimView = nil
+        self.startFrame = .zero
+        self.targetFrame = .zero
     }
 
-    /// Vertical (swipe-up → tab grid) session — no overlays.
-    init() {
+    /// Interactive swipe-up → tab grid: the page snapshot shrinks from `startFrame` toward `targetFrame`.
+    init(hero: UIView, dimView: UIView, startFrame: CGRect, targetFrame: CGRect) {
         self.axis = .verticalUp
         self.contentHolder = nil
         self.barHolder = nil
         self.width = 0
         self.leftTab = nil
         self.rightTab = nil
+        self.hero = hero
+        self.dimView = dimView
+        self.startFrame = startFrame
+        self.targetFrame = targetFrame
     }
 }
 
@@ -106,7 +122,7 @@ extension BrownBearBrowserViewController: UIGestureRecognizerDelegate {
         case .began:
             let velocity = pan.velocity(in: contentContainer)
             if abs(velocity.y) > abs(velocity.x) {
-                tabSwipeSession = TabSwipeSession()   // verticalUp → tab grid
+                beginVerticalUp()   // interactive shrink → tab grid
             } else {
                 beginTabSwipe()
             }
@@ -131,22 +147,104 @@ extension BrownBearBrowserViewController: UIGestureRecognizerDelegate {
         }
     }
 
-    // MARK: - Swipe up → tab grid
+    // MARK: - Swipe up → tab grid (interactive shrink)
+
+    /// Capture the page as a snapshot that will shrink toward its grid card as the finger drags up.
+    private func beginVerticalUp() {
+        guard tabSwipeSession == nil else { return }
+        let startFrame = contentContainer.frame
+        guard startFrame.width > 0,
+              let snapshot = contentContainer.snapshotView(afterScreenUpdates: false) else {
+            // No snapshot — fall back to the plain (non-interactive) grid open on release.
+            tabSwipeSession = TabSwipeSession(hero: UIView(), dimView: UIView(),
+                                              startFrame: .zero, targetFrame: .zero)
+            return
+        }
+        snapshot.frame = startFrame
+        snapshot.layer.cornerCurve = .continuous
+        snapshot.clipsToBounds = true
+
+        let dim = UIView(frame: view.bounds)
+        dim.backgroundColor = .black
+        dim.alpha = 0
+        dim.isUserInteractionEnabled = false
+
+        view.addSubview(dim)
+        view.addSubview(snapshot)
+        contentContainer.isHidden = true   // only the shrinking snapshot shows during the drag
+
+        tabSwipeSession = TabSwipeSession(hero: snapshot, dimView: dim, startFrame: startFrame,
+                                          targetFrame: tabGridCardTargetFrame(from: startFrame))
+    }
+
+    /// Approximate where the active tab's card sits in the grid (centred, ~2-column card size). The grid
+    /// centres the active tab on open, so a centred target lands close; tuned on device.
+    private func tabGridCardTargetFrame(from start: CGRect) -> CGRect {
+        let cardWidth = view.bounds.width * 0.46
+        let aspect = start.height > 0 ? start.width / start.height : 0.6
+        let cardHeight = aspect > 0 ? cardWidth / aspect : cardWidth * 1.5
+        return CGRect(x: (view.bounds.width - cardWidth) / 2,
+                      y: (view.bounds.height - cardHeight) / 2,
+                      width: cardWidth, height: cardHeight)
+    }
 
     private func updateVerticalUp(translationY: CGFloat, session: TabSwipeSession) {
-        // Open the grid as soon as the up-drag is committed, so it feels responsive (the grid's own zoom
-        // transition then settles the page into its card).
-        guard !session.gridOpened, translationY < -tabSwipeUpThreshold else { return }
-        session.gridOpened = true
-        toolbarDidTapTabs(toolbar)
+        guard !session.committed, let hero = session.hero, let dim = session.dimView,
+              session.startFrame != .zero else { return }
+        // The up-drag drives the shrink 0→1 over ~⅓ of the screen height; the page tracks the finger.
+        let distance = max(view.bounds.height / 3, 1)
+        let progress = min(max(-translationY / distance, 0), 1)
+        hero.frame = interpolate(session.startFrame, session.targetFrame, progress)
+        hero.layer.cornerRadius = progress * BrownBearTheme.Metrics.cellCornerRadius
+        dim.alpha = progress * 0.45
     }
 
     private func finishVerticalUp(translationY: CGFloat, velocityY: CGFloat, session: TabSwipeSession) {
-        if !session.gridOpened, translationY < -tabSwipeUpThreshold || velocityY < -800 {
-            session.gridOpened = true
-            toolbarDidTapTabs(toolbar)
+        // Fallback (no snapshot): just open the grid on a committed up-swipe.
+        guard let hero = session.hero, let dim = session.dimView, session.startFrame != .zero else {
+            if translationY < -tabSwipeUpThreshold || velocityY < -800 { toolbarDidTapTabs(toolbar) }
+            clearTabSwipeSession(session)
+            return
         }
-        clearTabSwipeSession(session)
+        session.committed = true
+        let distance = max(view.bounds.height / 3, 1)
+        let progress = min(max(-translationY / distance, 0), 1)
+
+        if progress > 0.4 || velocityY < -700 {
+            // Finish the shrink into the card, then present the grid beneath it (no extra zoom) and clean up.
+            UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseOut]) {
+                hero.frame = session.targetFrame
+                hero.layer.cornerRadius = BrownBearTheme.Metrics.cellCornerRadius
+                dim.alpha = 0.45
+            } completion: { [weak self] _ in
+                guard let self else { return }
+                self.presentTabGridWithoutAnimation()
+                self.contentContainer.isHidden = false
+                hero.removeFromSuperview()
+                dim.removeFromSuperview()
+                self.clearTabSwipeSession(session)
+            }
+        } else {
+            // Spring the page back to full screen — nothing opens.
+            UIView.animate(withDuration: 0.32, delay: 0, usingSpringWithDamping: 0.85, initialSpringVelocity: 0,
+                           options: [.curveEaseOut]) {
+                hero.frame = session.startFrame
+                hero.layer.cornerRadius = 0
+                dim.alpha = 0
+            } completion: { [weak self] _ in
+                self?.contentContainer.isHidden = false
+                hero.removeFromSuperview()
+                dim.removeFromSuperview()
+                self?.clearTabSwipeSession(session)
+            }
+        }
+    }
+
+    private func interpolate(_ a: CGRect, _ b: CGRect, _ t: CGFloat) -> CGRect {
+        CGRect(x: a.minX + (b.minX - a.minX) * t,
+               y: a.minY + (b.minY - a.minY) * t,
+               width: a.width + (b.width - a.width) * t,
+               height: a.height + (b.height - a.height) * t)
     }
 
     // MARK: - Swipe left/right → tab switch
