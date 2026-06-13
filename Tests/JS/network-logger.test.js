@@ -38,12 +38,24 @@ function boot(opts) {
     win.webkit = opts.noHandler ? undefined
         : { messageHandlers: { brownbearNetLog: { postMessage: (r) => posts.push(r) } } };
 
-    // Mock fetch — `state.next` is the next outcome ({status} to resolve, or an Error to reject).
+    // Mock fetch — `state.next` is the next outcome ({status, body} to resolve, or an Error to reject).
+    // The resolved value is a minimal Response with clone()/headers.get()/text() so the reporter can read
+    // a (bounded) copy of the body without consuming the page's own read.
     const state = { next: { status: 200 }, origCalled: 0 };
     win.fetch = function () {
         state.origCalled++;
         if (state.next instanceof Error) { return Promise.reject(state.next); }
-        return Promise.resolve({ status: state.next.status });
+        const status = state.next.status;
+        const bodyText = state.next.body != null ? String(state.next.body) : "";
+        function makeResponse() {
+            return {
+                status: status,
+                headers: { get: (k) => (String(k).toLowerCase() === "content-length" ? String(bodyText.length) : null) },
+                clone: () => makeResponse(),
+                text: () => Promise.resolve(bodyText)
+            };
+        }
+        return Promise.resolve(makeResponse());
     };
 
     // Mock XMLHttpRequest — records open args; send is a no-op (the reporter's wrapper adds a loadend
@@ -63,21 +75,26 @@ function boot(opts) {
     return { win, posts, state, XHR, ctx };
 }
 
+const tick = () => new Promise((r) => setTimeout(r, 0));
+
 (async function main() {
     console.log("network-logger reporter tests");
 
-    // fetch success posts one record with method/url/status.
+    // fetch success posts one record with method/url/status + the (bounded) response body. The body read
+    // is async (clone().text()), so the record lands a microtask after the response resolves.
     {
         const { win, posts, state } = boot();
-        state.next = { status: 204 };
+        state.next = { status: 204, body: '{"ok":true}' };
         const res = await win.fetch("https://api.example.com/x", { method: "post" });
-        test("fetch success → one {kind:fetch, method, url, status} record", () => {
+        await tick();
+        test("fetch success → {kind:fetch, method, url, status, responseBody} record", () => {
             assert.strictEqual(res.status, 204, "the original response passes through unchanged");
             assert.strictEqual(posts.length, 1, "one record posted");
             assert.strictEqual(posts[0].kind, "fetch");
             assert.strictEqual(posts[0].method, "POST", "method uppercased");
             assert.strictEqual(posts[0].url, "https://api.example.com/x");
             assert.strictEqual(posts[0].status, 204);
+            assert.strictEqual(posts[0].responseBody, '{"ok":true}', "the response body is captured");
         });
     }
 
@@ -95,21 +112,24 @@ function boot(opts) {
         });
     }
 
-    // XHR posts on loadend with the open() method/url and the final status.
+    // XHR posts on loadend with the open() method/url, the final status, and the responseText body.
     {
-        const { win, posts, XHR } = boot();
+        const { posts, XHR } = boot();
         const xhr = new XHR();
         xhr.open("GET", "https://x.com/data.json");
         xhr.send();
         xhr.status = 200;
+        xhr.responseType = "";
+        xhr.responseText = '{"data":1}';
         // Fire the loadend listener the reporter attached in send().
         (xhr._listeners.loadend || []).forEach((cb) => cb());
-        test("XHR → one {kind:xhr, method, url, status} record on loadend", () => {
+        test("XHR → {kind:xhr, method, url, status, responseBody} on loadend", () => {
             assert.strictEqual(posts.length, 1);
             assert.strictEqual(posts[0].kind, "xhr");
             assert.strictEqual(posts[0].method, "GET");
             assert.strictEqual(posts[0].url, "https://x.com/data.json");
             assert.strictEqual(posts[0].status, 200);
+            assert.strictEqual(posts[0].responseBody, '{"data":1}');
         });
     }
 
