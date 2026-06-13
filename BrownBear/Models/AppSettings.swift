@@ -233,10 +233,10 @@ enum AppSettings {
         set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.userScriptWorld) }
     }
 
-    /// Where the address bar sits. Default `.top`. Changing it posts `.brownBearChromeLayoutChanged`
-    /// (from the Settings screen) so the open browser re-lays-out its chrome immediately.
+    /// Where the address bar sits. Default `.bottom` (Safari-style, thumb-reachable). Changing it posts
+    /// `.brownBearChromeLayoutChanged` (from the Settings screen) so the open browser re-lays-out at once.
     static var addressBarPosition: AddressBarPosition {
-        get { AddressBarPosition(rawValue: UserDefaults.standard.string(forKey: Key.addressBarPosition) ?? "") ?? .top }
+        get { AddressBarPosition(rawValue: UserDefaults.standard.string(forKey: Key.addressBarPosition) ?? "") ?? .bottom }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.addressBarPosition) }
     }
 
