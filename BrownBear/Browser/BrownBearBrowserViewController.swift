@@ -574,7 +574,7 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
         // Set BOTH levers: a desktop UA for sites that sniff it, and (the reliable one) the
         // per-navigation preferredContentMode applied in decidePolicyFor below. Then re-load the URL
         // so the new mode actually takes effect (reload() can serve cache and skip re-requesting).
-        webView.customUserAgent = tab.prefersDesktop ? Self.desktopSafariUserAgent : nil
+        webView.customUserAgent = tab.prefersDesktop ? Self.desktopSafariUserAgent : Self.mobileSafariUserAgent
         if let url = webView.url {
             webView.load(URLRequest(url: url))
         } else {

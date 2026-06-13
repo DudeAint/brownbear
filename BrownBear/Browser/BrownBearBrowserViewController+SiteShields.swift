@@ -96,7 +96,7 @@ extension BrownBearBrowserViewController: SiteShieldsDelegate {
             }
         case .desktopSite:
             tab.prefersDesktop = isOn
-            tab.webView.customUserAgent = isOn ? Self.desktopSafariUserAgent : nil
+            tab.webView.customUserAgent = isOn ? Self.desktopSafariUserAgent : Self.mobileSafariUserAgent
             Task {
                 await BrownBearServices.shared.siteSettingsStore.setDesktopUA(isOn, for: url)
                 await MainActor.run { self.reloadActiveTabFromOrigin() }
@@ -108,7 +108,7 @@ extension BrownBearBrowserViewController: SiteShieldsDelegate {
         guard let tab = tabManager.activeTab, let url = tab.state.url else { return }
         tab.prefersDesktop = false
         tab.prefersJavaScriptDisabled = false
-        tab.webView.customUserAgent = nil
+        tab.webView.customUserAgent = Self.mobileSafariUserAgent
         Task {
             await BrownBearServices.shared.siteSettingsStore.clear(for: url)
             await MainActor.run {
@@ -152,9 +152,9 @@ extension BrownBearBrowserViewController {
             tab.prefersJavaScriptDisabled = nowJavaScriptDisabled
             if let desktop = stored.desktopUA {
                 tab.prefersDesktop = desktop
-                // Pin the matching UA so a sniffing site is consistent with the rendered content mode.
-                // Clearing to nil (mobile) is safe: the Chrome-Web-Store override owns its own UA path.
-                tab.webView.customUserAgent = desktop ? Self.desktopSafariUserAgent : nil
+                // Pin the matching Safari UA so a sniffing site is consistent with the rendered content
+                // mode (mobile Safari for mobile). The Chrome-Web-Store override owns its own UA path.
+                tab.webView.customUserAgent = desktop ? Self.desktopSafariUserAgent : Self.mobileSafariUserAgent
             }
             // The in-flight load already evaluated JavaScript with the previous flag. If the remembered
             // choice disables JS but the load allowed it, re-request so the new preference takes effect.
