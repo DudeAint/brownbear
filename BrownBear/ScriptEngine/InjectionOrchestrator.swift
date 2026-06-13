@@ -36,6 +36,9 @@ final class InjectionOrchestrator {
     /// Receives the host→attempt-count map a page reports (PAGE world) so the Shields panel can show a
     /// real "N blocked" count — WKContentRuleList blocks silently and reports nothing to the app.
     private let shieldCounterHandler = ShieldCounterHandler()
+    /// Records page/userscript/content-script fetch + XHR (reported by brownbear-network-logger.js) into
+    /// the Logs → Network inspector. Registered in both the page world and the isolated content world.
+    private let networkLogHandler = NetworkLogHandler(store: BrownBearServices.shared.networkLogStore)
     /// Compiles each extension's declarativeNetRequest rulesets into WKContentRuleLists (Module 6 P2).
     let contentBlocker: WebExtensionContentBlocker
     let scriptStore: ScriptStore
@@ -180,6 +183,23 @@ final class InjectionOrchestrator {
                                              forMainFrameOnly: false,
                                              in: .page)
             userContentController.addUserScript(shieldCounter)
+        }
+
+        // Network logger — wraps fetch/XHR and reports each request to the Logs → Network inspector. Runs
+        // in BOTH the page world (page scripts + MAIN-world userscripts) and the isolated content world
+        // (isolated userscripts + extension content scripts), all frames, document-start, so EVERY page-side
+        // request is captured no matter who issued it (native already records GM_xhr + the extension fetch
+        // proxies). Kill-switchable via the `bbNetworkLog` default (absent == on) if a page is too chatty.
+        if UserDefaults.standard.object(forKey: "bbNetworkLog") as? Bool ?? true {
+            for world in [WKContentWorld.page, contentWorld] {
+                userContentController.add(networkLogHandler, contentWorld: world,
+                                          name: NetworkLogHandler.handlerName)
+                let netLogger = WKUserScript(source: Self.bootstrapSource("brownbear-network-logger"),
+                                             injectionTime: .atDocumentStart,
+                                             forMainFrameOnly: false,
+                                             in: world)
+                userContentController.addUserScript(netLogger)
+            }
         }
 
         // Chrome Web Store in-page install button — a PAGE-world content script that self-gates to
