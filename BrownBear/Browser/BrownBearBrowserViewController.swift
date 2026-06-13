@@ -35,6 +35,10 @@ final class BrownBearBrowserViewController: UIViewController {
     let omnibox = OmniboxView()
     let progressBar = ProgressBar()
     let contentContainer = UIView()
+    /// Horizontal swipe on the address bar to slide to the adjacent tab, Safari-style. Wired and driven
+    /// in BrownBearBrowserViewController+TabSwipe.swift; `tabSwipeSession` holds the in-flight overlay.
+    let tabSwipePan = UIPanGestureRecognizer()
+    var tabSwipeSession: TabSwipeSession?
     // Not `private`: the +Zoom extension (separate file) anchors the zoom HUD above this toolbar.
     let toolbar = BrowserToolbar()
     /// Bottom-mode only: when the bottom bar hides on scroll, this chrome-coloured strip stays put above
@@ -161,6 +165,7 @@ final class BrownBearBrowserViewController: UIViewController {
         injection.historyStateHandler.delegate = self   // SPA history → webNavigation.onHistoryStateUpdated
         DownloadManager.shared.onDownloadStarted = { [weak self] in self?.presentDownloadStartedToast() }
         buildHierarchy()
+        installTabSwipeGesture()
         registerChromeLayoutObservers()
         registerExtensionsToolbarObservers()
         startTabSessionPersistence()   // save open tabs on background so they survive app close
