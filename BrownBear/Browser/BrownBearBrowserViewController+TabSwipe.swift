@@ -72,6 +72,10 @@ extension BrownBearBrowserViewController: UIGestureRecognizerDelegate {
         tabSwipePan.delaysTouchesBegan = false
         tabSwipePan.maximumNumberOfTouches = 1
         topChrome.addGestureRecognizer(tabSwipePan)
+        // The carousel works by sliding an UN-clipped strip behind a CLIPPED viewport: the neighbour cards
+        // live off-screen at ±width and are revealed as the strip translates. Clip the fixed viewport (the
+        // content container) so they're masked to it; topChrome already clips for the bar strip.
+        contentContainer.clipsToBounds = true
     }
 
     // MARK: - Gesture delegate
@@ -158,11 +162,16 @@ extension BrownBearBrowserViewController: UIGestureRecognizerDelegate {
         let leftTab = index > 0 ? set[index - 1] : nil
         let rightTab = index < set.count - 1 ? set[index + 1] : nil
 
-        // Content overlay: previous | current | next, current centred.
+        // Content strip: previous | current | next, current centred. NOT clipped — the neighbours sit at
+        // ±width and must show as the strip slides; the content container (clipped above) masks the
+        // overflow. Clipping the strip itself would hide the neighbours AND expose the live web view in
+        // the vacated area (the "mirror of the active tab" bug) instead of the neighbour's card.
         let contentHolder = UIView(frame: bounds)
         contentHolder.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        contentHolder.clipsToBounds = true
+        contentHolder.clipsToBounds = false
         contentHolder.isUserInteractionEnabled = false
+        // Opaque backstop in the centre region so the live web view never peeks through if the centre
+        // snapshot is ever blank.
         contentHolder.backgroundColor = BrownBearTheme.Palette.background
         let centre = contentContainer.snapshotView(afterScreenUpdates: false) ?? UIView(frame: bounds)
         centre.frame = bounds
@@ -175,7 +184,7 @@ extension BrownBearBrowserViewController: UIGestureRecognizerDelegate {
         let barBounds = topChrome.bounds
         let barHolder = UIView(frame: barBounds)
         barHolder.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        barHolder.clipsToBounds = true
+        barHolder.clipsToBounds = false   // topChrome clips the bar strip; the holder must not clip its neighbours
         barHolder.isUserInteractionEnabled = false
         let barCentre = topChrome.snapshotView(afterScreenUpdates: false) ?? UIView(frame: barBounds)
         barCentre.frame = barBounds
