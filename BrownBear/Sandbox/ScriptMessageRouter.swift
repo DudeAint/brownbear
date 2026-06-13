@@ -223,6 +223,21 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
 
         // Everything else requires a native-bound session and a grant.
         let session = try resolveSession(token)
+
+        // Page-world execution: the isolated-world runtime asks native to evaluate a grant-none
+        // userscript in this frame's REAL main world (WKContentWorld.page), so `window`/`unsafeWindow`
+        // are the page's own globals (@grant none / @inject-into page — Tampermonkey parity). Like the
+        // extension runtime's page.injectMainWorld, native eval is CSP-immune (unlike an inline
+        // <script>). It needs no GM grant — a grant-none script has no GM surface — but IS gated on a
+        // valid session token (proves the call came from a script this router actually minted), and the
+        // handler is registered ONLY in the isolated world, so a page script can never reach it.
+        if api == "injectPageWorld" {
+            if let webView, let code = payload["code"] as? String, !code.isEmpty {
+                BBEvaluateJavaScriptInFrame(webView, code, frameInfo, .page)
+            }
+            return NSNull()
+        }
+
         try ensureGranted(api: api, session: session)
 
         // The menu/tab APIs are dispatched here, before the main switch, so route() stays within its

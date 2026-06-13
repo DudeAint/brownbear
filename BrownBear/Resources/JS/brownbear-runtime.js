@@ -700,17 +700,81 @@
     };
   }
 
+  // Which world a script runs in. `W` is THIS isolated world's window — a distinct global object from
+  // the page's, so page-defined globals (window.jQuery, a site's own functions) are invisible here and
+  // `unsafeWindow`/`window` don't see them. Running in the page's REAL main world fixes that.
+  // Tampermonkey/Violentmonkey parity:
+  //   • @inject-into content        → always the isolated world (current behavior).
+  //   • @inject-into page / auto     → the page world ONLY when the script takes NO GM grants
+  //                                    (@grant none). A granted script needs the GM bridge, which is
+  //                                    reachable solely from this isolated world, so it stays here.
+  // The grant-none page case is exactly the canonical "@grant none ⇒ real window" idiom users rely on.
+  function wantsPageWorld(data) {
+    var into = data.injectInto || "auto";
+    if (into === "content") { return false; }
+    return !!data.grantNone;   // page or auto → page world iff there are no grants to bridge
+  }
+
+  // Build the self-contained source native evaluates in the page's MAIN world (WKContentWorld.page).
+  // There `window` IS the page's window, so unsafeWindow === window and the page's own globals are
+  // visible. Only the grant-none surface is provided: GM_info as inert data, a GM object carrying just
+  // `.info` (GM.* methods require grants, which this path doesn't have), and the page's own `console`
+  // (left to resolve to the page global — already captured for the Logs "Page" filter). The body runs
+  // inside its own function so its var/const/let declarations don't leak onto the page, mirroring the
+  // isolated world's `new Function` wrapper. Native eval (not an inline <script>) keeps this CSP-immune.
+  function buildPageWorldSource(data, body) {
+    var infoJSON = "{}";
+    try { infoJSON = _JSON.stringify(data.info || {}); } catch (e) { infoJSON = "{}"; }
+    return "(function(){\n" +
+      "\"use strict\";\n" +
+      "var unsafeWindow = window;\n" +
+      "var GM_info = " + infoJSON + ";\n" +
+      "if (!GM_info.scriptHandler) { GM_info.scriptHandler = \"BrownBear\"; }\n" +
+      "var GM = { info: GM_info };\n" +
+      "(function (unsafeWindow, GM, GM_info, window) {\n" +
+      body + "\n" +
+      "}).call(window, unsafeWindow, GM, GM_info, window);\n" +
+      "})();";
+  }
+
   function run(data) {
     var token = data.token;
     return _Promise.all([loadRequires(data.requires, token), loadResources(data.resources, token)])
       .then(function (loaded) {
       var requireCode = loaded[0];
       data.resources = loaded[1];   // name -> { text, url } (fetched natively)
+
+      var sourceURL = "//# sourceURL=brownbear://" + encodeURIComponent(data.name || "script") + ".user.js";
+      var body = (requireCode ? requireCode + "\n;\n" : "") + data.source + "\n" + sourceURL;
+
+      // Page (main) world: hand the source to native to evaluate in this frame's real page world, so
+      // `window`/`unsafeWindow` are the page's own globals. buildGM is skipped — a grant-none script
+      // has no GM bridge to wire. The injectPageWorld bridge call is reachable only from this isolated
+      // world, and native re-gates it on a valid session token.
+      if (wantsPageWorld(data)) {
+        var pageSource = buildPageWorldSource(data, body);
+        bridge("injectPageWorld", { code: pageSource }, token).catch(function (e) {
+          _console.error("[BrownBear] page-world inject failed for \"" + (data.name || "script") + "\":", e);
+        });
+        return;
+      }
+
       var env = buildGM(data);
       var grantNone = !!data.grantNone;
       var grants = data.grants || [];
       var grantSet = _Object.create(null);
       grants.forEach(function (g) { grantSet[g] = true; });
+
+      // An explicit @inject-into page that ALSO takes GM grants can't run in the page world (the GM
+      // bridge lives only here), so it runs isolated — surface that instead of silently ignoring the
+      // directive, so a script author knows why unsafeWindow isn't the page window.
+      if (!grantNone && data.injectInto === "page") {
+        try {
+          makeConsole(token).warn("[BrownBear] \"@inject-into page\" needs \"@grant none\" for real " +
+            "page-window access; with GM grants this script runs in the isolated world (unsafeWindow " +
+            "is the isolated window, not the page's).");
+        } catch (e) { /* logging must never break injection */ }
+      }
 
       var scriptConsole = makeConsole(token);
       var argNames = ["unsafeWindow", "GM", "GM_info", "console", "window"];
@@ -721,9 +785,6 @@
           if (grantSet[name]) { argNames.push(name); argVals.push(env.registry[name]); }
         });
       }
-
-      var sourceURL = "//# sourceURL=brownbear://" + encodeURIComponent(data.name || "script") + ".user.js";
-      var body = (requireCode ? requireCode + "\n;\n" : "") + data.source + "\n" + sourceURL;
 
       try {
         var fn = _Function.apply(null, argNames.concat([body]));
