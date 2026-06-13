@@ -98,22 +98,29 @@ final class TabGridTransitionAnimator: NSObject, UIViewControllerAnimatedTransit
             browserView.frame = pageFrame
             container.insertSubview(browserView, belowSubview: gridView)
         }
-
-        // The hero is the page's own snapshot — a render of the web view's CONTENT area. So it grows from
-        // the tapped card's picture to the content-area frame (not the whole screen), where it sits 1:1 on
-        // the live page beneath: same scale, so the dissolve is seamless. Growing to the full screen instead
-        // would aspect-fill the content snapshot ~13% larger than the live page, and the dissolve then read
-        // as an instant zoom-out "snap". The chrome bars show the (revealed) browser around it.
-        let hero = UIImageView(image: image)
-        hero.contentMode = .scaleAspectFill
-        let startCorner = BrownBearTheme.Metrics.cellCornerRadius
-        hero.frame = heroFrame
-        hero.layer.cornerRadius = startCorner
-        hero.layer.cornerCurve = .continuous
-        hero.clipsToBounds = true
-        container.addSubview(hero)
-
         let finalFrame = heroTargetFrame == .zero ? pageFrame : heroTargetFrame
+
+        // The hero is the page's own snapshot. It grows from the tapped card's picture to the content-area
+        // frame (not the whole screen) so it sits 1:1 on the live page beneath — same scale, seamless dissolve.
+        //
+        // It's TOP-anchored: a clip view animates card→page, and the page image inside is pinned to the top
+        // and sized to the page's true aspect. So the page's TOP edge stays put the whole way (the Safari
+        // morph), matching both the top-anchored tab card it grows FROM and the top-anchored live page it
+        // dissolves INTO. A single centre-gravity aspect-fill instead drifts the content vertically and — if
+        // the snapshot's aspect no longer matches the live page — leaves the hero reading too tall/high at
+        // the end. The clip can never exceed `finalFrame`, so the hero is never taller than the live page.
+        let startCorner = BrownBearTheme.Metrics.cellCornerRadius
+        let pageAspect = image.size.width / max(image.size.height, 1)
+        let heroClip = UIView(frame: heroFrame)
+        heroClip.clipsToBounds = true
+        heroClip.layer.cornerRadius = startCorner
+        heroClip.layer.cornerCurve = .continuous
+
+        let pageView = UIImageView(image: image)
+        pageView.contentMode = .scaleToFill   // sized to the exact page aspect → fills width, no distortion
+        pageView.frame = topAnchoredPageFrame(width: heroFrame.width, aspect: pageAspect)
+        heroClip.addSubview(pageView)
+        container.addSubview(heroClip)
 
         // Round the corners out to a square page edge. A CABasicAnimation is the reliable way to animate
         // a layer corner alongside a UIView animation (UIView.animate doesn't always carry cornerRadius).
@@ -122,29 +129,37 @@ final class TabGridTransitionAnimator: NSObject, UIViewControllerAnimatedTransit
         corner.toValue = 0
         corner.duration = duration
         corner.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        hero.layer.cornerRadius = 0
-        hero.layer.add(corner, forKey: "heroCorner")
+        heroClip.layer.cornerRadius = 0
+        heroClip.layer.add(corner, forKey: "heroCorner")
 
         // A smooth decelerate (damping 1.0 = no overshoot/bounce, which reads as gentler than a spring).
-        // The surrounding cards fall away as the card grows.
+        // The clip and its top-pinned page grow in lockstep; the surrounding cards fall away.
         UIView.animate(withDuration: duration, delay: 0,
                        usingSpringWithDamping: 1.0, initialSpringVelocity: 0,
                        options: [.allowUserInteraction, .curveEaseInOut]) {
             gridView.alpha = 0
-            hero.frame = finalFrame
+            heroClip.frame = finalFrame
+            pageView.frame = self.topAnchoredPageFrame(width: finalFrame.width, aspect: pageAspect)
         } completion: { _ in
-            hero.removeFromSuperview()
+            heroClip.removeFromSuperview()
             gridView.alpha = 1
             gridView.transform = .identity
             context.completeTransition(!context.transitionWasCancelled)
         }
 
-        // Dissolve the full-screen snapshot into the live page over the back half, so a page that no longer
-        // matches its snapshot cross-fades in rather than popping.
+        // Dissolve the snapshot into the live page over the back half, so a page that no longer matches its
+        // snapshot cross-fades in rather than popping.
         UIView.animate(withDuration: duration * 0.45, delay: duration * 0.5,
                        options: [.curveEaseInOut]) {
-            hero.alpha = 0
+            heroClip.alpha = 0
         }
+    }
+
+    /// A page image's frame inside its clip: full width, top-pinned (y = 0), height set by the page's own
+    /// aspect. Wider than the clip vertically → the bottom is clipped; the visible top region stays 1:1 with
+    /// the live page. Linear interpolation of this frame keeps width == clip width and the aspect exact.
+    private func topAnchoredPageFrame(width: CGFloat, aspect: CGFloat) -> CGRect {
+        CGRect(x: 0, y: 0, width: width, height: aspect > 0 ? width / aspect : width)
     }
 
     // MARK: - Plain dismiss (Done / new tab)
