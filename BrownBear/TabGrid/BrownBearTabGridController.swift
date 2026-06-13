@@ -33,8 +33,10 @@ final class BrownBearTabGridController: UIViewController {
     /// Live tab-search text; filters the visible cards by title + host.
     private var searchText = ""
 
-    /// Whether the one-time "center on the active tab when the grid opens" scroll has run yet.
-    private var didCenterOnActiveTab = false
+    /// Set once the user drags the grid or types in tab-search, so the open-time auto-center stops fighting
+    /// them. Until then we re-center on the active tab on EVERY layout pass (the present transition lays out
+    /// several times, and a single shot during it can land on a not-yet-real content size → stuck at top).
+    private var userInteractedWithGrid = false
 
     /// Which set the grid is showing. Private mode is only reachable once a private tab exists or the
     /// user explicitly switches to it; it persists while the grid is open.
@@ -78,32 +80,27 @@ final class BrownBearTabGridController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        centerOnActiveTabIfNeeded()
+        centerOnActiveTab()
     }
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        // Safety net: if the layout passes during presentation never resolved a real content size (so the
-        // primary attempt above hasn't run yet), center now that everything is laid out. Flag-guarded, so
-        // it's a no-op in the normal case where viewDidLayoutSubviews already handled it.
-        centerOnActiveTabIfNeeded()
+        // The present transition can finish without firing another layout pass, so run one authoritative
+        // center on the next runloop once everything has settled. Still gated on user interaction.
+        DispatchQueue.main.async { [weak self] in self?.centerOnActiveTab() }
     }
 
-    /// On first open, center the grid on the tab you're currently in instead of always snapping to the top.
-    /// Done once, so manual scrolling afterwards sticks — but ONLY once the layout has a real content size:
-    /// `updateItemSize()` runs in viewWillLayoutSubviews and invalidates the flow layout, so the first
-    /// viewDidLayoutSubviews here can still hold a stale/zero content size, and scrolling then just clamps
-    /// to the top (the "always starts at the top" bug). Force the pending layout to resolve and only commit
-    /// the one-shot once there's actually a laid-out grid to scroll within.
-    private func centerOnActiveTabIfNeeded() {
-        guard !didCenterOnActiveTab,
+    /// Keep the grid centered on the active tab UNTIL the user touches it. Re-running on every layout pass
+    /// (rather than once) is what makes it reliable: the open transition lays the grid out several times,
+    /// and a single early scroll lands on a not-yet-real content size and clamps to the top. scrollToItem
+    /// is idempotent, so repeating it once centered costs nothing.
+    private func centerOnActiveTab() {
+        guard !userInteractedWithGrid,
               collectionView.bounds.height > 0,
               let activeID = tabManager.activeTabID,
               let indexPath = dataSource.indexPath(for: activeID) else { return }
-        collectionView.layoutIfNeeded()   // resolve the item-size invalidation → real contentSize
+        collectionView.layoutIfNeeded()   // resolve any pending item-size invalidation → real contentSize
         let contentHeight = collectionView.collectionViewLayout.collectionViewContentSize.height
-        guard contentHeight > 0 else { return }   // not laid out yet — retry on the next layout pass
-        didCenterOnActiveTab = true
         // If the whole grid already fits, the active card is on screen — nothing to scroll.
         guard contentHeight > collectionView.bounds.height else { return }
         collectionView.scrollToItem(at: indexPath, at: .centeredVertically, animated: false)
@@ -402,6 +399,9 @@ final class BrownBearTabGridController: UIViewController {
 // MARK: - UICollectionViewDelegate
 
 extension BrownBearTabGridController: UICollectionViewDelegate {
+    // Once the user drags the grid, stop the open-time auto-center so it doesn't fight their scrolling.
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) { userInteractedWithGrid = true }
+
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         guard let tabID = dataSource.itemIdentifier(for: indexPath),
               let tab = tabManager.tab(for: tabID) else { return }
@@ -471,6 +471,7 @@ extension BrownBearTabGridController: UICollectionViewDelegate {
 
 extension BrownBearTabGridController: UISearchBarDelegate {
     func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) {
+        userInteractedWithGrid = true   // searching re-lays-out the grid; don't yank it back to the active tab
         self.searchText = searchText
         applySnapshot(animatingDifferences: true)
     }
