@@ -63,6 +63,34 @@ final class SiteShieldsContentBlockerTests: XCTestCase {
         XCTAssertEqual(trigger?["unless-domain"] as? [String], ["*dup.com"], "an already-present host isn't duplicated")
     }
 
+    func testSubdomainHostBroadensToRegistrableDomain() {
+        // Edgenuity case: the user toggles Shields off on the page's host, but the video player runs in an
+        // iframe on a SIBLING subdomain (r22.core.learn.edgenuity.com). The exclusion must cover the whole
+        // registrable site so the iframe's trackers (NR/GA) aren't left blocked and the player can init.
+        let json = #"[{"trigger":{"url-filter":".*"},"action":{"type":"block"}}]"#
+        let out = WebExtensionContentBlocker.applyExclusions(to: json, hosts: ["core.learn.edgenuity.com"])
+        let trigger = rules(out).first?["trigger"] as? [String: Any]
+        XCTAssertEqual(trigger?["unless-domain"] as? [String], ["*edgenuity.com"],
+                       "a subdomain host broadens to its registrable domain (covers r22.*.edgenuity.com)")
+    }
+
+    func testSiblingSubdomainsCollapseToOneEntry() {
+        let json = #"[{"trigger":{"url-filter":".*"},"action":{"type":"block"}}]"#
+        let out = WebExtensionContentBlocker.applyExclusions(to: json, hosts: ["a.edgenuity.com", "b.edgenuity.com"])
+        let trigger = rules(out).first?["trigger"] as? [String: Any]
+        XCTAssertEqual(trigger?["unless-domain"] as? [String], ["*edgenuity.com"], "siblings dedupe to one entry")
+    }
+
+    func testRegistrableDomain() {
+        XCTAssertEqual(WebExtensionContentBlocker.registrableDomain("r22.core.learn.edgenuity.com"), "edgenuity.com")
+        XCTAssertEqual(WebExtensionContentBlocker.registrableDomain("edgenuity.com"), "edgenuity.com")
+        XCTAssertEqual(WebExtensionContentBlocker.registrableDomain("www.example.com"), "example.com")
+        XCTAssertEqual(WebExtensionContentBlocker.registrableDomain("foo.bar.co.uk"), "bar.co.uk")
+        XCTAssertEqual(WebExtensionContentBlocker.registrableDomain("bbc.co.uk"), "bbc.co.uk")
+        XCTAssertEqual(WebExtensionContentBlocker.registrableDomain("localhost"), "localhost")
+        XCTAssertEqual(WebExtensionContentBlocker.registrableDomain("192.168.1.1"), "192.168.1.1")
+    }
+
     // MARK: - Unbreak exceptions (let a page-breaking telemetry script load, block its data endpoint)
 
     func testUnbreakStripsAgentBlock() {

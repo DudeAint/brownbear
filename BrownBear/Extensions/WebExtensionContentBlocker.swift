@@ -356,7 +356,18 @@ final class WebExtensionContentBlocker {
         guard !hosts.isEmpty,
               let data = json.data(using: .utf8),
               var rules = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return json }
-        let entries = hosts.map { "*" + $0 }
+        // Scope each Shields-off host to its REGISTRABLE DOMAIN (eTLD+1) so blocking is suppressed across the
+        // WHOLE site — every subdomain AND every subframe — not just the exact host the user toggled. A
+        // site's video player or embedded content frequently lives on a SIBLING subdomain (Edgenuity's
+        // player iframe runs on r22.core.learn.edgenuity.com while the page is core.learn.edgenuity.com); a
+        // per-exact-host exclusion left those subframes blocked, so the player's trackers (New Relic, GA)
+        // stayed blocked and its init died on a cross-origin frame. `*<domain>` matches the domain and all
+        // subdomains. Matches how Brave/uBlock scope a per-site shields toggle (the whole registrable site).
+        var seen = Set<String>()
+        let entries = hosts.compactMap { host -> String? in
+            let entry = "*" + Self.registrableDomain(host)
+            return seen.insert(entry).inserted ? entry : nil
+        }
         for index in rules.indices {
             guard var trigger = rules[index]["trigger"] as? [String: Any] else { continue }
             if trigger["if-domain"] != nil { continue }   // can't combine with unless-domain
@@ -368,5 +379,31 @@ final class WebExtensionContentBlocker {
         guard let out = try? JSONSerialization.data(withJSONObject: rules, options: [.sortedKeys]),
               let string = String(data: out, encoding: .utf8) else { return json }
         return string
+    }
+
+    /// Two-label public suffixes whose registrable domain is the LAST THREE labels (e.g. `foo.co.uk` →
+    /// `foo.co.uk`, not `co.uk`). Covers the common country-code second-level domains so a Shields-off
+    /// toggle on such a site doesn't over-broaden to the entire suffix. Not exhaustive (no bundled PSL),
+    /// but it catches the cases a user is realistically on; an unknown suffix falls back to last-two.
+    private static let multiLabelSuffixes: Set<String> = [
+        "co.uk", "org.uk", "gov.uk", "ac.uk", "me.uk", "co.jp", "or.jp", "ne.jp", "com.au", "net.au",
+        "org.au", "co.nz", "com.br", "com.cn", "com.mx", "co.in", "co.za", "com.tr", "co.kr", "com.sg",
+        "com.hk", "com.tw", "co.il", "com.ar", "com.sa", "com.ua", "co.id", "com.my", "com.ph"
+    ]
+
+    /// The registrable domain (eTLD+1) of `host` — the scope a per-site Shields toggle should apply to, so
+    /// it covers the whole site's subdomains and subframes (Brave/uBlock parity). `r22.core.learn.edgenuity.com`
+    /// → `edgenuity.com`; `foo.bar.co.uk` → `bar.co.uk`; a bare host or IP is returned unchanged.
+    nonisolated static func registrableDomain(_ host: String) -> String {
+        let lower = host.lowercased()
+        // Leave IPv4/IPv6 literals (and anything without a dot) untouched.
+        guard lower.contains("."), !lower.contains(":"),
+              lower.first(where: { !($0.isNumber || $0 == ".") }) != nil else { return lower }
+        let labels = lower.split(separator: ".").map(String.init)
+        guard labels.count > 2 else { return lower }
+        if multiLabelSuffixes.contains(labels.suffix(2).joined(separator: ".")) {
+            return labels.suffix(3).joined(separator: ".")
+        }
+        return labels.suffix(2).joined(separator: ".")
     }
 }
