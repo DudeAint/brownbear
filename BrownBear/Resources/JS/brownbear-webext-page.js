@@ -216,6 +216,42 @@
     } catch (e) { /* navigator may be a non-configurable native; nothing we can do, but don't break the page */ }
   })();
 
+  // --- Blob object-URL polyfill -------------------------------------------------------------------
+  // WebKit REFUSES URL.createObjectURL on a custom-scheme (chrome-extension://) origin — it throws a
+  // TypeError ("createObjectURL@[native code]"). That breaks any extension page that turns a Blob into a
+  // URL: Tampermonkey's OFFSCREEN document does exactly this to hand a decoded userscript back to its
+  // worker (the "import from URL → stuck at 'Decoding…'" bug). Consumers fetch the URL
+  // (`fetch(objUrl).then(r => r.blob())` — TM's path) and don't require the literal `blob:` scheme, so we
+  // keep the Blob in-page in a Map and answer it from the fetch wrapper below. Lifetime matches a real
+  // object URL (alive until revoked / page unload), and TM creates AND consumes it in the same document.
+  var __bbObjectUrls = new (W.Map || Map)();   // url string -> Blob
+  (function () {
+    var URLCtor = W.URL;
+    if (!URLCtor || typeof URLCtor.createObjectURL !== "function") { return; }
+    var BlobCtor = W.Blob;
+    var nativeCreate = URLCtor.createObjectURL;
+    var nativeRevoke = URLCtor.revokeObjectURL;
+    var seq = 0;
+    URLCtor.createObjectURL = function (obj) {
+      if (BlobCtor && obj instanceof BlobCtor) {   // covers File (extends Blob) too
+        seq += 1;
+        // Mimic a real blob URL's shape (blob:<origin>/<id>) so a consumer that does
+        // String(u).startsWith("blob:") or new URL(u).protocol === "blob:" still sees what it expects.
+        var key = "blob:" + W.location.origin + "/bb-" + seq + "-" +
+          Math.floor(Math.random() * 1e9).toString(36);
+        __bbObjectUrls.set(key, obj);
+        return key;
+      }
+      // MediaSource / MediaStream — defer to the platform (our store only covers Blobs/Files; the native
+      // call may still throw on this origin, but that is the platform's own behavior, not ours to mask).
+      return nativeCreate.call(URLCtor, obj);
+    };
+    URLCtor.revokeObjectURL = function (url) {
+      if (__bbObjectUrls.has(url)) { __bbObjectUrls.delete(url); return; }
+      try { nativeRevoke.call(URLCtor, url); } catch (e) { /* unknown/native url — ignore */ }
+    };
+  })();
+
   // Cross-origin fetch from an extension page. Chrome lets an extension page fetch hosts in its
   // host_permissions WITHOUT CORS (the privileged extension-page network path); a WKWebView page enforces
   // CORS, so a manager's install page (e.g. ScriptCat fetching a .user.js from greasyfork) failed with
@@ -240,6 +276,14 @@
       var url, abs;
       try {
         url = (input && typeof input === "object" && input.url != null) ? input.url : String(input);
+      } catch (e) { return origFetch(input, init); }
+      // An in-page Blob object URL minted by our createObjectURL polyfill — WebKit can't fetch a synthetic
+      // blob: URL on a custom-scheme origin, but we hold the Blob, so answer straight from it (any method;
+      // a body is irrelevant for a blob fetch). This is what makes `fetch(objUrl).blob()` work.
+      if (__bbObjectUrls.has(url)) {
+        return _Promise.resolve(new Response(__bbObjectUrls.get(url)));
+      }
+      try {
         abs = new URL(url, W.location.href);
       } catch (e) { return origFetch(input, init); }
       if (abs.origin === extOrigin || (abs.protocol !== "http:" && abs.protocol !== "https:")) {
