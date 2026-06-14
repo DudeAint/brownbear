@@ -33,6 +33,11 @@ final class HeadlessScriptRunner: @unchecked Sendable {
         var cache: [String: String]          // key -> JSON-encoded value
         var touched = Set<String>()          // keys written or deleted this run
         var logs: [LogEntry] = []
+        /// GM_addValueChangeListener registrations made during this run: id -> (key, fn). Fired
+        /// (remote: false) when GM_setValue(s)/deleteValue(s) changes that key, so a background script's
+        /// own value-change listeners work within the run (there is no live cross-context here).
+        var valueListeners: [Int: (key: String, fn: JSValue)] = [:]
+        var listenerSeq = 0
         init(cache: [String: String]) { self.cache = cache }
     }
 
@@ -233,25 +238,44 @@ final class HeadlessScriptRunner: @unchecked Sendable {
         }
         context.setObject(nativeLog, forKeyedSubscript: "__bbLog" as NSString)
 
+        // Invoke any GM_addValueChangeListener registered for `key` with (key, old, new, remote:false).
+        func fireValueListeners(_ key: String, _ oldRaw: String?, _ newRaw: String?) {
+            guard !scratch.valueListeners.isEmpty else { return }
+            let oldVal: Any = oldRaw.flatMap(parse) ?? NSNull()
+            let newVal: Any = newRaw.flatMap(parse) ?? NSNull()
+            for (_, entry) in scratch.valueListeners where entry.key == key {
+                entry.fn.call(withArguments: [key, oldVal, newVal, false])
+            }
+        }
+        // Write `key` to the cache (nil value deletes), recording the change and firing listeners.
+        func writeValue(_ key: String, _ value: JSValue?) {
+            let oldRaw = scratch.cache[key]
+            scratch.touched.insert(key)
+            var newRaw: String?
+            if let value, !value.isUndefined {
+                let encoded = stringify(value)
+                scratch.cache[key] = encoded
+                newRaw = encoded
+            } else {
+                scratch.cache.removeValue(forKey: key)
+            }
+            fireValueListeners(key, oldRaw, newRaw)
+        }
+
         let getValue: @convention(block) (String, JSValue?) -> Any? = { key, fallback in
             if let raw = scratch.cache[key], let parsed = parse(raw) { return parsed }
             return fallback
         }
         context.setObject(getValue, forKeyedSubscript: "GM_getValue" as NSString)
 
-        let setValue: @convention(block) (String, JSValue?) -> Void = { key, value in
-            scratch.touched.insert(key)
-            if let value, !value.isUndefined {
-                scratch.cache[key] = stringify(value)
-            } else {
-                scratch.cache.removeValue(forKey: key)
-            }
-        }
+        let setValue: @convention(block) (String, JSValue?) -> Void = { key, value in writeValue(key, value) }
         context.setObject(setValue, forKeyedSubscript: "GM_setValue" as NSString)
 
         let deleteValue: @convention(block) (String) -> Void = { key in
+            let oldRaw = scratch.cache[key]
             scratch.touched.insert(key)
             scratch.cache.removeValue(forKey: key)
+            fireValueListeners(key, oldRaw, nil)
         }
         context.setObject(deleteValue, forKeyedSubscript: "GM_deleteValue" as NSString)
 
@@ -259,6 +283,46 @@ final class HeadlessScriptRunner: @unchecked Sendable {
             Array(scratch.cache.keys)
         }
         context.setObject(listValues, forKeyedSubscript: "GM_listValues" as NSString)
+
+        // Bulk value APIs (Tampermonkey/Violentmonkey) — ScriptCat background scripts use these for
+        // batch reads/writes; their absence threw "GM_setValues is not a function" and killed the run.
+        let getValues: @convention(block) (JSValue?) -> [String: Any] = { keys in
+            var out: [String: Any] = [:]
+            for key in (keys?.toArray() as? [String]) ?? [] {
+                if let raw = scratch.cache[key], let parsed = parse(raw) { out[key] = parsed }
+            }
+            return out
+        }
+        context.setObject(getValues, forKeyedSubscript: "GM_getValues" as NSString)
+
+        let setValues: @convention(block) (JSValue?) -> Void = { obj in
+            guard let obj, obj.isObject, let dict = obj.toDictionary() as? [String: Any] else { return }
+            for key in dict.keys { writeValue(key, obj.objectForKeyedSubscript(key)) }
+        }
+        context.setObject(setValues, forKeyedSubscript: "GM_setValues" as NSString)
+
+        let deleteValues: @convention(block) (JSValue?) -> Void = { keys in
+            for key in (keys?.toArray() as? [String]) ?? [] {
+                let oldRaw = scratch.cache[key]
+                scratch.touched.insert(key)
+                scratch.cache.removeValue(forKey: key)
+                fireValueListeners(key, oldRaw, nil)
+            }
+        }
+        context.setObject(deleteValues, forKeyedSubscript: "GM_deleteValues" as NSString)
+
+        let addValueChangeListener: @convention(block) (String, JSValue?) -> Int = { key, fn in
+            guard let fn, !fn.isUndefined else { return -1 }
+            scratch.listenerSeq += 1
+            scratch.valueListeners[scratch.listenerSeq] = (key: key, fn: fn)
+            return scratch.listenerSeq
+        }
+        context.setObject(addValueChangeListener, forKeyedSubscript: "GM_addValueChangeListener" as NSString)
+
+        let removeValueChangeListener: @convention(block) (Int) -> Void = { id in
+            scratch.valueListeners.removeValue(forKey: id)
+        }
+        context.setObject(removeValueChangeListener, forKeyedSubscript: "GM_removeValueChangeListener" as NSString)
 
         installXHR(into: context, script: script, scratch: scratch, deadline: deadline)
 
