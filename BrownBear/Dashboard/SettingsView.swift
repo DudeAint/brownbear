@@ -17,7 +17,7 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Key.hideBarsOnScroll) private var hideBarsOnScroll = true
     @AppStorage(AppSettings.Key.addressBarPosition) private var addressBarPositionRaw = AddressBarPosition.top.rawValue
     @AppStorage(AppSettings.Key.userScriptInstallPolicy) private var installPolicyRaw = UserScriptInstallPolicy.ask.rawValue
-    @AppStorage(AppSettings.Key.userScriptWorld) private var userScriptWorldRaw = UserScriptWorld.userScript.rawValue
+    @AppStorage(AppSettings.Key.userScriptWorld) private var userScriptWorldRaw = UserScriptWorld.managerChoice.rawValue
     @AppStorage(AppSettings.Key.keepVideosInline) private var keepVideosInline = true
     @AppStorage(AppSettings.Key.theme) private var themeRaw = AppTheme.system.rawValue
     @AppStorage(AppSettings.Key.tabSwitcherStyle) private var tabSwitcherStyleRaw = TabSwitcherStyle.grid.rawValue
