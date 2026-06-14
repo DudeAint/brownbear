@@ -653,9 +653,13 @@ extension BrownBearBrowserViewController: BrownBearTabGridControllerDelegate {
         tabManager.setActiveTab(tab)
         tabGridTransition.selectedCardImage = controller.selectedCardImage
         tabGridTransition.selectedCardFrame = controller.selectedCardFrame
-        // The card snapshot is a render of the web view's content area; grow it to that area (window
-        // coords) so it lands 1:1 on the live page instead of over-zoomed (no zoom-out "snap" on dissolve).
-        tabGridTransition.selectedContentFrame = contentContainer.convert(contentContainer.bounds, to: nil)
+        // The card snapshot is a render of the web view's content area; grow it to that area so it lands 1:1
+        // on the live page instead of over-zoomed (no zoom-out "snap" on dissolve). Convert to our OWN view,
+        // NOT `to: nil` (window): under the full-screen tab-grid modal UIKit detaches this view from the
+        // window, so a window conversion returns .zero — which made the hero fall back to the FULL screen
+        // (~13% over-sized, landing too tall/high). Our view fills the screen at the origin, so its coords
+        // equal the window's and the transition container's.
+        tabGridTransition.selectedContentFrame = contentContainer.convert(contentContainer.bounds, to: view)
         controller.dismiss(animated: true)
     }
 
