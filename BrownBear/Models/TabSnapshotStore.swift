@@ -5,8 +5,11 @@
 //  Persists tab thumbnail snapshots to disk so the tab grid can show a real preview for tabs restored
 //  after the app was closed (without this, a restored-but-not-yet-loaded tab shows a blank placeholder).
 //  Keyed by the tab's stable id, downscaled + JPEG-encoded so files stay small and decode lazily. Lives in
-//  Caches (not Documents): the OS may evict it under storage pressure, which is fine — a missing snapshot
-//  just falls back to the placeholder. Private tabs are never persisted (incognito leaves no trace).
+//  Application Support (NOT Caches): an app UPDATE wipes Caches, which would blank every tab's preview on
+//  the first launch after each update — the user's "tabs lost how they were" report. Application Support
+//  survives updates; `prune` caps growth (Caches' purge-on-pressure no longer does), and the directory is
+//  excluded from iCloud backup since the thumbnails are regenerable + per-device. Private tabs are never
+//  persisted (incognito leaves no trace).
 //
 
 import UIKit
@@ -18,10 +21,15 @@ enum TabSnapshotStore {
     private static let maxDimension: CGFloat = 480
 
     private static var directory: URL? {
-        guard let base = try? FileManager.default.url(for: .cachesDirectory, in: .userDomainMask,
-                                                      appropriateFor: nil, create: true) else { return nil }
-        let dir = base.appendingPathComponent("BrownBear/TabSnapshots", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let fileManager = FileManager.default
+        guard let base = try? fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                              appropriateFor: nil, create: true) else { return nil }
+        var dir = base.appendingPathComponent("BrownBear/TabSnapshots", isDirectory: true)
+        try? fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+        // Regenerable, per-device thumbnails — keep them out of the user's iCloud backup.
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? dir.setResourceValues(values)
         return dir
     }
 
