@@ -20,6 +20,8 @@ enum TabSessionStore {
         let url: String?
         let title: String
         var id: String?
+        /// Whether the tab was pinned. Optional so sessions written before pinning existed still decode.
+        var isPinned: Bool?
     }
 
     /// The restored session: the ordered records and the index (within them) of the tab that was active.

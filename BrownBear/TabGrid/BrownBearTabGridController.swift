@@ -60,8 +60,12 @@ final class BrownBearTabGridController: UIViewController {
     private var flyInHero: UIImageView?
     private var didRunFlyIn = false
 
-    /// The tabs currently displayed, scoped to the active mode.
-    private var displayedTabs: [Tab] { showingPrivate ? tabManager.privateTabs : tabManager.normalTabs }
+    /// The tabs currently displayed, scoped to the active mode. Pinned tabs lead (`sorted(by:)` is stable,
+    /// so order within the pinned and unpinned groups is preserved).
+    private var displayedTabs: [Tab] {
+        let set = showingPrivate ? tabManager.privateTabs : tabManager.normalTabs
+        return set.sorted { $0.isPinned && !$1.isPinned }
+    }
 
     init(tabManager: TabManager, showingPrivate: Bool = false) {
         self.tabManager = tabManager
@@ -394,7 +398,8 @@ final class BrownBearTabGridController: UIViewController {
                   let tab = self.tabManager.tab(for: tabID) else { return cell }
             cell.configure(title: tab.state.displayTitle,
                            snapshot: tab.snapshot,
-                           isActive: tab.id == self.tabManager.activeTabID)
+                           isActive: tab.id == self.tabManager.activeTabID,
+                           isPinned: tab.isPinned)
             cell.onClose = { [weak self] in self?.closeTab(id: tabID) }
             return cell
         }
@@ -539,6 +544,15 @@ extension BrownBearTabGridController: UICollectionViewDelegate {
                 })
                 actions.append(UIAction(title: "Share…", image: UIImage(systemName: "square.and.arrow.up")) { _ in
                     self.shareTab(url: url, at: indexPath)
+                })
+            }
+            if !tab.isPrivate {
+                let pinned = tab.isPinned
+                actions.append(UIAction(title: pinned ? "Unpin Tab" : "Pin Tab",
+                                        image: UIImage(systemName: pinned ? "pin.slash" : "pin")) { _ in
+                    tab.isPinned.toggle()
+                    self.tabManager.persistSession()   // survive a kill, not just a background
+                    self.applySnapshot(animatingDifferences: true)
                 })
             }
             if self.displayedTabs.count > 1 {

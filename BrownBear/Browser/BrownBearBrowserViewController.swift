@@ -248,6 +248,7 @@ final class BrownBearBrowserViewController: UIViewController {
                 tab.restoreForDisplay(url: nil, title: record.title, snapshot: snapshot)
                 restored.append(tab)
             }
+            restored.last?.isPinned = record.isPinned ?? false   // restore the pinned state
         }
         // Activate the saved active tab (installs + loads only it); fall back to the first.
         let index = session.activeIndex.flatMap { restored.indices.contains($0) ? $0 : nil } ?? 0
