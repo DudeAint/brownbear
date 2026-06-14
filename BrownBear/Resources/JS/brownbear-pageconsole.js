@@ -106,4 +106,69 @@
       forward("error", ["[page] Unhandled promise rejection: " + msg]);
     }, true);
   } catch (e) { /* ignore */ }
+
+  // Media diagnostics — when a <video>/<audio> FAILS or STALLS, report EXACTLY why, so a "video won't
+  // play / stuck at 0s" report tells a content-block apart from a decode/source/buffering problem instead
+  // of guessing. This is a PURE READ: capture-phase listeners plus reads of the standard media properties
+  // (error.code, networkState, readyState, currentSrc). It never touches `.src` or any accessor and never
+  // writes to the element — redefining a media accessor is what stalls WebKit video, so this cannot affect
+  // playback. De-duped per (element, event) via a WeakMap so a stuck player can't flood the log.
+  try {
+    var MEDIA_ERR = { 1: "ABORTED", 2: "NETWORK", 3: "DECODE", 4: "SRC_NOT_SUPPORTED" };
+    var NET_STATE = ["EMPTY", "IDLE", "LOADING", "NO_SOURCE"];
+    var seen = (typeof WeakMap === "function") ? new WeakMap() : null;
+
+    function mediaElementFor(target) {
+      if (!target || !target.tagName) { return null; }
+      var tag = String(target.tagName).toUpperCase();
+      if (tag === "VIDEO" || tag === "AUDIO") { return target; }
+      if (tag === "SOURCE" && target.parentElement) {
+        var parent = String(target.parentElement.tagName || "").toUpperCase();
+        if (parent === "VIDEO" || parent === "AUDIO") { return target.parentElement; }
+      }
+      return null;
+    }
+
+    function alreadyLogged(media, evt) {
+      if (!seen) { return false; }
+      var set = seen.get(media);
+      if (!set) { set = {}; seen.set(media, set); }
+      if (set[evt]) { return true; }
+      set[evt] = 1;
+      return false;
+    }
+
+    function describeMedia(media, evt) {
+      var bits = ["[media] " + String(media.tagName).toLowerCase() + " " + evt];
+      try { var src = media.currentSrc || media.src || ""; if (src) { bits.push("src=" + src); } } catch (e) {}
+      try {
+        if (media.error) {
+          bits.push("error=" + (MEDIA_ERR[media.error.code] || media.error.code)
+            + (media.error.message ? " (" + media.error.message + ")" : ""));
+        }
+      } catch (e) {}
+      try { bits.push("networkState=" + (NET_STATE[media.networkState] || media.networkState)); } catch (e) {}
+      try { bits.push("readyState=" + media.readyState); } catch (e) {}
+      try {
+        var dur = isFinite(media.duration) ? media.duration.toFixed(2) : "?";
+        bits.push("t=" + (media.currentTime || 0).toFixed(2) + "/" + dur);
+      } catch (e) {}
+      return bits.join(" ");
+    }
+
+    function onMediaEvent(evt) {
+      return function (e) {
+        var media = mediaElementFor(e && e.target);
+        if (!media || alreadyLogged(media, evt)) { return; }
+        forward("error", [describeMedia(media, evt)]);
+      };
+    }
+
+    // 'error' = a hard failure (its MediaError code is the key signal); 'stalled'/'waiting' = the player
+    // ran out of data and can't advance (the textbook "stuck at 0s / stutter"); 'abort'/'emptied' = the
+    // load was cancelled. Capture phase so non-bubbling media events still reach this top-level listener.
+    ["error", "stalled", "waiting", "abort", "emptied"].forEach(function (evt) {
+      window.addEventListener(evt, onMediaEvent(evt), true);
+    });
+  } catch (e) { /* never break a page over diagnostics */ }
 })();
