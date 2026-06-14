@@ -111,9 +111,12 @@ final class GMRuntimeCompatibilityTests: XCTestCase {
         guard let context = JSContext() else { throw XCTSkip("no JSContext") }
         var logs: [(level: String, message: String)] = []
 
+        // @inject-into content: exercise the ISOLATED console→Logs forwarding (makeConsole). A granted
+        // page/auto script runs in the page world (VM parity) and forwards console via the vault instead —
+        // that page-world path is covered by Tests/JS/page-world-granted.test.js.
         let scriptData: [String: Any] = [
             "token": "tok", "runAt": "document-start", "name": "logtest",
-            "grants": grants, "grantNone": false, "noFrames": false, "injectInto": "auto",
+            "grants": grants, "grantNone": false, "noFrames": false, "injectInto": "content",
             "requires": [String](), "resources": [String: String](),
             "source": script, "values": [String: String](), "info": ["scriptHandler": "BrownBear"]
         ]
@@ -458,8 +461,10 @@ final class GMRuntimeCompatibilityTests: XCTestCase {
         let runtime = try runtimeSource()
         guard let context = JSContext() else { throw XCTSkip("no JSContext") }
         let scriptData: [String: Any] = [
+            // @inject-into content exercises the ISOLATED GM_addStyle constructed-stylesheet fallback; the
+            // page-world GM_addStyle (also constructed-sheet) is covered by page-world-granted.test.js.
             "token": "tok", "runAt": "document-start", "name": "styletest",
-            "grants": ["GM_addStyle"], "grantNone": false, "noFrames": false, "injectInto": "auto",
+            "grants": ["GM_addStyle"], "grantNone": false, "noFrames": false, "injectInto": "content",
             "requires": [String](), "resources": [String: String](),
             "source": "GM_addStyle('body { color: red }');",
             "values": [String: String](), "info": ["scriptHandler": "BrownBear"]

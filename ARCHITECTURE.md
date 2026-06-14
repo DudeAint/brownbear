@@ -103,8 +103,31 @@ per-script settings.
   - `GM_setValue/getValue/deleteValue/listValues` → `GMValueStore`, namespaced by script UUID.
   - `GM_addStyle`, `GM_setClipboard`, `GM_openInTab`, `GM_notification`, `GM_log`.
 - Every inbound message is validated (shape, types, bounds) before any native effect.
+- **World selection** (which `WKContentWorld` a script runs in — `pageWorldPlan` in
+  `brownbear-runtime.js`). `@inject-into content` → the isolated `BrownBear` world (full GM bridge,
+  `unsafeWindow`/`window` are the isolated globals). `@inject-into page`/`auto` + `@grant none` →
+  the page's MAIN world with an inert GM (the canonical "`@grant none` ⇒ real `window`"). `@inject-into
+  page`/`auto` (the default) + GRANTED with only **page-world-safe** grants → the page's MAIN world WITH a
+  working GM surface, so `unsafeWindow === window` and the page's own globals are visible — **Violentmonkey
+  parity: VM defaults granted scripts to the page world too**. `console.*` still reaches the dashboard Logs
+  from the page world (forwarded through the vault), so there is no debugging regression; only `@inject-into
+  content` forces the isolated world.
+  The page-world-safe set is the GM surface that touches only the script's **own data**: value/resource
+  **reads** (served synchronously from a cache pre-seeded into the page-world source), DOM-local
+  `GM_addStyle`/`GM_addElement` (on the page document), and own-data **writes**
+  (`GM_setValue`/`deleteValue`/`setValues`/`deleteValues`/`GM_setClipboard`/`GM_log`). A write updates
+  the page-local cache synchronously, then persists to native through the **document-start vault**
+  (`brownbear-pageworld-vault.js`, a `.page` `.atDocumentStart` `WKUserScript` that captures the native
+  handler pristine — before any page script — and exposes a non-configurable `window.__bbPageGM(token,
+  api, payload)`). That posts to the **restricted `brownbearPage` handler**: the router's `fromPageWorld`
+  guard admits only `ScriptMessageRouter.pageWorldWriteAPIs` (own-data writes) — never `getScripts`,
+  `injectPageWorld`, or any cross-origin API — and re-checks the per-injection token's grants. The token
+  lives only in the page-world closure (never on the DOM) and the vault binding is non-configurable, so a
+  hostile page can neither read the token, MITM the call, nor forge a write. Cross-origin/streaming APIs
+  (`GM_xmlhttpRequest`, cookies, downloads, notifications, menu/tab) keep the script in the isolated world
+  (those need native→world callback streaming; a secure page-world path for them is the next step).
 
-**Reference:** ScriptCat GM event loop + sandbox isolation model.
+**Reference:** ScriptCat GM event loop + sandbox isolation model; Violentmonkey page-world injection.
 
 ### Module 4 — Background & @crontab Queue
 **Goal:** run `@background`/`@crontab` scripts while the app is closed.
