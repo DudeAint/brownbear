@@ -56,10 +56,8 @@ final class BrownBearTabGridController: UIViewController {
     /// shrank the page to wherever the finger let go; the grid finishes the motion into the active card's
     /// REAL frame — not an approximation — so there's no snap. Installed before the first draw, run once.
     private var pendingFlyIn: (image: UIImage, fromWindowFrame: CGRect, cornerRadius: CGFloat)?
-    /// The flying page: a clip view (animates release-frame → card) holding a top-pinned page image, so the
-    /// page's top stays put and lands matching the top-anchored card (same as the open morph).
-    private var flyInClip: UIView?
-    private var flyInPage: UIImageView?
+    /// The flying page snapshot: aspect-fills as it shrinks from the release frame into the active card.
+    private var flyInHero: UIImageView?
     private var didRunFlyIn = false
 
     /// The tabs currently displayed, scoped to the active mode.
@@ -119,39 +117,32 @@ final class BrownBearTabGridController: UIViewController {
     }
 
     private func installFlyInHeroIfNeeded() {
-        guard let fly = pendingFlyIn, flyInClip == nil else { return }
-        let start = view.convert(fly.fromWindowFrame, from: nil)
-        let aspect = fly.image.size.width / max(fly.image.size.height, 1)
-        let clip = UIView(frame: start)
-        clip.clipsToBounds = true
-        clip.layer.cornerCurve = .continuous
-        clip.layer.cornerRadius = fly.cornerRadius
-        let page = UIImageView(image: fly.image)
-        page.contentMode = .scaleToFill   // sized to the page's exact aspect → top-pinned, no distortion
-        page.frame = topAnchoredPageFrame(width: start.width, aspect: aspect)
-        clip.addSubview(page)
-        view.addSubview(clip)
-        flyInClip = clip
-        flyInPage = page
+        guard let fly = pendingFlyIn, flyInHero == nil else { return }
+        let hero = UIImageView(image: fly.image)
+        hero.contentMode = .scaleAspectFill
+        hero.clipsToBounds = true
+        hero.layer.cornerCurve = .continuous
+        hero.layer.cornerRadius = fly.cornerRadius
+        hero.frame = view.convert(fly.fromWindowFrame, from: nil)
+        view.addSubview(hero)
+        flyInHero = hero
         // Hide the chrome + cards so they fade in behind the shrinking page (Safari) instead of cutting in
-        // all at once. The opaque background stays — the large page clip masks it at the start of the fly.
+        // all at once. The opaque background stays — the large page hero masks it at the start of the fly.
         header.alpha = 0
         collectionView.alpha = 0
     }
 
     /// Finish the intro: force the grid to its final centered layout, then spring the page from its release
-    /// frame into the active tab's REAL card frame (top-anchored, so it lands matching the card) and reveal
-    /// the card. If the card can't be located (off-screen / no snapshot yet) the page just dissolves away.
+    /// frame into the active tab's REAL card frame and reveal the card. If the card can't be located
+    /// (off-screen / no snapshot yet) the page just dissolves away.
     private func runFlyInIfNeeded() {
-        guard !didRunFlyIn, let clip = flyInClip, let page = flyInPage else { return }
+        guard !didRunFlyIn, let hero = flyInHero else { return }
         didRunFlyIn = true
         pendingFlyIn = nil
 
         view.layoutIfNeeded()
         centerOnActiveTab()
         collectionView.layoutIfNeeded()
-
-        let aspect = page.image.map { $0.size.width / max($0.size.height, 1) } ?? 1
 
         // The other tabs + chrome fade in quickly while the page flies, so the grid arrives smoothly rather
         // than as an instant cut (iOS Safari). Slightly shorter than the fly so they've settled as it lands.
@@ -164,10 +155,9 @@ final class BrownBearTabGridController: UIViewController {
               let indexPath = dataSource.indexPath(for: activeID),
               let cell = collectionView.cellForItem(at: indexPath) as? TabGridCell,
               let cardWindowFrame = cell.snapshotRegionFrame() else {
-            UIView.animate(withDuration: 0.2, animations: { clip.alpha = 0 }) { [weak self] _ in
-                clip.removeFromSuperview()
-                self?.flyInClip = nil
-                self?.flyInPage = nil
+            UIView.animate(withDuration: 0.2, animations: { hero.alpha = 0 }) { [weak self] _ in
+                hero.removeFromSuperview()
+                self?.flyInHero = nil
             }
             return
         }
@@ -179,32 +169,24 @@ final class BrownBearTabGridController: UIViewController {
 
         let endCorner = BrownBearTheme.Metrics.cellCornerRadius
         let corner = CABasicAnimation(keyPath: "cornerRadius")
-        corner.fromValue = clip.layer.cornerRadius
+        corner.fromValue = hero.layer.cornerRadius
         corner.toValue = endCorner
         corner.duration = 0.34
         corner.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        clip.layer.cornerRadius = endCorner
-        clip.layer.add(corner, forKey: "flyCorner")
+        hero.layer.cornerRadius = endCorner
+        hero.layer.add(corner, forKey: "flyCorner")
 
         // Damping 1.0 = no overshoot, so the landing page never springs past the card and lets the border peek.
         UIView.animate(withDuration: 0.34, delay: 0, usingSpringWithDamping: 1.0, initialSpringVelocity: 0,
                        options: [.curveEaseOut, .allowUserInteraction]) {
-            clip.frame = target
-            page.frame = self.topAnchoredPageFrame(width: target.width, aspect: aspect)
+            hero.frame = target
         } completion: { [weak self] _ in
             // Fade the real card (border + title) in as the flying copy is removed — a clean reveal, not a pop.
             UIView.animate(withDuration: 0.14) { cell.contentView.alpha = 1 } completion: { _ in
-                clip.removeFromSuperview()
-                self?.flyInClip = nil
-                self?.flyInPage = nil
+                hero.removeFromSuperview()
+                self?.flyInHero = nil
             }
         }
-    }
-
-    /// A page image's frame inside its clip: full width, top-pinned (y = 0), height from the page's aspect —
-    /// so the page's top stays put as the clip resizes. Mirrors the open-morph hero (TabGridTransition).
-    private func topAnchoredPageFrame(width: CGFloat, aspect: CGFloat) -> CGRect {
-        CGRect(x: 0, y: 0, width: width, height: aspect > 0 ? width / aspect : width)
     }
 
     /// Keep the grid centered on the active tab UNTIL the user touches it. Re-running on every layout pass

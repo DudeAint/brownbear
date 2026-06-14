@@ -33,7 +33,6 @@ final class TabGridCell: UICollectionViewCell {
     override func prepareForReuse() {
         super.prepareForReuse()
         snapshotView.image = nil
-        snapshotView.layer.contentsRect = CGRect(x: 0, y: 0, width: 1, height: 1)
         titleLabel.text = nil
         placeholderLabel.text = nil
         placeholderLabel.isHidden = true
@@ -53,37 +52,7 @@ final class TabGridCell: UICollectionViewCell {
             placeholderLabel.text = title
             placeholderLabel.isHidden = false
         }
-        updateSnapshotAnchor()
         setActive(isActive)
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        updateSnapshotAnchor()
-    }
-
-    /// Show the TOP of the page in the card (Safari tab-card behaviour), not the vertical centre: a portrait
-    /// page is much taller than the card's picture region, and centre-cropping it hides the title/header the
-    /// user recognises. We fill the width and anchor to the top by mapping the top slice of the image to the
-    /// view via `contentsRect` (so it stays undistorted — the slice shares the view's aspect). This also makes
-    /// the open/close hero morph seamless: the card and the (top-anchored) page hero show the same content.
-    private func updateSnapshotAnchor() {
-        guard let image = snapshotView.image,
-              snapshotView.bounds.width > 0, snapshotView.bounds.height > 0,
-              image.size.width > 0, image.size.height > 0 else {
-            snapshotView.layer.contentsRect = CGRect(x: 0, y: 0, width: 1, height: 1)
-            return
-        }
-        let viewAspect = snapshotView.bounds.width / snapshotView.bounds.height
-        let imageAspect = image.size.width / image.size.height
-        if imageAspect < viewAspect {
-            // Image taller than the card region → fill width, anchor to the top.
-            snapshotView.layer.contentsRect = CGRect(x: 0, y: 0, width: 1, height: imageAspect / viewAspect)
-        } else {
-            // Image wider → fill height, centre horizontally.
-            let width = viewAspect / imageAspect
-            snapshotView.layer.contentsRect = CGRect(x: (1 - width) / 2, y: 0, width: width, height: 1)
-        }
     }
 
     /// The on-screen (window) frame of the page-snapshot region — the picture area of the card, excluding
@@ -121,9 +90,7 @@ final class TabGridCell: UICollectionViewCell {
         card.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(card)
 
-        // scaleToFill + a top-anchored `contentsRect` (see updateSnapshotAnchor) shows the page's top
-        // undistorted, rather than scaleAspectFill's centre crop.
-        snapshotView.contentMode = .scaleToFill
+        snapshotView.contentMode = .scaleAspectFill
         snapshotView.clipsToBounds = true
         snapshotView.backgroundColor = BrownBearTheme.Palette.background
         snapshotView.translatesAutoresizingMaskIntoConstraints = false
