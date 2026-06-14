@@ -39,4 +39,11 @@ void BBEvaluateJavaScriptInFrameForResult(WKWebView *webView, NSString *script,
                                           void (^_Nullable completion)(id _Nullable result,
                                                                        NSError *_Nullable error));
 
+/// Render the WHOLE page to PDF data via WKWebView's Objective-C createPDF method, returning it on the
+/// main thread. Routed through ObjC (not Swift's `createPDF { Result<Data,Error> }`) for the SAME reason
+/// as the eval shims: the Swift WebKit overlay it would link aborts a 16.4-deployment app at launch.
+/// Used by the full-page-screenshot action.
+void BBCreatePDF(WKWebView *webView, void (^_Nullable completion)(NSData *_Nullable data,
+                                                                 NSError *_Nullable error));
+
 NS_ASSUME_NONNULL_END

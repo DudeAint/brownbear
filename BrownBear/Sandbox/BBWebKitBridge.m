@@ -45,3 +45,12 @@ void BBEvaluateJavaScriptInFrameForResult(WKWebView *webView, NSString *script,
         if (completion) { completion(result, error); }
     }];
 }
+
+void BBCreatePDF(WKWebView *webView, void (^_Nullable completion)(NSData *_Nullable data,
+                                                                 NSError *_Nullable error)) {
+    WKPDFConfiguration *config = [[WKPDFConfiguration alloc] init];   // default rect == the full page
+    [webView createPDFWithConfiguration:config
+                      completionHandler:^(NSData *_Nullable data, NSError *_Nullable error) {
+        if (completion) { completion(data, error); }
+    }];
+}

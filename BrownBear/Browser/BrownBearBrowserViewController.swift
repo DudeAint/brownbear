@@ -759,6 +759,8 @@ extension BrownBearBrowserViewController: BrowserMenuDelegate {
             presentFindOnPage()
         case .toggleDesktopSite:
             toggleDesktopSite()
+        case .fullPageScreenshot:
+            captureFullPageScreenshot()
         case .userscripts:
             presentDashboard(initialTab: .scripts)
         case .extensions:
