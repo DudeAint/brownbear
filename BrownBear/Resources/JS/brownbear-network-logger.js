@@ -40,10 +40,45 @@
       return (text.length > MAX_BODY) ? (text.slice(0, MAX_BODY) + "…") : text;
     }
 
-    // Read a bounded copy of a fetch Response body WITHOUT consuming the page's own read (clone first).
-    // Skips bodies whose Content-Length is huge, and swallows any failure (opaque/streamed responses).
+    // Whether a response body is SAFE to clone+read for the inspector. It must be finite, textual, and
+    // non-streaming. We must NEVER clone a media/binary/streaming response: `Response.clone()` tees the
+    // body stream, and reading the clone of a <video>/<audio>/MSE segment — or of any never-ending stream
+    // (Server-Sent Events) — holds that tee open, which back-pressures the page's OWN read and STALLS
+    // playback (the "every video stuck at 0s / stutters" bug). A request with no Content-Type could be
+    // media, so it is treated as not-capturable. This gate keeps the Network inspector's response bodies
+    // for the things developers actually inspect (HTML/JS/JSON/XML/text) while never touching media.
+    function isCapturableContentType(ct) {
+      if (!ct) { return false; }                         // unknown type — could be media; never clone
+      var t = _String(ct).split(";")[0].trim().toLowerCase();
+      if (t === "text/event-stream") { return false; }   // SSE — the stream never ends
+      if (t.indexOf("multipart/") === 0) { return false; } // x-mixed-replace etc. — streaming
+      if (t.indexOf("text/") === 0) { return true; }
+      if (t.indexOf("+json") !== -1 || t.indexOf("+xml") !== -1) { return true; }
+      switch (t) {
+        case "application/json":
+        case "application/ld+json":
+        case "application/manifest+json":
+        case "application/javascript":
+        case "application/ecmascript":
+        case "application/xml":
+        case "application/xhtml+xml":
+        case "application/graphql":
+        case "application/x-www-form-urlencoded":
+          return true;
+        default:
+          return false;                                  // video/* audio/* image/* font/* octet-stream …
+      }
+    }
+
+    // Read a bounded copy of a fetch Response body WITHOUT consuming the page's own read (clone first) —
+    // but ONLY for small, finite, textual responses (see isCapturableContentType). Media, binary,
+    // streaming, and unknown-type responses are NEVER cloned, so wrapping fetch can't stall <video>/MSE.
+    // Bodies over MAX_READ are noted, not read. Any failure (opaque response, used body) is swallowed.
     function readFetchBody(response) {
       try {
+        var ct = "";
+        try { ct = response.headers.get("content-type") || ""; } catch (e) { ct = ""; }
+        if (!isCapturableContentType(ct)) { return Promise.resolve(undefined); }
         var len = 0;
         try { len = parseInt(response.headers.get("content-length") || "0", 10) || 0; } catch (e) { len = 0; }
         if (len > MAX_READ) { return Promise.resolve("[" + len + " bytes — body not captured]"); }
