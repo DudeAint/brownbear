@@ -42,8 +42,13 @@ final class TabGridCell: UICollectionViewCell {
 
     // MARK: - Configuration
 
-    func configure(title: String, snapshot: UIImage?, isActive: Bool) {
-        titleLabel.text = title
+    func configure(title: String, snapshot: UIImage?, isActive: Bool, isPinned: Bool = false) {
+        // A pinned tab gets an accent pin glyph prepended to its title (no extra layout to disturb the card).
+        if isPinned {
+            titleLabel.attributedText = Self.pinnedTitle(title)
+        } else {
+            titleLabel.text = title   // also clears any prior attributedText
+        }
         if let snapshot {
             snapshotView.image = snapshot
             placeholderLabel.isHidden = true
@@ -53,6 +58,17 @@ final class TabGridCell: UICollectionViewCell {
             placeholderLabel.isHidden = false
         }
         setActive(isActive)
+    }
+
+    /// "📌 Title" — a pin symbol (accent) inline before the title, sized to sit on the title baseline.
+    private static func pinnedTitle(_ title: String) -> NSAttributedString {
+        let attachment = NSTextAttachment()
+        attachment.image = UIImage(systemName: "pin.fill")?
+            .withTintColor(BrownBearTheme.Palette.accent, renderingMode: .alwaysOriginal)
+        attachment.bounds = CGRect(x: 0, y: -1.5, width: 11, height: 11)
+        let result = NSMutableAttributedString(attachment: attachment)
+        result.append(NSAttributedString(string: "  " + title))
+        return result
     }
 
     /// The on-screen (window) frame of the page-snapshot region — the picture area of the card, excluding

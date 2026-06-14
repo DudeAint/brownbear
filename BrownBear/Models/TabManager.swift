@@ -207,7 +207,8 @@ final class TabManager {
         let records = normals.map { tab in
             TabSessionStore.Record(url: (tab.pendingURL ?? tab.state.url)?.absoluteString,
                                    title: tab.state.displayTitle,
-                                   id: tab.id.uuidString)
+                                   id: tab.id.uuidString,
+                                   isPinned: tab.isPinned)
         }
         // Persist each tab's thumbnail (best-effort) so the grid shows a preview after relaunch, and drop
         // snapshots for tabs no longer open so the cache can't grow without bound.

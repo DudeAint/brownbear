@@ -70,6 +70,10 @@ final class Tab {
     /// ignored by responsive sites) plus a desktop user-agent.
     var prefersDesktop = false
 
+    /// Pinned tabs sort to the front of the tab grid and carry a pin glyph, so frequently-used pages
+    /// stay put. Persisted across launches in the session record. Private tabs are never pinned.
+    var isPinned = false
+
     /// Whether the user turned JavaScript OFF for this tab's site (per-site Shields). Applied
     /// per-navigation via the nav delegate's `WKWebpagePreferences.allowsContentJavaScript`. Seeded
     /// from the host's stored SiteSettings before content loads; defaults to false (JS enabled).
