@@ -399,7 +399,8 @@ final class BrownBearTabGridController: UIViewController {
             cell.configure(title: tab.state.displayTitle,
                            snapshot: tab.snapshot,
                            isActive: tab.id == self.tabManager.activeTabID,
-                           isPinned: tab.isPinned)
+                           isPinned: tab.isPinned,
+                           groupColorHex: self.tabManager.group(for: tab.groupID)?.color.hex)
             cell.onClose = { [weak self] in self?.closeTab(id: tabID) }
             return cell
         }
@@ -554,6 +555,14 @@ extension BrownBearTabGridController: UICollectionViewDelegate {
                     self.tabManager.persistSession()   // survive a kill, not just a background
                     self.applySnapshot(animatingDifferences: true)
                 })
+                actions.append(self.makeGroupMenu(for: tab))
+                if tab.groupID != nil {
+                    actions.append(UIAction(title: "Remove from Group",
+                                            image: UIImage(systemName: "rectangle.stack.badge.minus")) { _ in
+                        self.tabManager.setGroup(nil, forTab: tab.id)
+                        self.applySnapshot(animatingDifferences: true)
+                    })
+                }
             }
             if self.displayedTabs.count > 1 {
                 actions.append(UIAction(title: "Close Other Tabs",
@@ -638,5 +647,56 @@ extension BrownBearTabGridController: UICollectionViewDragDelegate, UICollection
 
         let landedIndex = ids.firstIndex(of: sourceID) ?? destination
         coordinator.drop(item.dragItem, toItemAt: IndexPath(item: landedIndex, section: 0))
+    }
+}
+
+// MARK: - Tab groups (assign from the grid's context menu)
+
+extension BrownBearTabGridController {
+
+    /// The "Add to Group" submenu for a tab's context menu: New Group… plus every existing group
+    /// (checkmarked if the tab is already in it). Mirrors the vertical-tabs panel so grouping works the
+    /// same from either switcher.
+    func makeGroupMenu(for tab: Tab) -> UIMenu {
+        var children: [UIMenuElement] = [
+            UIAction(title: "New Group…", image: UIImage(systemName: "plus")) { [weak self] _ in
+                self?.promptNewGroup(assigning: tab.id)
+            }
+        ]
+        let existing = tabManager.groups.map { group -> UIAction in
+            UIAction(title: group.name, image: Self.groupDot(group.color),
+                     state: tab.groupID == group.id ? .on : .off) { [weak self] _ in
+                self?.tabManager.setGroup(group.id, forTab: tab.id)
+                self?.applySnapshot(animatingDifferences: true)
+            }
+        }
+        if !existing.isEmpty {
+            children.append(UIMenu(title: "", options: .displayInline, children: existing))
+        }
+        return UIMenu(title: "Add to Group",
+                      image: UIImage(systemName: "rectangle.stack.badge.plus"), children: children)
+    }
+
+    /// A small filled circle in the group's color, for the menu rows.
+    private static func groupDot(_ color: TabGroupColor) -> UIImage? {
+        UIImage(systemName: "circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 10))?
+            .withTintColor(UIColor(hex: color.hex), renderingMode: .alwaysOriginal)
+    }
+
+    private func promptNewGroup(assigning tabID: UUID) {
+        let alert = UIAlertController(title: "New Group", message: nil, preferredStyle: .alert)
+        alert.addTextField { field in
+            field.placeholder = "Group name"
+            field.autocapitalizationType = .words
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Create", style: .default) { [weak self, weak alert] _ in
+            guard let self else { return }
+            let name = alert?.textFields?.first?.text ?? ""
+            let group = self.tabManager.createGroup(name: name)
+            self.tabManager.setGroup(group.id, forTab: tabID)
+            self.applySnapshot(animatingDifferences: true)
+        })
+        present(alert, animated: true)
     }
 }
