@@ -917,13 +917,21 @@
       var style = D.createElement("style");
       style.textContent = css;
       (D.head || D.documentElement).appendChild(style);
-      try {
-        if (typeof W.CSSStyleSheet === "function" && "adoptedStyleSheets" in D) {
-          var sheet = new W.CSSStyleSheet();
-          sheet.replaceSync(String(css));
-          D.adoptedStyleSheets = D.adoptedStyleSheets.concat([sheet]);
-        }
-      } catch (e) { /* constructed-sheet fallback is best-effort */ }
+      // Constructed-stylesheet fallback ONLY when the <style> didn't take (a strict style-src refused it,
+      // so style.sheet has no rules). Never alongside a working <style> — avoids applying the CSS twice
+      // (the adopted sheet cascades after the page's stylesheets) and keeps the returned element removable.
+      var styleApplied = false;
+      try { styleApplied = !!(style.sheet && style.sheet.cssRules && style.sheet.cssRules.length > 0); }
+      catch (e) { styleApplied = false; }
+      if (!styleApplied) {
+        try {
+          if (typeof W.CSSStyleSheet === "function" && "adoptedStyleSheets" in D) {
+            var sheet = new W.CSSStyleSheet();
+            sheet.replaceSync(String(css));
+            D.adoptedStyleSheets = D.adoptedStyleSheets.concat([sheet]);
+          }
+        } catch (e) { /* constructed-sheet fallback is best-effort */ }
+      }
       return style;
     }
     function GM_addElement(parent, tag, attrs) {
