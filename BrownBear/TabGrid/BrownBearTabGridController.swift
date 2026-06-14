@@ -133,6 +133,10 @@ final class BrownBearTabGridController: UIViewController {
         view.addSubview(clip)
         flyInClip = clip
         flyInPage = page
+        // Hide the chrome + cards so they fade in behind the shrinking page (Safari) instead of cutting in
+        // all at once. The opaque background stays — the large page clip masks it at the start of the fly.
+        header.alpha = 0
+        collectionView.alpha = 0
     }
 
     /// Finish the intro: force the grid to its final centered layout, then spring the page from its release
@@ -149,6 +153,13 @@ final class BrownBearTabGridController: UIViewController {
 
         let aspect = page.image.map { $0.size.width / max($0.size.height, 1) } ?? 1
 
+        // The other tabs + chrome fade in quickly while the page flies, so the grid arrives smoothly rather
+        // than as an instant cut (iOS Safari). Slightly shorter than the fly so they've settled as it lands.
+        UIView.animate(withDuration: 0.28, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) {
+            self.header.alpha = 1
+            self.collectionView.alpha = 1
+        }
+
         guard let activeID = tabManager.activeTabID,
               let indexPath = dataSource.indexPath(for: activeID),
               let cell = collectionView.cellForItem(at: indexPath) as? TabGridCell,
@@ -162,7 +173,9 @@ final class BrownBearTabGridController: UIViewController {
         }
 
         let target = view.convert(cardWindowFrame, from: nil)
-        cell.setSnapshotRegionHidden(true)   // hide the real card art while its copy flies into it
+        // Hide the WHOLE active cell (border + title + art) during the fly so its accent border never peeks
+        // around the landing page (the "fluctuating border" the owner saw).
+        cell.contentView.alpha = 0
 
         let endCorner = BrownBearTheme.Metrics.cellCornerRadius
         let corner = CABasicAnimation(keyPath: "cornerRadius")
@@ -173,15 +186,18 @@ final class BrownBearTabGridController: UIViewController {
         clip.layer.cornerRadius = endCorner
         clip.layer.add(corner, forKey: "flyCorner")
 
-        UIView.animate(withDuration: 0.34, delay: 0, usingSpringWithDamping: 0.86, initialSpringVelocity: 0,
+        // Damping 1.0 = no overshoot, so the landing page never springs past the card and lets the border peek.
+        UIView.animate(withDuration: 0.34, delay: 0, usingSpringWithDamping: 1.0, initialSpringVelocity: 0,
                        options: [.curveEaseOut, .allowUserInteraction]) {
             clip.frame = target
             page.frame = self.topAnchoredPageFrame(width: target.width, aspect: aspect)
         } completion: { [weak self] _ in
-            cell.setSnapshotRegionHidden(false)
-            clip.removeFromSuperview()
-            self?.flyInClip = nil
-            self?.flyInPage = nil
+            // Fade the real card (border + title) in as the flying copy is removed — a clean reveal, not a pop.
+            UIView.animate(withDuration: 0.14) { cell.contentView.alpha = 1 } completion: { _ in
+                clip.removeFromSuperview()
+                self?.flyInClip = nil
+                self?.flyInPage = nil
+            }
         }
     }
 
