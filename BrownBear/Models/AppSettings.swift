@@ -238,13 +238,15 @@ enum AppSettings {
 
     /// Keep <video> playing inline by neutralizing scripted/auto fullscreen (the Focus/Player-style
     /// "player" behavior — handy for automation that needs the page visible while a video plays). Default
-    /// ON; the Settings toggle uses @AppStorage on the same key, so `object(forKey:) == nil` means "unset"
-    /// → treat as true. Read at injection setup; takes effect on the next app launch (the page-world shim
-    /// is installed on the shared content controller at boot).
+    /// **OFF**: it works by forcing `playsinline` on EVERY video, which on a page with several background
+    /// videos makes them all decode inline at once and overruns iOS's hardware-decoder cap (videos then
+    /// fail with `error=DECODE`) — Safari/Chromium never force this. Opt-in for the rare automation case.
+    /// `object(forKey:) == nil` means "unset" → treat as false. Read at injection setup; takes effect on
+    /// the next app launch (the page-world shim is installed on the shared content controller at boot).
     static var keepVideosInline: Bool {
         get {
             UserDefaults.standard.object(forKey: Key.keepVideosInline) == nil
-                ? true : UserDefaults.standard.bool(forKey: Key.keepVideosInline)
+                ? false : UserDefaults.standard.bool(forKey: Key.keepVideosInline)
         }
         set { UserDefaults.standard.set(newValue, forKey: Key.keepVideosInline) }
     }
