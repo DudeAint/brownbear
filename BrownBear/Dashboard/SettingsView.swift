@@ -168,6 +168,7 @@ struct SettingsView: View {
                 ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(),
                 modifiedSince: .distantPast)
             await BrownBearServices.shared.historyStore.clear()
+            await GMAssetCache.shared.clear()
             isClearing = false
             didClear = true
         }
