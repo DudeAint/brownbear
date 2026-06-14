@@ -356,7 +356,7 @@ final class GMRuntimeCompatibilityTests: XCTestCase {
         var abortRequestId: String?
         let scriptData: [String: Any] = [
             "token": "tok", "runAt": "document-start", "name": "dlpromise",
-            "grants": ["GM_download"], "grantNone": false, "noFrames": false, "injectInto": "auto",
+            "grants": ["GM_download", "GM_setValue"], "grantNone": false, "noFrames": false, "injectInto": "auto",
             "requires": [String](), "resources": [String: String](),
             "source": "var p = GM.download({ url: 'https://x.test/f.bin', name: 'f' });"
                 + " GM_setValue('abortType', typeof p.abort); p.abort();",
