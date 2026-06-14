@@ -26,6 +26,7 @@
   var _Promise = Promise;
   var _Function = Function;
   var _Error = Error;
+  var _CSSStyleSheet = W.CSSStyleSheet;   // constructable-stylesheet ctor (CSP-resilient GM_addStyle)
   var _atob = W.atob ? W.atob.bind(W) : null;
   var _fetch = W.fetch ? W.fetch.bind(W) : null;
   var _console = W.console || { log: function () {}, error: function () {} };
@@ -457,9 +458,20 @@
       call("GM_deleteValues", { keys: keys });
     }
     function GM_addStyle(css) {
+      // Primary: a real <style> works on most sites and keeps the TM/VM return semantics (the element).
       var style = document.createElement("style");
       style.textContent = css;
       (document.head || document.documentElement).appendChild(style);
+      // CSP-resilient shadow: a page's strict style-src can refuse an isolated-world <style>, leaving
+      // the script's CSS unapplied. A CONSTRUCTED stylesheet is applied via CSSOM (adoptedStyleSheets)
+      // and lands even then; the duplicate is idempotent when the <style> already took. iOS 16.4+.
+      try {
+        if (typeof _CSSStyleSheet === "function" && "adoptedStyleSheets" in document) {
+          var sheet = new _CSSStyleSheet();
+          sheet.replaceSync(String(css));
+          document.adoptedStyleSheets = document.adoptedStyleSheets.concat([sheet]);
+        }
+      } catch (e) { /* constructed-sheet fallback is best-effort */ }
       return style;
     }
     function GM_addElement(parent, tag, attrs) {
