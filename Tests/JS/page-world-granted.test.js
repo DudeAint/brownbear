@@ -98,7 +98,7 @@ function scriptData(overrides) {
         grants: ["GM_getValue", "GM_addStyle"],
         grantNone: false,
         noFrames: false,
-        injectInto: "auto",
+        injectInto: "page",   // page-world is an EXPLICIT opt-in; auto stays isolated (see routing test)
         requires: [],
         resources: {},
         source: "void 0;",
@@ -121,9 +121,9 @@ async function bootAndInject(overrides) {
 
     // ============ ROUTING ============
     {
-        const calls = await bootAndInject({ grants: ["GM_getValue", "GM_addStyle"] });
+        const calls = await bootAndInject({ grants: ["GM_getValue", "GM_addStyle"] });   // injectInto: "page"
         const injects = injectCalls(calls);
-        test("granted + only page-safe READ grants (auto) → page-world (one injectPageWorld)", () => {
+        test("explicit @inject-into page + only page-safe READ grants → page-world (one injectPageWorld)", () => {
             assert.strictEqual(injects.length, 1);
         });
         test("the injected source carries the self-contained page-world client + unsafeWindow=window", () => {
@@ -150,8 +150,17 @@ async function bootAndInject(overrides) {
         });
     }
     {
-        const calls = await bootAndInject({ injectInto: "auto", grants: ["GM_getValue", "GM_setValue"] });
-        test("a WRITE grant (GM_setValue) keeps the script ISOLATED (no page inject)", () => {
+        // The #203 sandbox-by-default: a GRANTED `@inject-into auto` (the default) stays ISOLATED — only an
+        // EXPLICIT `@inject-into page` opts into the page world. This keeps console→Logs forwarding and
+        // page-poisoning immunity for every existing granted script that didn't ask for page access.
+        const calls = await bootAndInject({ injectInto: "auto", grants: ["GM_getValue", "GM_addStyle"] });
+        test("granted @inject-into AUTO stays isolated (page world is an explicit opt-in)", () => {
+            assert.strictEqual(injectCalls(calls).length, 0);
+        });
+    }
+    {
+        const calls = await bootAndInject({ injectInto: "page", grants: ["GM_getValue", "GM_setValue"] });
+        test("a WRITE grant (GM_setValue) keeps the script ISOLATED even with @inject-into page", () => {
             assert.strictEqual(injectCalls(calls).length, 0);
         });
     }

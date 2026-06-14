@@ -769,13 +769,14 @@
   //   • @inject-into page / auto, @grant none
   //                                       → the page world, inert GM (the canonical "@grant none ⇒ real
   //                                         window" idiom). Path: buildPageWorldSource.
-  //   • @inject-into page / auto, GRANTED with only page-world-SAFE grants
+  //   • @inject-into page (EXPLICIT), GRANTED with only page-world-SAFE grants
   //                                       → the page world WITH a working GM surface, so unsafeWindow ===
   //                                         window and the page's own globals are visible (Violentmonkey
   //                                         parity for scripts that read config + manipulate the page).
-  //                                         Path: buildGrantedPageWorldSource.
-  //   • @inject-into page / auto, GRANTED with any NON-page-safe grant
-  //                                       → the ISOLATED world (the GM bridge lives only here).
+  //                                         Path: buildGrantedPageWorldSource. AUTO/default stays isolated.
+  //   • @inject-into auto, GRANTED, or @inject-into page with any NON-page-safe grant
+  //                                       → the ISOLATED world (the sandbox-by-default; the GM bridge and
+  //                                         console→Logs forwarding live here).
   //
   // The page-world-SAFE set is exactly the GM surface that touches ONLY the script's own data and needs
   // NO native authority in the page world: value/resource READS (served synchronously from a cache
@@ -799,11 +800,18 @@
     return true;
   }
   // "isolated" | "page-grantless" | "page-granted"
+  //
+  // GRANTED scripts go to the page world ONLY on an EXPLICIT `@inject-into page` — a deliberate,
+  // VM-style opt-in by the script author. `@inject-into auto` (the default) keeps a granted script in the
+  // ISOLATED world: BrownBear's chosen default is sandbox-by-default immunity (page-global poisoning by a
+  // hostile page can't reach an isolated script), and console.* still forwards to the dashboard Logs there
+  // — so we do not silently move every existing granted script's world. `@grant none` page/auto remains
+  // the canonical "real window" path (unchanged).
   function pageWorldPlan(data) {
     var into = data.injectInto || "auto";
     if (into === "content") { return "isolated"; }
-    if (data.grantNone) { return "page-grantless"; }
-    if ((into === "page" || into === "auto") && allGrantsPageSafe(data.grants || [])) { return "page-granted"; }
+    if (data.grantNone) { return "page-grantless"; }   // page or auto, no grants → real-window page world
+    if (into === "page" && allGrantsPageSafe(data.grants || [])) { return "page-granted"; }
     return "isolated";
   }
 

@@ -103,16 +103,18 @@ per-script settings.
 - **World selection** (which `WKContentWorld` a script runs in — `pageWorldPlan` in
   `brownbear-runtime.js`). `@inject-into content` → the isolated `BrownBear` world (full GM bridge,
   `unsafeWindow`/`window` are the isolated globals). `@inject-into page`/`auto` + `@grant none` →
-  the page's MAIN world with an inert GM (the canonical "`@grant none` ⇒ real `window`"). `@inject-into
-  page`/`auto` + GRANTED with only **page-world-safe** grants (value/resource **reads** +
+  the page's MAIN world with an inert GM (the canonical "`@grant none` ⇒ real `window`"). An **explicit
+  `@inject-into page`** + GRANTED with only **page-world-safe** grants (value/resource **reads** +
   `GM_addStyle`/`GM_addElement`) → the page's MAIN world WITH a working GM surface, so `unsafeWindow ===
   window` and the page's own globals are visible (Violentmonkey parity for "read config + manipulate the
   page" scripts). Reads are served synchronously from a cache pre-seeded into the page-world source;
   `addStyle`/`addElement` run on the page document. This path hands the page world **no token and no
-  native channel**, so there is nothing for a hostile page to forge, snoop, or MITM. Any GM **write**
-  (`GM_setValue`/`setClipboard`/`log`) or cross-origin/streaming API (`GM_xmlhttpRequest`, cookies,
-  downloads, notifications) keeps the script in the isolated world; a secure page-world write path needs
-  a native, document-start-vaulted handler (planned).
+  native channel**, so there is nothing for a hostile page to forge, snoop, or MITM. A granted
+  **`@inject-into auto`** (the default) stays **isolated** — BrownBear's sandbox-by-default keeps
+  page-poisoning immunity and `console.*`→Logs forwarding for every existing granted script (page world is
+  an explicit opt-in). Any GM **write** (`GM_setValue`/`setClipboard`/`log`) or cross-origin/streaming API
+  (`GM_xmlhttpRequest`, cookies, downloads, notifications) also keeps the script isolated; a secure
+  page-world write path needs a native, document-start-vaulted handler (planned).
 
 **Reference:** ScriptCat GM event loop + sandbox isolation model; Violentmonkey page-world injection.
 
