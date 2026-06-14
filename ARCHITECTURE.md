@@ -100,8 +100,21 @@ per-script settings.
   - `GM_setValue/getValue/deleteValue/listValues` → `GMValueStore`, namespaced by script UUID.
   - `GM_addStyle`, `GM_setClipboard`, `GM_openInTab`, `GM_notification`, `GM_log`.
 - Every inbound message is validated (shape, types, bounds) before any native effect.
+- **World selection** (which `WKContentWorld` a script runs in — `pageWorldPlan` in
+  `brownbear-runtime.js`). `@inject-into content` → the isolated `BrownBear` world (full GM bridge,
+  `unsafeWindow`/`window` are the isolated globals). `@inject-into page`/`auto` + `@grant none` →
+  the page's MAIN world with an inert GM (the canonical "`@grant none` ⇒ real `window`"). `@inject-into
+  page`/`auto` + GRANTED with only **page-world-safe** grants (value/resource **reads** +
+  `GM_addStyle`/`GM_addElement`) → the page's MAIN world WITH a working GM surface, so `unsafeWindow ===
+  window` and the page's own globals are visible (Violentmonkey parity for "read config + manipulate the
+  page" scripts). Reads are served synchronously from a cache pre-seeded into the page-world source;
+  `addStyle`/`addElement` run on the page document. This path hands the page world **no token and no
+  native channel**, so there is nothing for a hostile page to forge, snoop, or MITM. Any GM **write**
+  (`GM_setValue`/`setClipboard`/`log`) or cross-origin/streaming API (`GM_xmlhttpRequest`, cookies,
+  downloads, notifications) keeps the script in the isolated world; a secure page-world write path needs
+  a native, document-start-vaulted handler (planned).
 
-**Reference:** ScriptCat GM event loop + sandbox isolation model.
+**Reference:** ScriptCat GM event loop + sandbox isolation model; Violentmonkey page-world injection.
 
 ### Module 4 — Background & @crontab Queue
 **Goal:** run `@background`/`@crontab` scripts while the app is closed.

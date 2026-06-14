@@ -136,29 +136,32 @@ function injectCalls(calls) { return calls.filter((c) => c.api === "injectPageWo
         });
     }
 
-    // --- has GM grants → ISOLATED world regardless of inject-into ---------------------------------
+    // --- has a NON-page-safe grant → ISOLATED world regardless of inject-into ---------------------
+    // (Scripts whose grants are all page-world-SAFE now run in the page world — see
+    //  page-world-granted.test.js. A cross-origin/streaming grant like GM_xmlhttpRequest keeps the
+    //  script isolated, because its data must never transit the page-readable relay.)
     {
         const calls = await boot([scriptData({ injectInto: "auto", grantNone: false,
-                                               grants: ["GM_setValue"] })]);
-        test("a granted script (auto) runs isolated — the GM bridge lives only there", () => {
+                                               grants: ["GM_xmlhttpRequest"] })]);
+        test("a GM_xmlhttpRequest-granted script (auto) runs isolated — its responses never touch the page", () => {
             assert.strictEqual(injectCalls(calls).length, 0);
         });
     }
     {
         const calls = await boot([scriptData({ injectInto: "page", grantNone: false,
-                                               grants: ["GM_setValue"] })]);
+                                               grants: ["GM_xmlhttpRequest"] })]);
         const logs = calls.filter((c) => c.api === "log");
-        test("@inject-into page WITH grants stays isolated (can't bridge GM in page world)", () => {
+        test("@inject-into page WITH a network grant stays isolated (can't bridge cross-origin to the page)", () => {
             assert.strictEqual(injectCalls(calls).length, 0, "no page inject");
         });
         test("…and surfaces a visible warning explaining why (not silently ignored)", () => {
             assert.ok(logs.some((c) => c.payload && c.payload.level === "warn" &&
-                /@grant none/.test(c.payload.message || "")),
-                "a warn-level log mentions @grant none");
+                /@grant none|page-world-safe/.test(c.payload.message || "")),
+                "a warn-level log explains the isolated fallback");
         });
     }
 
-    // --- mixed batch: only the grant-none page-world script gets injected -------------------------
+    // --- mixed batch: grant-none page-world + a GM_xmlhttpRequest script that stays isolated ------
     {
         const calls = await boot([
             scriptData({ name: "iso", injectInto: "content", grantNone: true,
@@ -166,10 +169,10 @@ function injectCalls(calls) { return calls.filter((c) => c.api === "injectPageWo
             scriptData({ name: "pageworld", injectInto: "auto", grantNone: true,
                          source: "window.__pw = 2;" }),
             scriptData({ name: "granted", injectInto: "auto", grantNone: false,
-                         grants: ["GM_getValue"], source: "window.__g = 3;" })
+                         grants: ["GM_xmlhttpRequest"], source: "window.__g = 3;" })
         ]);
         const injects = injectCalls(calls);
-        test("mixed batch: exactly the one grant-none page-world script is page-injected", () => {
+        test("mixed batch: the grant-none page-world script is page-injected, the XHR one stays isolated", () => {
             assert.strictEqual(injects.length, 1, "only one injectPageWorld");
             assert.ok(injects[0].payload.code.indexOf("window.__pw = 2;") !== -1,
                       "it is the @grant-none/auto script");

@@ -765,15 +765,165 @@
   // the page's, so page-defined globals (window.jQuery, a site's own functions) are invisible here and
   // `unsafeWindow`/`window` don't see them. Running in the page's REAL main world fixes that.
   // Tampermonkey/Violentmonkey parity:
-  //   • @inject-into content        → always the isolated world (current behavior).
-  //   • @inject-into page / auto     → the page world ONLY when the script takes NO GM grants
-  //                                    (@grant none). A granted script needs the GM bridge, which is
-  //                                    reachable solely from this isolated world, so it stays here.
-  // The grant-none page case is exactly the canonical "@grant none ⇒ real window" idiom users rely on.
-  function wantsPageWorld(data) {
+  //   • @inject-into content              → always the isolated world (full protection).
+  //   • @inject-into page / auto, @grant none
+  //                                       → the page world, inert GM (the canonical "@grant none ⇒ real
+  //                                         window" idiom). Path: buildPageWorldSource.
+  //   • @inject-into page / auto, GRANTED with only page-world-SAFE grants
+  //                                       → the page world WITH a working GM surface, so unsafeWindow ===
+  //                                         window and the page's own globals are visible (Violentmonkey
+  //                                         parity for scripts that read config + manipulate the page).
+  //                                         Path: buildGrantedPageWorldSource.
+  //   • @inject-into page / auto, GRANTED with any NON-page-safe grant
+  //                                       → the ISOLATED world (the GM bridge lives only here).
+  //
+  // The page-world-SAFE set is exactly the GM surface that touches ONLY the script's own data and needs
+  // NO native authority in the page world: value/resource READS (served synchronously from a cache
+  // pre-seeded into the page-world closure — classic sync GM_getValue parity) and DOM-local GM_addStyle/
+  // GM_addElement (which run on the page document directly). Because nothing in this set hands the page
+  // world a token, a native channel, or another origin's data, there is no relay to snoop or forge and no
+  // native trust boundary exposed to the page — the script simply runs in the page world and reads its own
+  // config. GM WRITES (GM_setValue/deleteValue/setClipboard/log) and every cross-origin/streaming API
+  // (GM_xmlhttpRequest, cookies, downloads, notifications, menu/tab) keep the script in the ISOLATED world
+  // exactly as before — a secure page-world WRITE path needs a native, document-start-vaulted handler so a
+  // hostile page can neither forge nor MITM it; that is a separate, native change (tracked as follow-up).
+  function normGrant(g) { return (typeof g === "string") ? g.replace(/^GM\./, "GM_") : ""; }
+  var PAGE_WORLD_SAFE_GRANTS = {
+    GM_getValue: 1, GM_listValues: 1, GM_getValues: 1, GM_getResourceText: 1,
+    GM_getResourceURL: 1, GM_getResourceUrl: 1, GM_addStyle: 1, GM_addElement: 1
+  };
+  function allGrantsPageSafe(grants) {
+    for (var i = 0; i < grants.length; i += 1) {
+      if (!PAGE_WORLD_SAFE_GRANTS[normGrant(grants[i])]) { return false; }
+    }
+    return true;
+  }
+  // "isolated" | "page-grantless" | "page-granted"
+  function pageWorldPlan(data) {
     var into = data.injectInto || "auto";
-    if (into === "content") { return false; }
-    return !!data.grantNone;   // page or auto → page world iff there are no grants to bridge
+    if (into === "content") { return "isolated"; }
+    if (data.grantNone) { return "page-grantless"; }
+    if ((into === "page" || into === "auto") && allGrantsPageSafe(data.grants || [])) { return "page-granted"; }
+    return "isolated";
+  }
+
+  // The page-world GM client. Injected by buildGrantedPageWorldSource via Function#toString and run in the
+  // page's MAIN world, so it MUST be fully self-contained — it may reference ONLY its two parameters and
+  // page globals, never any variable from this isolated closure. It serves value/resource reads
+  // SYNCHRONOUSLY from the pre-seeded cache and runs GM_addStyle/GM_addElement on the page document, then
+  // invokes the script body with unsafeWindow === window and the granted GM_* surface. It holds NO token
+  // and opens NO channel to native, so the page world gains no privileged authority from running it.
+  function pageWorldGMClient(cfg, bodyFn) {
+    "use strict";
+    var W = window, D = document;
+    var _JSON = W.JSON, _Object = W.Object, _Array = W.Array, _Promise = W.Promise;
+
+    var vals = cfg.values || {};   // key -> JSON string (pre-seeded snapshot; classic sync-read parity)
+    function has(k) { return _Object.prototype.hasOwnProperty.call(vals, k); }
+    function GM_getValue(k, d) {
+      if (has(k)) { try { return _JSON.parse(vals[k]); } catch (e) { return d; } }
+      return d;
+    }
+    function GM_listValues() { return _Object.keys(vals); }
+    function GM_getValues(spec) {
+      var out = {};
+      if (_Array.isArray(spec)) { spec.forEach(function (k) { out[k] = GM_getValue(k); }); }
+      else if (spec && typeof spec === "object") { _Object.keys(spec).forEach(function (k) { out[k] = GM_getValue(k, spec[k]); }); }
+      else { _Object.keys(vals).forEach(function (k) { out[k] = GM_getValue(k); }); }
+      return out;
+    }
+
+    var res = cfg.resources || {};
+    function GM_getResourceText(n) { return res[n] ? res[n].text : undefined; }
+    function GM_getResourceURL(n) { return res[n] ? res[n].url : undefined; }
+
+    function GM_addStyle(css) {
+      var style = D.createElement("style");
+      style.textContent = css;
+      (D.head || D.documentElement).appendChild(style);
+      try {
+        if (typeof W.CSSStyleSheet === "function" && "adoptedStyleSheets" in D) {
+          var sheet = new W.CSSStyleSheet();
+          sheet.replaceSync(String(css));
+          D.adoptedStyleSheets = D.adoptedStyleSheets.concat([sheet]);
+        }
+      } catch (e) { /* constructed-sheet fallback is best-effort */ }
+      return style;
+    }
+    function GM_addElement(parent, tag, attrs) {
+      if (typeof parent === "string") { attrs = tag; tag = parent; parent = null; }
+      var el = D.createElement(tag);
+      if (attrs) {
+        _Object.keys(attrs).forEach(function (k) {
+          if (k === "textContent") { el.textContent = attrs[k]; }
+          else { try { el.setAttribute(k, attrs[k]); } catch (e) { /* ignore bad attr */ } }
+        });
+      }
+      (parent || D.head || D.documentElement).appendChild(el);
+      return el;
+    }
+
+    var GM_info = cfg.info || {};
+    if (!GM_info.scriptHandler) { GM_info.scriptHandler = "BrownBear"; }
+    (function deepFreeze(o) {
+      if (o && typeof o === "object") {
+        _Object.keys(o).forEach(function (k) { var v = o[k]; if (v && typeof v === "object") { deepFreeze(v); } });
+        try { _Object.freeze(o); } catch (e) { /* frozen-already / host obj */ }
+      }
+      return o;
+    })(GM_info);
+
+    var GM = {
+      info: GM_info,
+      getValue: function (k, d) { return _Promise.resolve(GM_getValue(k, d)); },
+      listValues: function () { return _Promise.resolve(GM_listValues()); },
+      getValues: function (s) { return _Promise.resolve(GM_getValues(s)); },
+      addStyle: function (c) { return _Promise.resolve(GM_addStyle(c)); },
+      addElement: function () { return _Promise.resolve(GM_addElement.apply(null, arguments)); },
+      getResourceText: function (n) { return _Promise.resolve(GM_getResourceText(n)); },
+      getResourceUrl: function (n) { return _Promise.resolve(GM_getResourceURL(n)); },
+      getResourceURL: function (n) { return _Promise.resolve(GM_getResourceURL(n)); }
+    };
+
+    var registry = {
+      GM_getValue: GM_getValue, GM_listValues: GM_listValues, GM_getValues: GM_getValues,
+      GM_getResourceText: GM_getResourceText, GM_getResourceURL: GM_getResourceURL,
+      GM_getResourceUrl: GM_getResourceURL, GM_addStyle: GM_addStyle, GM_addElement: GM_addElement,
+      GM_info: GM_info
+    };
+
+    var unsafeWindow = W;
+    var args = [unsafeWindow, GM, GM_info, (W.console || {}), W];
+    (cfg.grants || []).forEach(function (g) { args.push(registry[g]); });
+    try { bodyFn.apply(W, args); }
+    catch (e) {
+      try { if (W.console && W.console.error) { W.console.error("[BrownBear] error running \"" + (cfg.name || "script") + "\":", e); } } catch (e2) { /* ignore */ }
+    }
+  }
+
+  // Build the source native evaluates in the page's MAIN world for a GRANTED page-world script: an inline
+  // call to the self-contained pageWorldGMClient with the pre-seeded config + the script body wrapped in a
+  // real function literal (NOT eval — so a page's strict CSP unsafe-eval cannot block it; native eval into
+  // .page is itself CSP-immune). The body function's parameter list mirrors the isolated `new Function`
+  // surface (unsafeWindow, GM, GM_info, console, window, then each granted page-safe GM_* name in order),
+  // and the client passes the matching page-world implementations.
+  function buildGrantedPageWorldSource(data, body) {
+    var seen = _Object.create(null), gnames = [];
+    (data.grants || []).forEach(function (g) {
+      var n = normGrant(g);
+      if (PAGE_WORLD_SAFE_GRANTS[n] && !seen[n]) { seen[n] = true; gnames.push(n); }
+    });
+    var cfg = {
+      name: data.name || "script",
+      info: data.info || {}, values: data.values || {}, resources: data.resources || {}, grants: gnames
+    };
+    var cfgJSON = "{}";
+    try { cfgJSON = _JSON.stringify(cfg); } catch (e) { cfgJSON = "{}"; }
+    // `body` already ends with its own //# sourceURL (added in run()), so errors thrown in the page world
+    // attribute to the script — no extra tag needed here.
+    var paramList = ["unsafeWindow", "GM", "GM_info", "console", "window"].concat(gnames).join(", ");
+    return "(" + pageWorldGMClient.toString() + ")(\n" + cfgJSON + ",\n" +
+      "function (" + paramList + ") {\n" + body + "\n});";
   }
 
   // Build the self-contained source native evaluates in the page's MAIN world (WKContentWorld.page).
@@ -809,11 +959,13 @@
       var sourceURL = "//# sourceURL=brownbear://" + encodeURIComponent(data.name || "script") + ".user.js";
       var body = (requireCode ? requireCode + "\n;\n" : "") + data.source + "\n" + sourceURL;
 
-      // Page (main) world: hand the source to native to evaluate in this frame's real page world, so
-      // `window`/`unsafeWindow` are the page's own globals. buildGM is skipped — a grant-none script
-      // has no GM bridge to wire. The injectPageWorld bridge call is reachable only from this isolated
-      // world, and native re-gates it on a valid session token.
-      if (wantsPageWorld(data)) {
+      // Route by world. `injectPageWorld` hands the source to native to evaluate in this frame's real
+      // page world (CSP-immune), where `window`/`unsafeWindow` are the page's own globals. The bridge
+      // call is reachable only from this isolated world and native re-gates it on a valid session token.
+      var plan = pageWorldPlan(data);
+
+      // @grant none, page/auto: inert GM, page-world body (the canonical "@grant none ⇒ real window").
+      if (plan === "page-grantless") {
         var pageSource = buildPageWorldSource(data, body);
         bridge("injectPageWorld", { code: pageSource }, token).catch(function (e) {
           _console.error("[BrownBear] page-world inject failed for \"" + (data.name || "script") + "\":", e);
@@ -821,20 +973,36 @@
         return;
       }
 
+      // GRANTED page/auto with only page-world-safe grants: run in the page world WITH a working GM
+      // surface so unsafeWindow === window and the page's own globals are visible (Violentmonkey parity).
+      // Value/resource reads are served synchronously from a cache pre-seeded into the page-world source;
+      // GM_addStyle/GM_addElement run on the page DOM. No token or native channel is handed to the page.
+      if (plan === "page-granted") {
+        var grantedSource = buildGrantedPageWorldSource(data, body);
+        bridge("injectPageWorld", { code: grantedSource }, token).catch(function (e) {
+          _console.error("[BrownBear] granted page-world inject failed for \"" + (data.name || "script") + "\":", e);
+        });
+        return;
+      }
+
+      // plan === "isolated": the GM bridge lives only here. Run the body via `new Function` with the
+      // isolated window as unsafeWindow/window.
       var env = buildGM(data);
       var grantNone = !!data.grantNone;
       var grants = data.grants || [];
       var grantSet = _Object.create(null);
       grants.forEach(function (g) { grantSet[g] = true; });
 
-      // An explicit @inject-into page that ALSO takes GM grants can't run in the page world (the GM
-      // bridge lives only here), so it runs isolated — surface that instead of silently ignoring the
-      // directive, so a script author knows why unsafeWindow isn't the page window.
+      // An explicit @inject-into page that takes a GM grant outside the page-world-safe set (anything that
+      // writes through native or carries cross-origin data — GM_setValue, GM_xmlhttpRequest, cookies,
+      // downloads, notifications, menus) runs isolated — surface why, so an author knows unsafeWindow isn't
+      // the page window for this script (a secure page-world path for those needs native support).
       if (!grantNone && data.injectInto === "page") {
         try {
-          makeConsole(token).warn("[BrownBear] \"@inject-into page\" needs \"@grant none\" for real " +
-            "page-window access; with GM grants this script runs in the isolated world (unsafeWindow " +
-            "is the isolated window, not the page's).");
+          makeConsole(token).warn("[BrownBear] \"@inject-into page\" runs in the page world with @grant " +
+            "none or page-world-safe READ grants (GM_getValue/listValues/getValues, GM_getResource*, " +
+            "GM_addStyle/GM_addElement). This script grants a write or network API (e.g. GM_setValue, " +
+            "GM_xmlhttpRequest), so it runs in the isolated world (unsafeWindow is the isolated window).");
         } catch (e) { /* logging must never break injection */ }
       }
 
