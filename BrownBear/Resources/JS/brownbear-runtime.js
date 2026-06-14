@@ -460,20 +460,29 @@
       call("GM_deleteValues", { keys: keys });
     }
     function GM_addStyle(css) {
-      // Primary: a real <style> works on most sites and keeps the TM/VM return semantics (the element).
+      // Primary: a real <style> works on most sites and keeps the TM/VM return semantics (the element a
+      // script can remove to toggle the style off).
       var style = document.createElement("style");
       style.textContent = css;
       (document.head || document.documentElement).appendChild(style);
-      // CSP-resilient shadow: a page's strict style-src can refuse an isolated-world <style>, leaving
-      // the script's CSS unapplied. A CONSTRUCTED stylesheet is applied via CSSOM (adoptedStyleSheets)
-      // and lands even then; the duplicate is idempotent when the <style> already took. iOS 16.4+.
-      try {
-        if (typeof _CSSStyleSheet === "function" && "adoptedStyleSheets" in document) {
-          var sheet = new _CSSStyleSheet();
-          sheet.replaceSync(String(css));
-          document.adoptedStyleSheets = document.adoptedStyleSheets.concat([sheet]);
-        }
-      } catch (e) { /* constructed-sheet fallback is best-effort */ }
+      // CSP-resilient fallback — ONLY when the <style> didn't take. A strict style-src can refuse the
+      // <style> (its sheet then has no rules); only then apply the CSS via a CONSTRUCTED stylesheet (CSSOM,
+      // not gated by style-src). Applying it ONLY as a fallback — never alongside a working <style> — means
+      // the CSS isn't applied twice (the adopted sheet cascades AFTER the page's stylesheets and would
+      // otherwise override the page harder than a plain <style>) and removing the returned element still
+      // removes the style. iOS 16.4+.
+      var styleApplied = false;
+      try { styleApplied = !!(style.sheet && style.sheet.cssRules && style.sheet.cssRules.length > 0); }
+      catch (e) { styleApplied = false; }
+      if (!styleApplied) {
+        try {
+          if (typeof _CSSStyleSheet === "function" && "adoptedStyleSheets" in document) {
+            var sheet = new _CSSStyleSheet();
+            sheet.replaceSync(String(css));
+            document.adoptedStyleSheets = document.adoptedStyleSheets.concat([sheet]);
+          }
+        } catch (e) { /* constructed-sheet fallback is best-effort */ }
+      }
       return style;
     }
     function GM_addElement(parent, tag, attrs) {
