@@ -217,13 +217,19 @@ extension BrownBearBrowserViewController: UIGestureRecognizerDelegate {
             // from where the finger let go into the active card's REAL frame — no approximation, no snap.
             let releaseFrame = view.convert(hero.frame, to: nil)
             let corner = hero.layer.cornerRadius
-            hero.removeFromSuperview()
-            contentContainer.isHidden = false
             if let image = session.pageImage {
-                presentTabGridWithoutAnimation { grid in
+                // Keep the shrunk drag hero up + the live page hidden until the grid is actually on screen,
+                // THEN tear them down behind it. Revealing the full-screen page before present(animated: false)
+                // takes effect flashes the active tab full-screen for a frame (owner report).
+                presentTabGridWithoutAnimation(configure: { grid in
                     grid.prepareFlyIn(image: image, fromWindowFrame: releaseFrame, cornerRadius: corner)
-                }
+                }, completion: { [weak self] in
+                    hero.removeFromSuperview()
+                    self?.contentContainer.isHidden = false
+                })
             } else {
+                hero.removeFromSuperview()
+                contentContainer.isHidden = false
                 presentTabGrid()
             }
             clearTabSwipeSession(session)

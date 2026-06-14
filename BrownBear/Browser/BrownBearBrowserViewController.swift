@@ -488,14 +488,15 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
     /// (+TabSwipe) is the transition: `configure` hands the grid the page snapshot + its release frame so the
     /// grid flies it into the active card itself. The transitioning delegate is still set so tapping a card
     /// later dismisses with the zoom-expand.
-    func presentTabGridWithoutAnimation(configure: ((BrownBearTabGridController) -> Void)? = nil) {
+    func presentTabGridWithoutAnimation(configure: ((BrownBearTabGridController) -> Void)? = nil,
+                                        completion: (() -> Void)? = nil) {
         let grid = BrownBearTabGridController(tabManager: tabManager,
                                               showingPrivate: tabManager.activeTab?.isPrivate ?? false)
         grid.gridDelegate = self
         grid.modalPresentationStyle = .fullScreen
         grid.transitioningDelegate = tabGridTransition
         configure?(grid)
-        present(grid, animated: false)
+        present(grid, animated: false, completion: completion)
     }
 
     private func presentMenu() {
