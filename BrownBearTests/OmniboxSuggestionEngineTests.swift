@@ -61,6 +61,38 @@ final class OmniboxSuggestionEngineTests: XCTestCase {
         XCTAssertEqual(result[0].kind, .url)
     }
 
+    // MARK: - Search bangs
+
+    func testActiveBangNamesTheEngineInTheDefaultRow() {
+        let result = OmniboxSuggestionEngine.compose(rawQuery: "!yt funny cats", historyMatches: [],
+                                                     searchTemplate: template)
+        XCTAssertEqual(result.first?.kind, .search)
+        XCTAssertEqual(result.first?.title, "!yt funny cats")
+        XCTAssertEqual(result.first?.subtitle, "Search YouTube")
+    }
+
+    func testTrailingBangAlsoNamesTheEngine() {
+        let result = OmniboxSuggestionEngine.compose(rawQuery: "swift docs !gh", historyMatches: [],
+                                                     searchTemplate: template)
+        XCTAssertEqual(result.first?.subtitle, "Search GitHub")
+    }
+
+    func testTypingBangPrefixListsMatchingEngines() {
+        let result = OmniboxSuggestionEngine.compose(rawQuery: "!g", historyMatches: [],
+                                                     searchTemplate: template)
+        // "!g" matches "g" (Google) and "gh" (GitHub); shortest key first.
+        XCTAssertEqual(result.first?.title, "!g")
+        XCTAssertEqual(result.first?.subtitle, "Google")
+        XCTAssertTrue(result.contains { $0.title == "!gh" && $0.subtitle == "GitHub" })
+    }
+
+    func testBareBangListsAllEngines() {
+        let result = OmniboxSuggestionEngine.compose(rawQuery: "!", historyMatches: [],
+                                                     searchTemplate: template)
+        XCTAssertEqual(result.count, SearchBangRegistry.defaults.count)
+        XCTAssertTrue(result.allSatisfy { $0.title.hasPrefix("!") })
+    }
+
     func testTopSitesMapToHistorySuggestions() {
         let entries = [
             HistoryEntry(url: url("https://a.com"), title: "A"),

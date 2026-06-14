@@ -91,6 +91,52 @@ final class OmniboxInputClassifierTests: XCTestCase {
         guard case .search = destination else { return XCTFail("expected .search for '1.2'") }
     }
 
+    // MARK: - Search bangs
+
+    func testLeadingBangSearchesThatEngine() throws {
+        let destination = try classifier.destination(for: "!yt funny cats")
+        guard case .search(let url) = destination else { return XCTFail("expected .search") }
+        XCTAssertEqual(url.host, "www.youtube.com")
+        XCTAssertTrue(url.absoluteString.contains("funny%20cats"))
+        XCTAssertFalse(url.absoluteString.contains("!yt"))   // the bang token is stripped from the query
+    }
+
+    func testTrailingBangSearchesThatEngine() throws {
+        let destination = try classifier.destination(for: "swift docs !gh")
+        guard case .search(let url) = destination else { return XCTFail("expected .search") }
+        XCTAssertEqual(url.host, "github.com")
+        XCTAssertTrue(url.absoluteString.contains("swift%20docs"))
+    }
+
+    func testBareBangOpensEngineHome() throws {
+        let destination = try classifier.destination(for: "!w")
+        guard case .url(let url) = destination else { return XCTFail("expected .url for a bare bang") }
+        XCTAssertEqual(url.host, "en.wikipedia.org")
+    }
+
+    func testUnknownBangFallsThroughToNormalSearch() throws {
+        // "!zzz" isn't a registered bang → the whole text searches the DEFAULT engine, literally.
+        let destination = try classifier.destination(for: "!zzz hello")
+        guard case .search(let url) = destination else { return XCTFail("expected .search") }
+        XCTAssertEqual(url.host, "example-search.test")
+        XCTAssertTrue(url.absoluteString.contains("!zzz") || url.absoluteString.contains("%21zzz"))
+    }
+
+    func testBangBeatsHostDetection() throws {
+        // "!g example.com" is a Google search for "example.com", NOT a navigation to it.
+        let destination = try classifier.destination(for: "!g example.com")
+        guard case .search(let url) = destination else { return XCTFail("expected .search") }
+        XCTAssertEqual(url.host, "www.google.com")
+        XCTAssertTrue(url.absoluteString.contains("example.com"))
+    }
+
+    func testBangsDisabledSearchesLiterally() throws {
+        let off = OmniboxInputClassifier(searchTemplate: "https://example-search.test/?q=%@", bangsEnabled: false)
+        let destination = try off.destination(for: "!yt cats")
+        guard case .search(let url) = destination else { return XCTFail("expected .search") }
+        XCTAssertEqual(url.host, "example-search.test")   // default engine, not YouTube
+    }
+
     // MARK: - Invalid
 
     func testEmptyInputThrows() {

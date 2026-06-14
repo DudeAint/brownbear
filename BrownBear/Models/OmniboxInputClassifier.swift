@@ -29,9 +29,13 @@ struct OmniboxInputClassifier {
 
     /// Template for the search engine. `%@` is replaced with the percent-encoded query.
     let searchTemplate: String
+    /// Whether quick-search bangs ("!yt cats") are honoured. Off makes the classifier ignore them so the
+    /// text searches literally — used by tests, and a future Settings toggle could flip it.
+    let bangsEnabled: Bool
 
-    init(searchTemplate: String = "https://www.google.com/search?q=%@") {
+    init(searchTemplate: String = "https://www.google.com/search?q=%@", bangsEnabled: Bool = true) {
         self.searchTemplate = searchTemplate
+        self.bangsEnabled = bangsEnabled
     }
 
     /// A small set of schemes we will navigate to directly when the user types them.
@@ -43,6 +47,12 @@ struct OmniboxInputClassifier {
     func destination(for rawText: String) throws -> OmniboxDestination {
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { throw BrownBearError.invalidOmniboxInput(rawText) }
+
+        // 0. Quick-search bang ("!yt funny cats", "swift docs !gh"). A known bang routes to that engine;
+        // a bare "!yt" opens its home. Unknown bangs are left alone and handled as ordinary text below.
+        if bangsEnabled, let (bang, query) = SearchBangRegistry.match(in: text), let url = bang.url(for: query) {
+            return query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .url(url) : .search(url)
+        }
 
         // 1. Explicit scheme the user typed (https://…, about:blank, file://…).
         if let scheme = explicitScheme(in: text) {
