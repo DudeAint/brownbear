@@ -7,6 +7,7 @@
 //  registered here so they are available before any scene connects.
 //
 
+import AVFoundation
 import UIKit
 
 @main
@@ -16,6 +17,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
                      didFinishLaunchingWithOptions launchOptions:
                      [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         configureGlobalAppearance()
+        configureAudioSessionForVideo()
         // Register background task handlers before launch finishes (required by BGTaskScheduler).
         // Skipped under unit tests, which don't exercise (and can't permit) background tasks.
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
@@ -36,6 +38,16 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
                                           sessionRole: connectingSceneSession.role)
         config.delegateClass = SceneDelegate.self
         return config
+    }
+
+    // MARK: Audio session
+
+    /// Put the app's audio session in the `.playback` category so web video plays with sound (even with the
+    /// ringer silent, like Safari) and — together with the `audio` background mode — keeps running in
+    /// Picture-in-Picture when the app is backgrounded. We only set the category; WebKit activates the
+    /// session when a video actually plays, so this doesn't grab audio focus from other apps at launch.
+    private func configureAudioSessionForVideo() {
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
     }
 
     // MARK: Appearance
