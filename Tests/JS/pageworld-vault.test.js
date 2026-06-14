@@ -87,6 +87,39 @@ function runVault(opts) {
         });
     }
 
+    // --- GM_xmlhttpRequest plumbing: mint id, register handler, route events, reap ------------------
+    {
+        const { win } = runVault();
+        test("__bbPageGM.xhr mints an id + registers a handler; __bbPageXHR routes events to it", () => {
+            let got = null;
+            const id = win.__bbPageGM.xhr(function (type, payload) { got = [type, payload]; });
+            assert.strictEqual(typeof id, "string");
+            assert.ok(id.length > 0, "non-empty id");
+            win.__bbPageXHR(id, "load", { status: 200 });
+            assert.strictEqual(JSON.stringify(got), JSON.stringify(["load", { status: 200 }]));
+        });
+        test("__bbPageXHR for an unknown id is a no-op (no throw)", () => {
+            win.__bbPageXHR("nope", "load", {});
+        });
+        test("xhrDone reaps the handler (later events for that id are dropped)", () => {
+            let count = 0;
+            const id = win.__bbPageGM.xhr(function () { count += 1; });
+            win.__bbPageXHR(id, "progress", {});
+            win.__bbPageGM.xhrDone(id);
+            win.__bbPageXHR(id, "load", {});
+            assert.strictEqual(count, 1, "only the pre-done event fired");
+        });
+        test("two minted ids are distinct (per request)", () => {
+            assert.notStrictEqual(win.__bbPageGM.xhr(function () {}), win.__bbPageGM.xhr(function () {}));
+        });
+        test("the bridge is frozen and __bbPageXHR is non-configurable (page can't replace either)", () => {
+            assert.ok(Object.isFrozen(win.__bbPageGM), "__bbPageGM (with .xhr/.xhrDone) is frozen");
+            const d = Object.getOwnPropertyDescriptor(win, "__bbPageXHR");
+            assert.strictEqual(d.configurable, false);
+            assert.strictEqual(d.writable, false);
+        });
+    }
+
     // --- single install: a second run does not replace the first binding ---------------------------
     {
         const { win } = runVault();
