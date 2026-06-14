@@ -437,7 +437,23 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
         // Refresh the active tab's snapshot in the background so its grid card is fresh by the time the
         // grid presents, and start the hero shrink immediately so the tap feels instant (+TabSwipe).
         tabManager.activeTab?.refreshSnapshot()
-        animateTabGridShrink()
+        switch AppSettings.tabSwitcherStyle {
+        case .grid:
+            animateTabGridShrink()
+        case .vertical:
+            presentVerticalTabs()
+        }
+    }
+
+    /// The Orion/Kagi-style alternative to the grid: a side panel that slides in over the page from the
+    /// user's chosen edge. Presented `.overFullScreen` so the page stays visible behind the scrim.
+    func presentVerticalTabs() {
+        guard presentedViewController == nil else { return }
+        let panel = VerticalTabsPanelViewController(tabManager: tabManager,
+                                                    showingPrivate: tabManager.activeTab?.isPrivate ?? false,
+                                                    side: AppSettings.verticalTabsSide)
+        panel.panelDelegate = self
+        present(panel, animated: false)
     }
 
     func toolbarDidTapMenu(_ toolbar: BrowserToolbar) {
@@ -690,6 +706,29 @@ extension BrownBearBrowserViewController: BrownBearTabGridControllerDelegate {
 
     func tabGridDidRequestDismiss(_ controller: BrownBearTabGridController) {
         controller.dismiss(animated: true)
+    }
+}
+
+// MARK: - VerticalTabsPanelDelegate (Orion/Kagi side panel)
+
+extension BrownBearBrowserViewController: VerticalTabsPanelDelegate {
+    func verticalTabsPanel(_ panel: VerticalTabsPanelViewController, didSelect tab: Tab) {
+        // Activate first so the page is live behind the panel, then slide the panel away to reveal it.
+        tabManager.setActiveTab(tab)
+        panel.dismissPanel { [weak self] in self?.refreshChrome() }
+    }
+
+    func verticalTabsPanel(_ panel: VerticalTabsPanelViewController, didRequestNewTabPrivate isPrivate: Bool) {
+        let tab = tabManager.createTab(isPrivate: isPrivate)
+        loadNewTabPage(in: tab)
+        panel.dismissPanel { [weak self] in
+            self?.refreshChrome()
+            self?.omnibox.beginEditing()
+        }
+    }
+
+    func verticalTabsPanelDidRequestDismiss(_ panel: VerticalTabsPanelViewController) {
+        panel.dismissPanel(completion: nil)
     }
 }
 
