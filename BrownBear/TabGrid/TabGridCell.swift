@@ -21,6 +21,9 @@ final class TabGridCell: UICollectionViewCell {
     private let titleLabel = UILabel()
     private let closeButton = UIButton(type: .system)
     private let placeholderLabel = UILabel()
+    /// A thin colored strip between the snapshot and the title marking the tab's group (Chrome style);
+    /// hidden when the tab is ungrouped.
+    private let groupStrip = UIView()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -36,18 +39,26 @@ final class TabGridCell: UICollectionViewCell {
         titleLabel.text = nil
         placeholderLabel.text = nil
         placeholderLabel.isHidden = true
+        groupStrip.isHidden = true
         onClose = nil
         setActive(false)
     }
 
     // MARK: - Configuration
 
-    func configure(title: String, snapshot: UIImage?, isActive: Bool, isPinned: Bool = false) {
+    func configure(title: String, snapshot: UIImage?, isActive: Bool,
+                   isPinned: Bool = false, groupColorHex: UInt32? = nil) {
         // A pinned tab gets an accent pin glyph prepended to its title (no extra layout to disturb the card).
         if isPinned {
             titleLabel.attributedText = Self.pinnedTitle(title)
         } else {
             titleLabel.text = title   // also clears any prior attributedText
+        }
+        if let groupColorHex {
+            groupStrip.backgroundColor = UIColor(hex: groupColorHex)
+            groupStrip.isHidden = false
+        } else {
+            groupStrip.isHidden = true
         }
         if let snapshot {
             snapshotView.image = snapshot
@@ -131,6 +142,10 @@ final class TabGridCell: UICollectionViewCell {
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleBar.addSubview(titleLabel)
 
+        groupStrip.isHidden = true
+        groupStrip.translatesAutoresizingMaskIntoConstraints = false
+        card.addSubview(groupStrip)   // above the title bar's top edge
+
         let closeConfig = UIImage.SymbolConfiguration(pointSize: 13, weight: .bold)
         closeButton.setImage(UIImage(systemName: "xmark", withConfiguration: closeConfig), for: .normal)
         closeButton.tintColor = BrownBearTheme.Palette.textPrimary
@@ -160,6 +175,11 @@ final class TabGridCell: UICollectionViewCell {
             titleBar.topAnchor.constraint(equalTo: snapshotView.bottomAnchor),
             titleBar.bottomAnchor.constraint(equalTo: card.bottomAnchor),
             titleBar.heightAnchor.constraint(equalToConstant: 34),
+
+            groupStrip.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+            groupStrip.trailingAnchor.constraint(equalTo: card.trailingAnchor),
+            groupStrip.bottomAnchor.constraint(equalTo: titleBar.topAnchor),
+            groupStrip.heightAnchor.constraint(equalToConstant: 3),
 
             titleLabel.leadingAnchor.constraint(equalTo: titleBar.leadingAnchor, constant: 10),
             titleLabel.trailingAnchor.constraint(equalTo: titleBar.trailingAnchor, constant: -10),
