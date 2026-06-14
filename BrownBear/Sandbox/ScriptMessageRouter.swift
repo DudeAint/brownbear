@@ -384,6 +384,15 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         }
     }
 
+    /// Broadcast value changes made OUTSIDE a live page — by the background/@crontab runner or the
+    /// dashboard value editor — into every live page injection of the script, so GM_getValue and
+    /// GM_addValueChangeListener stay in sync without a reload (Tampermonkey/Violentmonkey cross-
+    /// context parity). originToken nil → no page is excluded. A no-op when no page runs the script.
+    func broadcastExternalValueChanges(scriptID: UUID,
+                                       changes: [(key: String, old: String?, new: String?)]) {
+        broadcastValueChanges(scriptID: scriptID, originToken: nil, changes: changes)
+    }
+
     /// Escape a string for embedding inside a single-quoted JS string literal. JSON uses double
     /// quotes, but a value may contain `'`, `\`, or the U+2028/U+2029 line terminators that are
     /// legal in JSON yet break a JS literal.
@@ -429,15 +438,8 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         downloadCancels.removeValue(forKey: requestID)?()
     }
 
-    /// Notify a GM_openInTab handle that the tab it opened has closed — flips `.closed` and fires
-    /// `onclose` — dispatched into the OPENER's frame + isolated world (iframe-aware).
-    private func dispatchTabClosed(openId: String, webView: WKWebView?, frame: WKFrameInfo?,
-                                   world: WKContentWorld) {
-        guard let webView else { return }
-        let js = "window.__brownbear && window.__brownbear.dispatchTabClosed && "
-            + "window.__brownbear.dispatchTabClosed('\(Self.escapeForJSStringLiteral(openId))');"
-        BBEvaluateJavaScriptInFrame(webView, js, frame, world)
-    }
+    // dispatchTabClosed (GM_openInTab handle close → opener frame) lives in
+    // ScriptMessageRouter+Privileged.swift; it takes only primitives so it needs no private state.
 
     // MARK: - getScripts
 
