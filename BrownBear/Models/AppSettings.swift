@@ -167,11 +167,14 @@ enum UserScriptInstallPolicy: String, CaseIterable, Identifiable {
 /// where the `GM_*` APIs live. Most userscripts work there; only one that must read/override the page's
 /// own JS needs MAIN. (Same axis Violentmonkey gets right by sandboxing GM scripts by default.)
 enum UserScriptWorld: String, CaseIterable, Identifiable {
-    /// Force every manager userscript into the isolated user-script world (immune to page breakage). Default.
+    /// Force every manager userscript into the isolated user-script world (immune to page breakage).
     case userScript
     /// Force every manager userscript into the page's real MAIN world (raw page access; no `GM_*` there).
     case main
-    /// Honor the manager's per-script choice (`@inject-into` / `@grant`), exactly like Chrome.
+    /// Honor the manager's per-script choice (`@inject-into` / `@grant`), exactly like Chrome — and like
+    /// Violentmonkey, which runs userscripts in the page's MAIN world. DEFAULT, so TM/ScriptCat scripts see
+    /// `unsafeWindow`/page globals like VM (a manager-registered MAIN script stays MAIN; `@inject-into
+    /// content` stays isolated). The infra-broker carve-out below is now subsumed by this default.
     case managerChoice
 
     var id: String { rawValue }
@@ -267,12 +270,15 @@ enum AppSettings {
         set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.userScriptInstallPolicy) }
     }
 
-    /// Which world a userscript-manager extension's userscripts run in. Default `.userScript` (isolated),
-    /// so a userscript is immune to a page that breaks its own globals; the Settings picker uses
-    /// @AppStorage on the same key. Read by the content-script router when it hands a manager's scripts
-    /// to the page.
+    /// Which world a userscript-manager extension's userscripts run in. Default `.managerChoice` — honor the
+    /// world the manager registered (Tampermonkey/ScriptCat register normal userscripts as MAIN, `@inject-into
+    /// content` as USER_SCRIPT), exactly like Violentmonkey runs them in the page's MAIN world. This is what
+    /// makes TM/SC scripts see `unsafeWindow`/page globals like VM. The page-poisoning that motivated the old
+    /// isolated default is covered for the canonical attack (window.add/removeEventListener) by
+    /// `brownbear-resilient-events.js`; users who want full sandbox isolation can still pick "User Script
+    /// World (isolated)" in Settings. The Settings picker uses @AppStorage on the same key.
     static var userScriptWorld: UserScriptWorld {
-        get { UserScriptWorld(rawValue: UserDefaults.standard.string(forKey: Key.userScriptWorld) ?? "") ?? .userScript }
+        get { UserScriptWorld(rawValue: UserDefaults.standard.string(forKey: Key.userScriptWorld) ?? "") ?? .managerChoice }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.userScriptWorld) }
     }
 

@@ -49,12 +49,17 @@ final class UserScriptWorldTests: XCTestCase {
         }
     }
 
-    func testDefaultIsUserScriptWorld() {
-        // The setting accessor defaults to the isolated world when unset.
+    func testDefaultIsManagerChoice() {
+        // The setting accessor defaults to honoring the manager's registered world (Violentmonkey parity:
+        // TM/ScriptCat normal userscripts register MAIN → run in the page world, like VM).
         let key = AppSettings.Key.userScriptWorld
         let saved = UserDefaults.standard.string(forKey: key)
         UserDefaults.standard.removeObject(forKey: key)
-        XCTAssertEqual(AppSettings.userScriptWorld, .userScript, "default is the isolated user-script world")
+        XCTAssertEqual(AppSettings.userScriptWorld, .managerChoice, "default honors the manager's world like VM")
+        // A manager's MAIN-registered userscript reaches the page world under the default; @inject-into
+        // content stays isolated — exactly what makes TM/SC behave like Violentmonkey.
+        XCTAssertEqual(AppSettings.userScriptWorld.effectiveWorld(registered: "MAIN", scriptId: "some-uuid"), "MAIN")
+        XCTAssertEqual(AppSettings.userScriptWorld.effectiveWorld(registered: "USER_SCRIPT", scriptId: "some-uuid"), "USER_SCRIPT")
         if let saved { UserDefaults.standard.set(saved, forKey: key) }
     }
 
