@@ -184,11 +184,22 @@ enum UserScriptWorld: String, CaseIterable, Identifiable {
         }
     }
 
+    /// Well-known MAIN-world INFRASTRUCTURE broker ids that userscript managers register via
+    /// chrome.userScripts. These are the manager's OWN page-side plumbing (not a user script): they
+    /// genuinely need the page's MAIN world to set the manager up — exactly like Violentmonkey's broker
+    /// always reaches MAIN. They stay MAIN even under the isolated default so the manager injects like
+    /// VM out of the box, while the user's own page-world scripts remain sandboxed. ScriptCat registers
+    /// its page broker as "scriptcat-inject" (confirmed). Extend as other managers' broker ids are known.
+    static let managerBrokerIDs: Set<String> = ["scriptcat-inject"]
+
     /// Map a manager-registered world ("MAIN" / "USER_SCRIPT" / "ISOLATED" / "") to the world BrownBear
-    /// should actually run the script in, per this setting. Pure — unit-tested.
-    func effectiveWorld(registered: String) -> String {
+    /// should actually run the script in, per this setting. `scriptId` lets a manager's own MAIN-world
+    /// infra broker keep MAIN even under the isolated default (see `managerBrokerIDs`). Pure — unit-tested.
+    func effectiveWorld(registered: String, scriptId: String = "") -> String {
         switch self {
-        case .userScript: return registered.uppercased() == "MAIN" ? "USER_SCRIPT" : registered
+        case .userScript:
+            guard registered.uppercased() == "MAIN" else { return registered }
+            return UserScriptWorld.managerBrokerIDs.contains(scriptId) ? "MAIN" : "USER_SCRIPT"
         case .main: return "MAIN"
         case .managerChoice: return registered
         }
