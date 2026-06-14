@@ -241,6 +241,60 @@ final class GMRuntimeCompatibilityTests: XCTestCase {
         XCTAssertEqual(store["mainRan"], "true")
     }
 
+    func testInlinedRequireRunsWithoutBlockingFetchAndRevalidates() throws {
+        // The warm-cache fast path (PR: inline cached @require into getScripts). Native delivers the
+        // require body inline, so the script runs WITHOUT a blocking fetchResource at document-start.
+        // We prove the inlined body is the source by making fetchResource return EMPTY for that URL —
+        // if the script still sees the require, inlining worked — and assert fetchResource WAS still
+        // called for the URL (the background freshness revalidation).
+        let runtime = try runtimeSource()
+        guard let context = JSContext() else { throw XCTSkip("no JSContext") }
+
+        var store: [String: String] = [:]
+        var fetchedURLs: [String] = []
+        let requireURL = "https://cdn.test/inlined-lib.js"
+        let scriptData: [String: Any] = [
+            "token": "tok", "runAt": "document-start", "name": "inlinetest",
+            "grants": Self.defaultGrants, "grantNone": false, "noFrames": false, "injectInto": "auto",
+            "requires": [requireURL],
+            "inlinedRequires": [requireURL: "var REQVAL = 7;"],
+            "resources": [String: String](),
+            "source": "GM_setValue('fromRequire', REQVAL + 1);",
+            "values": [String: String](), "info": ["scriptHandler": "BrownBear"]
+        ]
+        let bridge: @convention(block) (String) -> String = { bodyJSON in
+            func reply(_ value: Any?) -> String {
+                let payload: [String: Any] = ["value": value ?? NSNull()]
+                let data = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data("{\"value\":null}".utf8)
+                return String(decoding: data, as: UTF8.self)
+            }
+            guard let data = bodyJSON.data(using: .utf8),
+                  let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let api = body["api"] as? String else { return "{\"value\":null}" }
+            let payload = body["payload"] as? [String: Any] ?? [:]
+            switch api {
+            case "getScripts": return reply([scriptData])
+            case "GM_setValue":
+                if let key = payload["key"] as? String, let value = payload["value"] as? String { store[key] = value }
+                return reply(nil)
+            case "fetchResource":
+                fetchedURLs.append(payload["url"] as? String ?? "")
+                return reply(["text": "", "base64": "", "mimeType": "text/plain"])   // empty: NOT the source
+            default: return reply(nil)
+            }
+        }
+        installDOMStubs(context)
+        context.setObject(bridge, forKeyedSubscript: "__nativeBridge" as NSString)
+        context.evaluateScript(Self.bridgePrelude)
+        context.evaluateScript(runtime)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertEqual(store["fromRequire"], "8",
+            "the inlined @require body ran (REQVAL=7 → 8) although fetchResource returned empty")
+        XCTAssertTrue(fetchedURLs.contains(requireURL),
+            "the inlined require is still revalidated in the background (fetchResource called for it)")
+    }
+
     func testFetchedResourceThenEvalKeepsGMAccess() throws {
         // A resource fetched natively, then eval'd by the script — eval'd code must see GM_*.
         let store = try runScript(

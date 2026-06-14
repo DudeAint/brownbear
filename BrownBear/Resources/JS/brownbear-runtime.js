@@ -284,21 +284,40 @@
   // --- Per-script execution -------------------------------------------------------------------
   // @require/@resource are fetched NATIVELY (via the bridge) so they bypass page CORS — this is
   // what lets lib-dependent and obfuscated scripts load their dependencies reliably.
-  function loadRequires(requires, token) {
+  //
+  // `inlined` is the warm-cache fast path: native has already put any DISK-CACHED @require/@resource
+  // bodies into the getScripts reply, so the script can run WITHOUT a blocking fetchResource round-
+  // trip per asset at document-start (the main reason a require-heavy script ran late vs Violentmonkey,
+  // which caches @require at install). For an inlined asset we use the cached body immediately and
+  // still fire a background, fire-and-forget revalidation so the next navigation picks up any upstream
+  // change without delaying this one. Cold (uncached) assets fall back to the normal blocking fetch,
+  // which also warms the cache for next time.
+  function hasOwn(obj, key) { return obj && _Object.prototype.hasOwnProperty.call(obj, key); }
+
+  function loadRequires(requires, token, inlined) {
     if (!requires || !requires.length) { return _Promise.resolve(""); }
     return _Promise.all(requires.map(function (url) {
+      if (hasOwn(inlined, url)) {
+        bridge("fetchResource", { url: url }, token).catch(function () {});   // revalidate in background
+        return _Promise.resolve(inlined[url] || "");
+      }
       return bridge("fetchResource", { url: url }, token)
         .then(function (r) { return (r && r.text) || ""; })
         .catch(function () { return ""; });
     })).then(function (codes) { return codes.join("\n;\n"); });
   }
 
-  function loadResources(resources, token) {
+  function loadResources(resources, token, inlined) {
     var names = resources ? _Object.keys(resources) : [];
     var out = _Object.create(null);
     if (!names.length) { return _Promise.resolve(out); }
     return _Promise.all(names.map(function (name) {
       var url = resources[name];
+      if (hasOwn(inlined, name)) {
+        bridge("fetchResource", { url: url }, token).catch(function () {});   // revalidate in background
+        out[name] = inlined[name];   // { text, url } already shaped natively
+        return _Promise.resolve();
+      }
       return bridge("fetchResource", { url: url }, token).then(function (r) {
         var dataUrl = (r && r.base64)
           ? ("data:" + ((r && r.mimeType) || "application/octet-stream") + ";base64," + r.base64)
@@ -739,7 +758,8 @@
 
   function run(data) {
     var token = data.token;
-    return _Promise.all([loadRequires(data.requires, token), loadResources(data.resources, token)])
+    return _Promise.all([loadRequires(data.requires, token, data.inlinedRequires),
+                         loadResources(data.resources, token, data.inlinedResources)])
       .then(function (loaded) {
       var requireCode = loaded[0];
       data.resources = loaded[1];   // name -> { text, url } (fetched natively)
