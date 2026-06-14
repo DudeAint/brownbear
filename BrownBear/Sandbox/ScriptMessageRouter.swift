@@ -21,7 +21,10 @@ import WebKit
 /// Lets the bridge ask the browser to perform UI actions it can't do itself (open tabs).
 @MainActor
 protocol ScriptBridgeHost: AnyObject {
-    func bridgeOpenInTab(url: URL, active: Bool)
+    /// GM_openInTab: open `url` in a new tab. `onClose` fires once when that tab is later closed (any
+    /// path), so the script's handle can flip `.closed` and call its `onclose`. Returns a closer the
+    /// handle's close() invokes to dismiss the tab, or nil if no tab could be opened.
+    func bridgeOpenInTab(url: URL, active: Bool, onClose: @escaping () -> Void) -> (() -> Void)?
 
     /// GM_notification in-app fallback: show a brief banner when the OS suppressed the notification
     /// (UN authorization denied). Best-effort UX so the notification isn't silently dropped.
@@ -101,6 +104,10 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
     /// (parity with GM_abortRequest for XHR — Tampermonkey/Violentmonkey both return a handle whose
     /// abort() stops the transfer). The closure cancels the underlying URLSession task.
     private var downloadCancels: [String: () -> Void] = [:]
+
+    /// Tabs opened via GM_openInTab, keyed by the per-call openId. The closure closes that tab so a
+    /// script's handle.close() can dismiss it; the entry is dropped when the tab closes (any path).
+    private var openTabClosers: [String: () -> Void] = [:]
 
     /// Cap a single forwarded log line so a runaway script can't bloat the on-disk log.
     private static let maxLogMessageLength = 8192
@@ -237,6 +244,13 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
             return NSNull()
         }
 
+        if api == "GM_closeTab" {
+            // GM_openInTab(...).close(): dismiss the tab this script opened. Ungated like the aborts —
+            // openIds are random and script-local, and closing a tab the script itself opened is benign.
+            if let openId = payload["openId"] as? String { openTabClosers.removeValue(forKey: openId)?() }
+            return NSNull()
+        }
+
         // Everything else requires a native-bound session and a grant.
         let session = try resolveSession(token)
 
@@ -267,7 +281,19 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
             guard let urlString = payload["url"] as? String, let url = URL(string: urlString) else {
                 throw BrownBearError.bridgeRejected("invalid url")
             }
-            host?.bridgeOpenInTab(url: url, active: (payload["active"] as? Bool) ?? true)
+            let active = (payload["active"] as? Bool) ?? true
+            let openId = payload["openId"] as? String
+            // Capture the OPENER's frame so the tab's eventual close fires onclose back into the right
+            // script context. The closer (returned by the host) backs the handle's close().
+            let openerWebView = session.webView
+            let openerFrame = session.frameInfo
+            let world = contentWorld
+            let closer = host?.bridgeOpenInTab(url: url, active: active, onClose: { [weak self] in
+                guard let self, let openId else { return }
+                self.openTabClosers.removeValue(forKey: openId)
+                self.dispatchTabClosed(openId: openId, webView: openerWebView, frame: openerFrame, world: world)
+            })
+            if let openId, let closer { openTabClosers[openId] = closer }
             return NSNull()
 
         case "GM_log", "log":
@@ -401,6 +427,16 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
     /// Cancel an in-flight download (GM_downloadAbort). No-op if it already finished.
     func cancelDownload(requestID: String) {
         downloadCancels.removeValue(forKey: requestID)?()
+    }
+
+    /// Notify a GM_openInTab handle that the tab it opened has closed — flips `.closed` and fires
+    /// `onclose` — dispatched into the OPENER's frame + isolated world (iframe-aware).
+    private func dispatchTabClosed(openId: String, webView: WKWebView?, frame: WKFrameInfo?,
+                                   world: WKContentWorld) {
+        guard let webView else { return }
+        let js = "window.__brownbear && window.__brownbear.dispatchTabClosed && "
+            + "window.__brownbear.dispatchTabClosed('\(Self.escapeForJSStringLiteral(openId))');"
+        BBEvaluateJavaScriptInFrame(webView, js, frame, world)
     }
 
     // MARK: - getScripts

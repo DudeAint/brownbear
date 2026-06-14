@@ -765,11 +765,18 @@ extension BrownBearBrowserViewController: WKUIDelegate {
 // MARK: - ScriptBridgeHost (GM_openInTab)
 
 extension BrownBearBrowserViewController: ScriptBridgeHost {
-    func bridgeOpenInTab(url: URL, active: Bool) {
+    func bridgeOpenInTab(url: URL, active: Bool, onClose: @escaping () -> Void) -> (() -> Void)? {
         let tab = tabManager.createTab(loading: url, activate: active)
         tab.delegate = self
+        // A GM_openInTab tab is a plain browsing tab (onClose is otherwise only used for NTP/extension
+        // session teardown), so it's free to back the script's handle.onclose.
+        tab.onClose = onClose
         tab.loadPendingURLIfNeeded()
         if active { refreshChrome() }
+        return { [weak self, weak tab] in
+            guard let self, let tab else { return }
+            self.tabManager.closeTab(id: tab.id)
+        }
     }
 
     func bridgeTabId(for webView: WKWebView) -> Int? {

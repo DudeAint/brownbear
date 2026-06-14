@@ -106,6 +106,19 @@
     entry.resolve = null; entry.reject = null;
   }
 
+  // --- GM_openInTab handle (closed / onclose) ------------------------------------------------
+  // openId -> the handle returned to the opening script, so native can flip `closed` and fire
+  // `onclose` when the opened tab is closed (by the user or via handle.close()). Keyed by a per-call
+  // openId so one script can't observe another's tab. Published below for native to reach.
+  var openTabsById = _Object.create(null);
+  function dispatchTabClosed(openId) {
+    var h = openTabsById[openId];
+    if (!h) { return; }
+    h.closed = true;
+    delete openTabsById[openId];
+    safeCall(h.onclose, undefined);
+  }
+
   // --- window.onurlchange (SPA URL tracking) --------------------------------------------------
   // Installed ONCE per page (the IIFE's __brownbear guard ensures single install). Userscripts run
   // with `window` bound to the real page window, so we patch the page's own history + listen for
@@ -470,8 +483,14 @@
       if (typeof options === "boolean") { active = !options; }
       else if (options && typeof options === "object") { active = options.active !== false; }
       else { active = true; }
-      call("GM_openInTab", { url: url, active: active });
-      return { closed: false, onclose: null, close: function () {} };
+      var openId = genId("tab");
+      // A REAL handle (TM/VM parity): close() closes the tab, and native flips closed + fires onclose
+      // when it goes away. Stored by openId so dispatchTabClosed can find it.
+      var handle = { closed: false, onclose: null,
+        close: function () { call("GM_closeTab", { openId: openId }); } };
+      openTabsById[openId] = handle;
+      call("GM_openInTab", { url: url, active: active, openId: openId });
+      return handle;
     }
     function GM_log() {
       var parts = [].slice.call(arguments).map(function (a) {
@@ -907,6 +926,7 @@
     applyValueChange: applyRemoteValueChange,
     dispatchNotification: dispatchNotification,
     dispatchDownload: dispatchDownload,
+    dispatchTabClosed: dispatchTabClosed,
     fireMenuCommand: fireMenuCommand
   };
 
