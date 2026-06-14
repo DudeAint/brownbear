@@ -42,15 +42,23 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
 
     // MARK: Audio session
 
-    /// Put the app's audio session in the `.playback` category so web video plays with sound (even with the
-    /// ringer silent, like Safari) and — together with the `audio` background mode — keeps running in
-    /// Picture-in-Picture when the app is backgrounded. We only set the CATEGORY and deliberately do NOT
-    /// pin a `mode`: WebKit drives the media playback clock through its own audio session/mode when a video
-    /// plays, and forcing `.moviePlayback` here can fight that setup (a candidate cause of "video loads and
-    /// seeks but the clock won't advance"). WebKit activates the session itself, so this never grabs audio
-    /// focus from other apps at launch.
+    /// Configure + ACTIVATE the audio session so web video actually plays.
+    ///
+    /// WebKit drives the media playback CLOCK off the audio render unit, and that unit only runs while the
+    /// app's `AVAudioSession` is **active**. BrownBear was only ever setting the CATEGORY, never activating
+    /// — the symptom was a video that loads fully and is seekable but whose `currentTime` stays frozen at 0
+    /// (page visible, not muted, rate 1, readyState 4). Diagnosed via the page-side media probe; the fix is
+    /// to activate the session here.
+    ///
+    /// `.playback` keeps audio audible with the ringer silent (like Safari) and, with the `audio`
+    /// background mode, keeps Picture-in-Picture playing when backgrounded. `.mixWithOthers` means
+    /// activating at launch does NOT interrupt another app's audio (and web-video audio mixes with it
+    /// rather than pausing it) — a deliberate, minor trade so a freshly launched browser never yanks the
+    /// user's music just to be ready to play video. No `mode` is pinned; WebKit sets its own.
     private func configureAudioSessionForVideo() {
-        try? AVAudioSession.sharedInstance().setCategory(.playback)
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, options: [.mixWithOthers])
+        try? session.setActive(true)
     }
 
     // MARK: Appearance
