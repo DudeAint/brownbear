@@ -166,6 +166,26 @@ async function bootAndInject(overrides) {
         });
     }
     {
+        // The owner's reported failing script: @grant unsafeWindow + GM_addValueChangeListener (plus the
+        // already-safe value/style/xhr grants). `unsafeWindow` is a DECLARATION (the canonical "I want the
+        // real page window") and value-change listeners are page-local — both must be page-world-safe so
+        // this whole script runs in the page world (unsafeWindow === page window), like VM.
+        const ownerGrants = ["GM_xmlhttpRequest", "GM_addStyle", "GM_setValue", "GM_getValue",
+                             "GM_deleteValue", "GM_listValues", "GM_addValueChangeListener", "unsafeWindow"];
+        const calls = await bootAndInject({ injectInto: "auto", runAt: "document-start", grants: ownerGrants });
+        const injects = injectCalls(calls);
+        test("@grant unsafeWindow + GM_addValueChangeListener (+value/style/xhr) → PAGE world (the owner's case)", () => {
+            assert.strictEqual(injects.length, 1, "the whole script runs in the page world");
+        });
+        test("…and `unsafeWindow` is NOT duplicated in the body param list (it's already a fixed param)", () => {
+            const code = injects[0].payload.code;
+            const m = /function \(unsafeWindow, GM, GM_info, console, window([^)]*)\) \{/.exec(code);
+            assert.ok(m, "body wrapper present");
+            assert.ok(m[1].indexOf("unsafeWindow") === -1, "unsafeWindow must not appear again in the granted params");
+            assert.ok(/GM_addValueChangeListener/.test(m[1]), "GM_addValueChangeListener is passed as a param");
+        });
+    }
+    {
         const calls = await bootAndInject({ injectInto: "content", grants: ["GM_getValue", "GM_setValue"] });
         test("@inject-into content stays isolated even with only safe grants", () => {
             assert.strictEqual(injectCalls(calls).length, 0);
