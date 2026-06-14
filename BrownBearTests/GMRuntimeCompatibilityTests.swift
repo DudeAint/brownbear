@@ -347,6 +347,64 @@ final class GMRuntimeCompatibilityTests: XCTestCase {
                        "abort() targets the SAME requestId as the download (a real handle, not a no-op)")
     }
 
+    func testGMOpenInTabHandleClosesAndFiresOnClose() throws {
+        // GM_openInTab returns a REAL handle (TM/VM parity): closed flips + onclose fires when native
+        // reports the tab closed, and close() routes GM_closeTab with the same openId. (The native tab
+        // open/close itself is integration-tested.)
+        let runtime = try runtimeSource()
+        guard let context = JSContext() else { throw XCTSkip("no JSContext") }
+
+        var store: [String: String] = [:]
+        var openId: String?
+        var closeOpenId: String?
+        let scriptData: [String: Any] = [
+            "token": "tok", "runAt": "document-start", "name": "tabtest",
+            "grants": ["GM_openInTab", "GM_setValue"], "grantNone": false, "noFrames": false, "injectInto": "auto",
+            "requires": [String](), "resources": [String: String](),
+            "source": "window.__t = GM_openInTab('https://x.test/');"
+                + " window.__t.onclose = function () { GM_setValue('closedFired', true); };",
+            "values": [String: String](), "info": ["scriptHandler": "BrownBear"]
+        ]
+        let bridge: @convention(block) (String) -> String = { bodyJSON in
+            func reply(_ value: Any?) -> String {
+                let payload: [String: Any] = ["value": value ?? NSNull()]
+                let data = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data("{\"value\":null}".utf8)
+                return String(decoding: data, as: UTF8.self)
+            }
+            guard let data = bodyJSON.data(using: .utf8),
+                  let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let api = body["api"] as? String else { return "{\"value\":null}" }
+            let payload = body["payload"] as? [String: Any] ?? [:]
+            switch api {
+            case "getScripts": return reply([scriptData])
+            case "GM_openInTab": openId = payload["openId"] as? String; return reply(nil)
+            case "GM_closeTab": closeOpenId = payload["openId"] as? String; return reply(nil)
+            case "GM_setValue":
+                if let key = payload["key"] as? String, let value = payload["value"] as? String { store[key] = value }
+                return reply(nil)
+            default: return reply(nil)
+            }
+        }
+        installDOMStubs(context)
+        context.setObject(bridge, forKeyedSubscript: "__nativeBridge" as NSString)
+        context.evaluateScript(Self.bridgePrelude)
+        context.evaluateScript(runtime)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertNotNil(openId, "GM_openInTab issued a native open carrying an openId")
+        XCTAssertEqual(context.evaluateScript("window.__t.closed")?.toBool(), false, "handle starts open")
+
+        // Native reports the tab closed → handle flips closed and fires onclose (which set the value).
+        context.evaluateScript("window.__brownbear.dispatchTabClosed('\(openId ?? "")');")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        XCTAssertEqual(context.evaluateScript("window.__t.closed")?.toBool(), true, "closed flips on tab close")
+        XCTAssertEqual(store["closedFired"], "true", "onclose fired when the tab closed")
+
+        // close() routes GM_closeTab with the open's openId (a real close, not a no-op).
+        context.evaluateScript("window.__t.close();")
+        XCTAssertEqual(closeOpenId, openId, "close() targets the same openId as the open")
+    }
+
     func testObfuscatedBase64EvalScript() throws {
         // "Obfuscated": base64-encoded GM_setValue call, decoded and eval'd at runtime.
         // base64 of: GM_setValue('b64', 123);
