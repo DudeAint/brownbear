@@ -180,11 +180,15 @@ extension BrownBearBrowserViewController: UIGestureRecognizerDelegate {
     /// Approximate where the active tab's card sits in the grid (centred, ~2-column card size). The grid
     /// centres the active tab on open, so a centred target lands close; tuned on device.
     private func tabGridCardTargetFrame(from start: CGRect) -> CGRect {
-        let cardWidth = view.bounds.width * 0.46
+        // Where the page shrinks toward as you drag up. iOS Safari doesn't lock it dead-centre — the page
+        // pulls FARTHER away (smaller) and sits a bit HIGHER, heading toward the grid above. So target a
+        // smaller card centred at ~40% of the height. (This is just the interactive preview — on release the
+        // page flies to the active card's REAL frame, so the exact value only sets the drag feel.)
+        let cardWidth = view.bounds.width * 0.40
         let aspect = start.height > 0 ? start.width / start.height : 0.6
         let cardHeight = aspect > 0 ? cardWidth / aspect : cardWidth * 1.5
         return CGRect(x: (view.bounds.width - cardWidth) / 2,
-                      y: (view.bounds.height - cardHeight) / 2,
+                      y: view.bounds.height * 0.40 - cardHeight / 2,
                       width: cardWidth, height: cardHeight)
     }
 
