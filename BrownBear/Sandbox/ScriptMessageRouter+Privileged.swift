@@ -29,14 +29,15 @@ extension ScriptMessageRouter {
     /// page world holds no token of its own, so a hostile page calling it directly fails at `resolveSession`.
     static let pageHandlerName = "brownbearPage"
 
-    /// The exhaustive allowlist a page-world caller may invoke: a script's OWN-DATA writes, `log`
-    /// (console.* forwarding, ungated like every script), and `GM_xmlhttpRequest`/`GM_abortRequest` — whose
-    /// response is delivered native→page (window.__bbPageXHR), never via a page-readable channel, and which
-    /// native still @connect-gates per the token. Anything not here (getScripts, injectPageWorld, cookies,
-    /// downloads, menus, tabs, and reads — served page-local) is rejected for page-world callers.
+    /// The exhaustive allowlist a page-world caller may invoke: a script's OWN-DATA writes, `log`, the
+    /// network `GM_xmlhttpRequest`/`GM_abortRequest` (response native→page via window.__bbPageXHR), and the
+    /// request→reply APIs `GM_cookie`/`GM_getTab`/`GM_saveTab`/`GM_listTabs` (their result is RETURNED through
+    /// the WKScriptMessageHandlerWithReply reply promise — never on the DOM — and `GM_cookie` is @connect-
+    /// gated per the token). Anything not here (getScripts, injectPageWorld, downloads, notifications, menus,
+    /// and reads — served page-local) is rejected for page-world callers.
     static let pageWorldWriteAPIs: Set<String> = [
         "GM_setValue", "GM_deleteValue", "GM_setValues", "GM_deleteValues", "GM_setClipboard", "GM_log", "log",
-        "GM_xmlhttpRequest", "GM_abortRequest"
+        "GM_xmlhttpRequest", "GM_abortRequest", "GM_cookie", "GM_getTab", "GM_saveTab", "GM_listTabs"
     ]
 
     // MARK: - GM_openInTab close notification

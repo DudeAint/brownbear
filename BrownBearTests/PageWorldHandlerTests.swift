@@ -19,21 +19,23 @@ import XCTest
 final class PageWorldHandlerTests: XCTestCase {
 
     func testAllowlistIsExactlyTheOwnDataWriteAPIs() {
-        // Own-data writes + console `log` + GM_xmlhttpRequest/GM_abortRequest (request via the pristine
-        // vault, response native→page via __bbPageXHR — never a page-readable channel — and @connect-gated).
+        // Own-data writes + console `log` + GM_xmlhttpRequest/GM_abortRequest (response native→page via
+        // __bbPageXHR) + the request→reply APIs GM_cookie/getTab/saveTab/listTabs (result returned through
+        // the reply promise, settled via the vault's pristine `.then` into the caller's closure — never DOM).
         XCTAssertEqual(ScriptMessageRouter.pageWorldWriteAPIs,
                        ["GM_setValue", "GM_deleteValue", "GM_setValues", "GM_deleteValues",
-                        "GM_setClipboard", "GM_log", "log", "GM_xmlhttpRequest", "GM_abortRequest"],
-                       "the page-world allowlist is the own-data writes + console log + GM_xmlhttpRequest")
+                        "GM_setClipboard", "GM_log", "log", "GM_xmlhttpRequest", "GM_abortRequest",
+                        "GM_cookie", "GM_getTab", "GM_saveTab", "GM_listTabs"],
+                       "the page-world allowlist is the own-data writes + log + xhr + cookie/tab request-reply")
     }
 
-    func testAllowlistExcludesPrivilegedAndCallbackStreamingAPIs() {
+    func testAllowlistExcludesPrivilegedAndStreamingCallbackAPIs() {
         // The escalation-sensitive APIs: token minting, code injection, session revival, and the
-        // callback-streaming/native-reaching ones not yet routed to the page world. NONE may be reachable.
+        // STREAMING-callback ones not yet routed to the page world. NONE may be reachable.
         let forbidden = [
             "getScripts", "injectPageWorld", "revalidateSessions",
-            "GM_cookie", "GM_download", "GM_notification",
-            "GM_openInTab", "GM_registerMenuCommand", "GM_getTab", "GM_listTabs",
+            "GM_download", "GM_notification", "GM_notificationClear",
+            "GM_openInTab", "GM_registerMenuCommand", "GM_unregisterMenuCommand",
             "fetchResource", "GM_downloadAbort", "GM_closeTab"
         ]
         for api in forbidden {

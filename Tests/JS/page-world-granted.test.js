@@ -160,9 +160,16 @@ async function bootAndInject(overrides) {
         });
     }
     {
-        const calls = await bootAndInject({ injectInto: "auto", grants: ["GM_cookie"] });
-        test("a still-callback-streaming grant (GM_cookie) keeps the script ISOLATED", () => {
+        const calls = await bootAndInject({ injectInto: "auto", grants: ["GM_download"] });
+        test("a still-callback-streaming grant (GM_download) keeps the script ISOLATED", () => {
             assert.strictEqual(injectCalls(calls).length, 0);
+        });
+    }
+    {
+        // Request→reply APIs (GM_cookie + GM_getTab/saveTab/listTabs) are now page-world-safe.
+        const calls = await bootAndInject({ injectInto: "auto", grants: ["GM_cookie", "GM_getTab", "GM_listTabs"] });
+        test("GM_cookie + GM_getTab/listTabs route to the page world (reply via the pristine vault .then)", () => {
+            assert.strictEqual(injectCalls(calls).length, 1);
         });
     }
     {

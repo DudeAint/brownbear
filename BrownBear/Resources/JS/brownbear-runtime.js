@@ -811,7 +811,11 @@
     // GM_xmlhttpRequest is page-world-safe HERE because its request goes through the pristine vault and
     // its response is delivered native→page (never via a page-readable DOM channel); native enforces the
     // token's @connect on every request. See pageWorldGMClient.GM_xmlhttpRequest + the vault's __bbPageXHR.
-    GM_xmlhttpRequest: 1
+    GM_xmlhttpRequest: 1,
+    // Request→reply APIs: native runs them (GM_cookie is @connect-gated) and returns the result through the
+    // WKScriptMessageHandlerWithReply reply promise, which the vault settles via a pristine `.then` into the
+    // caller's closure — never on the DOM. See pageWorldGMClient's GM_cookie/GM_getTab/etc + vault call.reply.
+    GM_cookie: 1, GM_getTab: 1, GM_saveTab: 1, GM_listTabs: 1
   };
   function allGrantsPageSafe(grants) {
     for (var i = 0; i < grants.length; i += 1) {
@@ -1042,6 +1046,64 @@
       return { _entry: entry, abort: function () { pageGM("GM_abortRequest", { requestId: requestId }); } };
     }
 
+    // --- GM_cookie / GM_getTab / GM_saveTab / GM_listTabs (request → REPLY) ----------------------
+    // One-shot APIs that return data (cookies are sensitive cross-origin data; tab objects the script's
+    // own). The request goes out via the vault; native runs it (@connect-gated for cookies) and RETURNS
+    // the result through the WKScriptMessageHandlerWithReply reply promise, which the vault settles via a
+    // pristine `.then` into the caller's closure — never on the DOM, never through a page-tamperable `.then`.
+    function pageReply(api, payload, cb, errcb) {
+      var vault = W.__bbPageGM;
+      if (vault && typeof vault.reply === "function") { vault.reply(cfg.token, api, payload, cb, errcb); }
+      else if (errcb) { errcb("page-world GM unavailable"); }
+    }
+    function cookieAction(action, details) {
+      return new _Promise(function (resolve, reject) {
+        pageReply("GM_cookie", { action: action, details: details || {} }, resolve, reject);
+      });
+    }
+    var GM_cookie = {
+      list: function (details, cb) {
+        var p = cookieAction("list", details);
+        if (typeof cb === "function") { p.then(function (r) { cb(r, undefined); }, function (e) { cb(undefined, String(e)); }); }
+        return p;
+      },
+      set: function (details, cb) {
+        var p = cookieAction("set", details);
+        if (typeof cb === "function") { p.then(function () { cb(undefined); }, function (e) { cb(String(e)); }); }
+        return p;
+      },
+      delete: function (details, cb) {
+        var p = cookieAction("delete", details);
+        if (typeof cb === "function") { p.then(function () { cb(undefined); }, function (e) { cb(String(e)); }); }
+        return p;
+      }
+    };
+    function GM_getTab(callback) {
+      pageReply("GM_getTab", {}, function (json) {
+        var obj = (typeof json === "string") ? (function () { try { return _JSON.parse(json) || {}; } catch (e) { return {}; } })() : (json || {});
+        if (typeof callback === "function") { callback(obj); }
+      }, function () { if (typeof callback === "function") { callback({}); } });
+    }
+    function GM_saveTab(obj, callback) {
+      var json;
+      try { json = _JSON.stringify(obj == null ? {} : obj); } catch (e) { json = "{}"; }
+      pageReply("GM_saveTab", { value: json },
+        function () { if (typeof callback === "function") { callback(); } },
+        function () { if (typeof callback === "function") { callback(); } });
+    }
+    function GM_listTabs(callback) {
+      pageReply("GM_listTabs", {}, function (map) {
+        var out = {};
+        if (map && typeof map === "object") {
+          _Object.keys(map).forEach(function (k) {
+            var parsed = (typeof map[k] === "string") ? (function () { try { return _JSON.parse(map[k]); } catch (e) { return {}; } })() : map[k];
+            out[k] = parsed || {};
+          });
+        }
+        if (typeof callback === "function") { callback(out); }
+      }, function () { if (typeof callback === "function") { callback({}); } });
+    }
+
     var GM_info = cfg.info || {};
     if (!GM_info.scriptHandler) { GM_info.scriptHandler = "BrownBear"; }
     (function deepFreeze(o) {
@@ -1075,7 +1137,11 @@
         var promise = new _Promise(function (resolve, reject) { handle._entry.resolve = resolve; handle._entry.reject = reject; });
         promise.abort = handle.abort;
         return promise;
-      }
+      },
+      cookie: GM_cookie,
+      getTab: function () { return new _Promise(function (resolve) { GM_getTab(resolve); }); },
+      saveTab: function (obj) { return new _Promise(function (resolve) { GM_saveTab(obj, function () { resolve(); }); }); },
+      listTabs: function () { return new _Promise(function (resolve) { GM_listTabs(resolve); }); }
     };
 
     var registry = {
@@ -1086,7 +1152,8 @@
       GM_removeValueChangeListener: GM_removeValueChangeListener,
       GM_getResourceText: GM_getResourceText, GM_getResourceURL: GM_getResourceURL,
       GM_getResourceUrl: GM_getResourceURL, GM_addStyle: GM_addStyle, GM_addElement: GM_addElement,
-      GM_xmlhttpRequest: GM_xmlhttpRequest, GM_info: GM_info
+      GM_xmlhttpRequest: GM_xmlhttpRequest, GM_cookie: GM_cookie, GM_getTab: GM_getTab,
+      GM_saveTab: GM_saveTab, GM_listTabs: GM_listTabs, GM_info: GM_info
     };
 
     // A console that writes to the page's real console AND forwards to the dashboard Logs via the vault,
