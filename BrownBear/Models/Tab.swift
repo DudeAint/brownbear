@@ -108,11 +108,7 @@ final class Tab {
         self.webView.allowsBackForwardNavigationGestures = true
         self.webView.isFindInteractionEnabled = true   // native Find-on-Page (iOS 16+)
         self.webView.scrollView.contentInsetAdjustmentBehavior = .never
-        // Opaque, like Safari/Chromium iOS. A non-opaque WKWebView (isOpaque=false) composites video
-        // through the transparency path, which can leave hardware-accelerated <video> stalled/black even
-        // though the poster renders and seeking force-decodes — exactly the "loads + seekable but frozen"
-        // symptom. backgroundColor still shows BEFORE the page paints (theme colour during load).
-        self.webView.isOpaque = true
+        self.webView.isOpaque = false
         self.webView.backgroundColor = BrownBearTheme.Palette.background
         // Pull-to-refresh on web content: reload on overscroll; ended when the load settles
         // (see recomputeState). Tab isn't an NSObject, so use a UIAction rather than target-action.
