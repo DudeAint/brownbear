@@ -126,4 +126,56 @@ final class UserScriptInstallerTests: XCTestCase {
         XCTAssertEqual(preview.metadata.name, "Test Importer")
         XCTAssertEqual(preview.sourceURL, fileURL)
     }
+
+    // MARK: - Install-time @require/@resource prefetch
+
+    func testAssetURLsUnionRequiresAndResources() throws {
+        let script = """
+        // ==UserScript==
+        // @name        Asset User
+        // @namespace   bb.test
+        // @match        *://*.example.com/*
+        // @require      https://cdn.test/jquery.js
+        // @require      https://cdn.test/lodash.js
+        // @resource     ICON https://cdn.test/icon.png
+        // @resource     CSS  https://cdn.test/style.css
+        // ==/UserScript==
+        void 0;
+        """
+        let meta = try ScriptMetadataParser().parse(script)
+        XCTAssertEqual(UserScriptInstaller.assetURLs(for: meta), [
+            "https://cdn.test/jquery.js", "https://cdn.test/lodash.js",
+            "https://cdn.test/icon.png", "https://cdn.test/style.css"
+        ], "asset URLs to prefetch = every @require URL plus every @resource target URL")
+    }
+
+    func testAssetURLsDeduplicatesAndHandlesNone() throws {
+        // A URL listed as both a @require and a @resource target is warmed once.
+        let shared = """
+        // ==UserScript==
+        // @name        Shared Asset
+        // @namespace   bb.test
+        // @match        *://*.example.com/*
+        // @require      https://cdn.test/shared.js
+        // @resource     LIB https://cdn.test/shared.js
+        // ==/UserScript==
+        void 0;
+        """
+        let metaShared = try ScriptMetadataParser().parse(shared)
+        XCTAssertEqual(UserScriptInstaller.assetURLs(for: metaShared), ["https://cdn.test/shared.js"],
+                       "a URL that is both a @require and a @resource target appears once")
+
+        // A script with no @require/@resource yields an empty set, so prefetch is a no-op.
+        let none = """
+        // ==UserScript==
+        // @name        No Assets
+        // @namespace   bb.test
+        // @match        *://*.example.com/*
+        // ==/UserScript==
+        void 0;
+        """
+        let metaNone = try ScriptMetadataParser().parse(none)
+        XCTAssertTrue(UserScriptInstaller.assetURLs(for: metaNone).isEmpty,
+                      "no @require/@resource → empty set (prefetch no-ops)")
+    }
 }
