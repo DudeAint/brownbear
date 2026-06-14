@@ -34,6 +34,35 @@ extension ScriptMessageRouter {
         BBEvaluateJavaScriptInFrame(webView, js, frame, world)
     }
 
+    // MARK: - GM_download cancellation
+
+    /// Register a cancel closure for an in-flight GM_download so GM_downloadAbort can stop it. Called by
+    /// handleDownload when the fetch starts; cleared by finishDownload. If an abort already raced ahead
+    /// (e.g. fired during the @connect prompt), cancel immediately rather than start.
+    func registerDownloadCancel(_ cancel: @escaping () -> Void, for requestID: String) {
+        if pendingDownloadAborts.remove(requestID) != nil {
+            cancel()
+            return
+        }
+        downloadCancels[requestID] = cancel
+    }
+
+    /// Drop a finished/failed download's cancel entry. Called when handleDownload settles.
+    func finishDownload(_ requestID: String) {
+        downloadCancels.removeValue(forKey: requestID)
+        pendingDownloadAborts.remove(requestID)
+    }
+
+    /// Cancel an in-flight download (GM_downloadAbort). If the fetch hasn't registered its canceller yet
+    /// (the abort raced its @connect prompt), remember it so registerDownloadCancel cancels on arrival.
+    func cancelDownload(requestID: String) {
+        if let cancel = downloadCancels.removeValue(forKey: requestID) {
+            cancel()
+        } else {
+            pendingDownloadAborts.insert(requestID)
+        }
+    }
+
     // MARK: - GM_notification
 
     /// GM_notification: post a local banner attributed to this script; route a tap back to its
