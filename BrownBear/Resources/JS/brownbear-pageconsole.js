@@ -116,9 +116,10 @@
   try {
     // Build marker — bumped each video-fix build so a pasted [media] log unambiguously identifies WHICH
     // build it came from (CI build+install lag had made every "still broken" report ambiguous about
-    // whether the latest fix was even installed). b2 = audio session activated WITHOUT mixWithOthers +
-    // re-activate on foreground + Keep-videos-inline default OFF.
-    var BB_BUILD = "b2";
+    // whether the latest fix was even installed). b3 = Chromium/Safari alignment: opaque WKWebView
+    // (isOpaque=true) + audio session category-only, activation left to WebKit (b2's force-setActive(true)
+    // left the clock frozen, so we stopped over-managing the session).
+    var BB_BUILD = "b3";
     var MEDIA_ERR = { 1: "ABORTED", 2: "NETWORK", 3: "DECODE", 4: "SRC_NOT_SUPPORTED" };
     var NET_STATE = ["EMPTY", "IDLE", "LOADING", "NO_SOURCE"];
     var seen = (typeof WeakMap === "function") ? new WeakMap() : null;

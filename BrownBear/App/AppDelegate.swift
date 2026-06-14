@@ -42,11 +42,11 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
 
     // MARK: Audio session
 
-    /// Configure + ACTIVATE the audio session so web video actually plays — see `AudioSessionManager`.
-    /// Re-run on every foreground from `SceneDelegate.sceneDidBecomeActive` too, since a session can be
-    /// deactivated while backgrounded.
+    /// Set the audio session category so web video is audible with the ringer silent — see
+    /// `AudioSessionManager`. We no longer ACTIVATE the session ourselves; WebKit owns activation
+    /// (Chromium/Safari behaviour).
     private func configureAudioSessionForVideo() {
-        AudioSessionManager.activateForVideo()
+        AudioSessionManager.configureForVideo()
     }
 
     // MARK: Appearance

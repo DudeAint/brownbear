@@ -14,13 +14,13 @@ import AVFoundation
 
 enum AudioSessionManager {
 
-    /// `.playback` (audible with the ringer silent, like Safari; keeps PiP/background audio alive with the
-    /// `audio` background mode). We do NOT pass `.mixWithOthers`: a mixable "secondary" session does not
-    /// reliably drive WebKit's media clock, so video can stay frozen. The cost is that activating takes
-    /// audio focus from another app — acceptable, and what Safari-like media playback does anyway.
-    static func activateForVideo() {
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback)
-        try? session.setActive(true)
+    /// Set ONLY the `.playback` category (audible with the ringer silent, like Safari; keeps PiP/background
+    /// audio alive with the `audio` background mode). We deliberately do NOT call `setActive(true)`:
+    /// Chromium iOS / Safari leave activation to WebKit, which activates its own media session at the moment
+    /// a video plays. The app force-activating the session ahead of time put it in a state WebKit's media
+    /// session manager didn't expect — and the clock stayed frozen even WITH the session active (verified on
+    /// the `build=b2` build). Letting WebKit own activation matches the engines where web video works.
+    static func configureForVideo() {
+        try? AVAudioSession.sharedInstance().setCategory(.playback)
     }
 }
