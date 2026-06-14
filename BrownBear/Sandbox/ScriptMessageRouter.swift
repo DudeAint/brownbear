@@ -102,8 +102,13 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
 
     /// In-flight GM_download fetches keyed by requestId, so GM_downloadAbort can cancel one mid-flight
     /// (parity with GM_abortRequest for XHR — Tampermonkey/Violentmonkey both return a handle whose
-    /// abort() stops the transfer). The closure cancels the underlying URLSession task.
-    private var downloadCancels: [String: () -> Void] = [:]
+    /// abort() stops the transfer). The closure cancels the underlying URLSession task. `internal` so the
+    /// download-cancellation helpers in +Privileged (next to handleDownload) can reach it.
+    var downloadCancels: [String: () -> Void] = [:]
+
+    /// requestIds aborted BEFORE handleDownload registered their cancel closure (the abort can race the
+    /// fetch's @connect prompt). registerDownloadCancel cancels immediately instead of starting it.
+    var pendingDownloadAborts: Set<String> = []
 
     /// Tabs opened via GM_openInTab, keyed by the per-call openId. The closure closes that tab so a
     /// script's handle.close() can dismiss it; the entry is dropped when the tab closes (any path).
@@ -288,7 +293,11 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
             let openerWebView = session.webView
             let openerFrame = session.frameInfo
             let world = contentWorld
-            let closer = host?.bridgeOpenInTab(url: url, active: active, onClose: { [weak self] in
+            // Capture the opener web view WEAKLY: the opened tab can outlive the opener, and a strong
+            // capture would pin the opener's WKWebView (and its web-content process) alive for the
+            // opened tab's whole lifetime. dispatchTabClosed already no-ops if the opener is gone.
+            let closer = host?.bridgeOpenInTab(url: url, active: active,
+                                               onClose: { [weak self, weak openerWebView] in
                 guard let self, let openId else { return }
                 self.openTabClosers.removeValue(forKey: openId)
                 self.dispatchTabClosed(openId: openId, webView: openerWebView, frame: openerFrame, world: world)
@@ -420,23 +429,8 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         }
     }
 
-    // MARK: - GM_download cancellation
-
-    /// Register a cancel closure for an in-flight GM_download so GM_downloadAbort can stop it. Called by
-    /// handleDownload (the +Privileged extension) when the fetch starts; cleared by finishDownload.
-    func registerDownloadCancel(_ cancel: @escaping () -> Void, for requestID: String) {
-        downloadCancels[requestID] = cancel
-    }
-
-    /// Drop a finished/failed download's cancel entry. Called when handleDownload settles.
-    func finishDownload(_ requestID: String) {
-        downloadCancels.removeValue(forKey: requestID)
-    }
-
-    /// Cancel an in-flight download (GM_downloadAbort). No-op if it already finished.
-    func cancelDownload(requestID: String) {
-        downloadCancels.removeValue(forKey: requestID)?()
-    }
+    // The GM_download cancellation helpers (registerDownloadCancel / finishDownload / cancelDownload)
+    // live in ScriptMessageRouter+Privileged.swift, next to handleDownload that drives them.
 
     // dispatchTabClosed (GM_openInTab handle close → opener frame) lives in
     // ScriptMessageRouter+Privileged.swift; it takes only primitives so it needs no private state.

@@ -489,7 +489,12 @@
       var handle = { closed: false, onclose: null,
         close: function () { call("GM_closeTab", { openId: openId }); } };
       openTabsById[openId] = handle;
-      call("GM_openInTab", { url: url, active: active, openId: openId });
+      // If native refuses to open the tab (e.g. invalid URL), there is no tab and thus no
+      // dispatchTabClosed for this openId — drop the handle so the registry doesn't leak.
+      call("GM_openInTab", { url: url, active: active, openId: openId }).catch(function () {
+        handle.closed = true;
+        delete openTabsById[openId];
+      });
       return handle;
     }
     function GM_log() {
@@ -711,7 +716,10 @@
           d.onload = function (p) { safeCall(userLoad, p); resolve(p); };
           d.onerror = function (p) { safeCall(userErr, p); reject(p); };
         });
-        GM_download(d);
+        // Expose the real abort() on the promise (TM/VM parity), mirroring GM.xmlHttpRequest above —
+        // otherwise GM.download(...).abort() is undefined and a script can't cancel the transfer.
+        var handle = GM_download(d);
+        if (handle && handle.abort) { promise.abort = handle.abort; }
         return promise;
       },
       registerMenuCommand: function (t, cb, o) { return GM_registerMenuCommand(t, cb, o); },

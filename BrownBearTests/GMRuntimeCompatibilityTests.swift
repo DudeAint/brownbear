@@ -347,6 +347,53 @@ final class GMRuntimeCompatibilityTests: XCTestCase {
                        "abort() targets the SAME requestId as the download (a real handle, not a no-op)")
     }
 
+    func testGMDownloadPromiseExposesAbort() throws {
+        // GM.download(...) returns a Promise; .abort() on it must cancel the SAME download (TM/VM
+        // parity) — it was silently dropped before. Mirrors the GM.xmlHttpRequest promise.abort.
+        let runtime = try runtimeSource()
+        guard let context = JSContext() else { throw XCTSkip("no JSContext") }
+        var downloadRequestId: String?
+        var abortRequestId: String?
+        let scriptData: [String: Any] = [
+            "token": "tok", "runAt": "document-start", "name": "dlpromise",
+            "grants": ["GM_download"], "grantNone": false, "noFrames": false, "injectInto": "auto",
+            "requires": [String](), "resources": [String: String](),
+            "source": "var p = GM.download({ url: 'https://x.test/f.bin', name: 'f' });"
+                + " GM_setValue('abortType', typeof p.abort); p.abort();",
+            "values": [String: String](), "info": ["scriptHandler": "BrownBear"]
+        ]
+        var store: [String: String] = [:]
+        let bridge: @convention(block) (String) -> String = { bodyJSON in
+            func reply(_ value: Any?) -> String {
+                let payload: [String: Any] = ["value": value ?? NSNull()]
+                let data = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data("{\"value\":null}".utf8)
+                return String(decoding: data, as: UTF8.self)
+            }
+            guard let data = bodyJSON.data(using: .utf8),
+                  let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let api = body["api"] as? String else { return "{\"value\":null}" }
+            let payload = body["payload"] as? [String: Any] ?? [:]
+            switch api {
+            case "getScripts": return reply([scriptData])
+            case "GM_download": downloadRequestId = payload["requestId"] as? String; return reply(nil)
+            case "GM_downloadAbort": abortRequestId = payload["requestId"] as? String; return reply(nil)
+            case "GM_setValue":
+                if let key = payload["key"] as? String, let value = payload["value"] as? String { store[key] = value }
+                return reply(nil)
+            default: return reply(nil)
+            }
+        }
+        installDOMStubs(context)
+        context.setObject(bridge, forKeyedSubscript: "__nativeBridge" as NSString)
+        context.evaluateScript(Self.bridgePrelude)
+        context.evaluateScript(runtime)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertEqual(store["abortType"], "\"function\"", "GM.download() promise exposes abort()")
+        XCTAssertNotNil(downloadRequestId)
+        XCTAssertEqual(abortRequestId, downloadRequestId, "promise.abort() cancels the same download")
+    }
+
     func testGMOpenInTabHandleClosesAndFiresOnClose() throws {
         // GM_openInTab returns a REAL handle (TM/VM parity): closed flips + onclose fires when native
         // reports the tab closed, and close() routes GM_closeTab with the same openId. (The native tab
