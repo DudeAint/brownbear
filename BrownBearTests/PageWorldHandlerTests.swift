@@ -19,20 +19,22 @@ import XCTest
 final class PageWorldHandlerTests: XCTestCase {
 
     func testAllowlistIsExactlyTheOwnDataWriteAPIs() {
+        // Own-data writes + console `log` + GM_xmlhttpRequest/GM_abortRequest (request via the pristine
+        // vault, response native→page via __bbPageXHR — never a page-readable channel — and @connect-gated).
         XCTAssertEqual(ScriptMessageRouter.pageWorldWriteAPIs,
                        ["GM_setValue", "GM_deleteValue", "GM_setValues", "GM_deleteValues",
-                        "GM_setClipboard", "GM_log", "log"],
-                       "the page-world allowlist must be exactly the own-data writes + console `log`")
+                        "GM_setClipboard", "GM_log", "log", "GM_xmlhttpRequest", "GM_abortRequest"],
+                       "the page-world allowlist is the own-data writes + console log + GM_xmlhttpRequest")
     }
 
-    func testAllowlistExcludesPrivilegedAndCrossOriginAPIs() {
-        // The escalation-sensitive APIs: token minting, code injection, cross-origin/native-reaching, and
-        // session revival. NONE may ever be reachable from the page world.
+    func testAllowlistExcludesPrivilegedAndCallbackStreamingAPIs() {
+        // The escalation-sensitive APIs: token minting, code injection, session revival, and the
+        // callback-streaming/native-reaching ones not yet routed to the page world. NONE may be reachable.
         let forbidden = [
             "getScripts", "injectPageWorld", "revalidateSessions",
-            "GM_xmlhttpRequest", "GM_cookie", "GM_download", "GM_notification",
+            "GM_cookie", "GM_download", "GM_notification",
             "GM_openInTab", "GM_registerMenuCommand", "GM_getTab", "GM_listTabs",
-            "fetchResource", "GM_abortRequest", "GM_downloadAbort", "GM_closeTab"
+            "fetchResource", "GM_downloadAbort", "GM_closeTab"
         ]
         for api in forbidden {
             XCTAssertFalse(ScriptMessageRouter.pageWorldWriteAPIs.contains(api),

@@ -203,9 +203,7 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         let frameInfo = message.frameInfo
         let frameURL = frameInfo.request.url
         let webView = message.webView
-        // Messages on the restricted page-world handler are gated to the own-data write allowlist. The
-        // name is an honest world discriminator: `pageHandlerName` is registered ONLY in WKContentWorld
-        // .page, so a page script cannot reach the full `brownbear` handler (it lives in the isolated world).
+        // `pageHandlerName` is registered ONLY in .page → its name is an honest world discriminator.
         let fromPageWorld = message.name == Self.pageHandlerName
 
         Task { @MainActor in
@@ -235,10 +233,9 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
                        frameInfo: WKFrameInfo?,
                        webView: WKWebView?,
                        fromPageWorld: Bool = false) async throws -> Any? {
-        // The SINGLE restriction point for the page-world handler: a page-world caller may invoke ONLY the
-        // own-data write allowlist. Runs BEFORE the tokenless getScripts/revalidate/abort + injectPageWorld
-        // paths, so a page script can never mint tokens, inject code, or reach a cross-origin API here.
-        // Allowlisted writes then flow through the same resolveSession + ensureGranted checks below.
+        // The SINGLE restriction point for the page-world handler — runs BEFORE the tokenless getScripts/
+        // revalidate/inject paths, so a page caller can ONLY reach the page-world allowlist (then the same
+        // resolveSession + ensureGranted checks below). A page has no valid token, so it gets nothing.
         if fromPageWorld, !Self.pageWorldWriteAPIs.contains(api) {
             throw BrownBearError.bridgeRejected("\(api) is not available from the page world")
         }
@@ -338,7 +335,7 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
             return NSNull()
 
         case "GM_xmlhttpRequest":
-            try await handleXHR(payload: payload, session: session, frameURL: frameURL, webView: webView)
+            try await handleXHR(payload: payload, session: session, frameURL: frameURL, webView: webView, fromPageWorld: fromPageWorld)
             return NSNull()
 
         case "GM_notification":
@@ -633,24 +630,27 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
     private func handleXHR(payload: [String: Any],
                            session: ScriptSession,
                            frameURL: URL?,
-                           webView: WKWebView?) async throws {
+                           webView: WKWebView?,
+                           fromPageWorld: Bool = false) async throws {
         guard let requestID = payload["requestId"] as? String,
               let request = payload["request"] as? [String: Any] else {
             throw BrownBearError.bridgeRejected("malformed xhr")
         }
         let declared = session.connects
         let pageHost = frameURL?.host
-        let world = contentWorld
+        // A page-world XHR streams to .page via the non-configurable window.__bbPageXHR (native→page eval).
+        let world = fromPageWorld ? WKContentWorld.page : contentWorld
         weak var weakWebView = webView
 
         let emit: (String, [String: Any]) -> Void = { eventType, eventPayload in
             // Network events arrive on a background queue; deliver to JS on main IN ORDER.
             let args: [Any] = [requestID, eventType, eventPayload]
             let json = JSONSanitize.string(args)   // NaN/Inf-safe (uncatchable Obj-C exception otherwise)
-            let js = "window.__brownbear && window.__brownbear.dispatchXHR.apply(null, \(json));"
+            let js = fromPageWorld
+                ? "window.__bbPageXHR && window.__bbPageXHR.apply(null, \(json));"
+                : "window.__brownbear && window.__brownbear.dispatchXHR.apply(null, \(json));"
+            // Via the ObjC shim (no Swift WebKit overlay, BBWebKitBridge.h); FIFO on main, in event order.
             DispatchQueue.main.async {
-                // Via the Objective-C shim so we don't link the Swift WebKit overlay (see
-                // BBWebKitBridge.h). Delivered FIFO on the main queue, in event order.
                 if let webView = weakWebView { BBEvaluateJavaScript(webView, js, world) }
             }
         }

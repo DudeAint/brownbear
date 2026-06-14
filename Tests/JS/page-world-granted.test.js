@@ -155,7 +155,13 @@ async function bootAndInject(overrides) {
     }
     {
         const calls = await bootAndInject({ injectInto: "auto", grants: ["GM_xmlhttpRequest"] });
-        test("a cross-origin grant (GM_xmlhttpRequest) keeps the script ISOLATED", () => {
+        test("GM_xmlhttpRequest now routes to the page world (request via vault, response native→page)", () => {
+            assert.strictEqual(injectCalls(calls).length, 1);
+        });
+    }
+    {
+        const calls = await bootAndInject({ injectInto: "auto", grants: ["GM_cookie"] });
+        test("a still-callback-streaming grant (GM_cookie) keeps the script ISOLATED", () => {
             assert.strictEqual(injectCalls(calls).length, 0);
         });
     }

@@ -785,16 +785,18 @@
   //                                         window and the page's own globals are visible (Violentmonkey
   //                                         parity — VM defaults granted scripts to the page world too).
   //                                         Path: buildGrantedPageWorldSource.
-  //   • @inject-into page / auto, GRANTED with any NON-page-safe grant (GM_xmlhttpRequest, cookies,
-  //     downloads, notifications, menu/tab, value-change listeners)
-  //                                       → the ISOLATED world (those carry cross-origin data or need
-  //                                         native→world callback streaming).
+  //   • @inject-into page / auto, GRANTED with any NON-page-safe grant (cookies, downloads,
+  //     notifications, menu/tab, value-change listeners)
+  //                                       → the ISOLATED world (those still need native→world callback
+  //                                         streaming that this PR doesn't yet route to the page world).
   //
-  // The page-world-SAFE set is the GM surface that touches ONLY the script's OWN data: value/resource
-  // READS (served synchronously from a cache pre-seeded into the page-world closure — classic sync
-  // GM_getValue parity), DOM-local GM_addStyle/GM_addElement (page document), and own-data WRITES
-  // (GM_setValue/deleteValue/setValues/deleteValues/GM_setClipboard/GM_log). Reads + DOM never leave the
-  // page. A write updates the page-local cache synchronously, then persists to native through the
+  // The page-world-SAFE set is the GM surface where nothing a hostile page could read or forge crosses a
+  // page-readable channel: value/resource READS (served synchronously from a cache pre-seeded into the
+  // page-world closure — classic sync GM_getValue parity), DOM-local GM_addStyle/GM_addElement (page
+  // document), own-data WRITES (GM_setValue/deleteValue/setValues/deleteValues/GM_setClipboard/GM_log), and
+  // GM_xmlhttpRequest (request via the pristine vault, response delivered native→page via __bbPageXHR — see
+  // below — with native @connect enforcement). Reads + DOM never leave the page. A write updates the
+  // page-local cache synchronously, then persists to native through the
   // document-start VAULT's `window.__bbPageGM(token, api, payload)` — a pristine, page-unreadable bridge
   // to the RESTRICTED native `brownbearPage` handler (own-data writes only; native re-checks the token's
   // grants). The token lives only in this page-world closure (never on the DOM) and the vault binding is
@@ -805,7 +807,11 @@
     GM_getValue: 1, GM_listValues: 1, GM_getValues: 1, GM_getResourceText: 1,
     GM_getResourceURL: 1, GM_getResourceUrl: 1, GM_addStyle: 1, GM_addElement: 1,
     GM_setValue: 1, GM_deleteValue: 1, GM_setValues: 1, GM_deleteValues: 1,
-    GM_setClipboard: 1, GM_log: 1
+    GM_setClipboard: 1, GM_log: 1,
+    // GM_xmlhttpRequest is page-world-safe HERE because its request goes through the pristine vault and
+    // its response is delivered native→page (never via a page-readable DOM channel); native enforces the
+    // token's @connect on every request. See pageWorldGMClient.GM_xmlhttpRequest + the vault's __bbPageXHR.
+    GM_xmlhttpRequest: 1
   };
   function allGrantsPageSafe(grants) {
     for (var i = 0; i < grants.length; i += 1) {
@@ -948,6 +954,94 @@
       return el;
     }
 
+    // --- GM_xmlhttpRequest (page world) ---------------------------------------------------------
+    // The request goes through the vault (__bbPageGM, non-configurable) to the restricted brownbearPage
+    // handler, which runs the real native request with @connect enforcement. Native streams events back by
+    // EVALUATING window.__bbPageXHR(id, type, payload) in this page world — a native→page eval, never a
+    // page-readable DOM channel, so a cross-origin response body cannot be snooped. The vault mints the
+    // request id with pristine crypto, so a hostile page can't predict it and pre-register a handler.
+    function xhrSafeCall(fn, arg) { if (typeof fn === "function") { try { fn(arg); } catch (e) { /* ignore */ } } }
+    function xhrB64ToBytes(b64) {
+      if (!W.atob) { return new W.Uint8Array(0); }
+      var bin = W.atob(b64), len = bin.length, bytes = new W.Uint8Array(len);
+      for (var i = 0; i < len; i += 1) { bytes[i] = bin.charCodeAt(i); }
+      return bytes;
+    }
+    function xhrBuildResponse(p, responseType) {
+      var resp = {
+        readyState: p.readyState != null ? p.readyState : 4, status: p.status || 0,
+        statusText: p.statusText || "", responseHeaders: p.responseHeaders || "", finalUrl: p.finalUrl || "",
+        responseText: p.responseText || "", response: null, responseXML: null, loaded: p.loaded || 0,
+        total: p.total || 0, lengthComputable: !!p.lengthComputable, context: p.context, error: p.error
+      };
+      var rt = responseType || "";
+      try {
+        if (p.isBase64 && (rt === "arraybuffer" || rt === "blob")) {
+          var bytes = xhrB64ToBytes(p.response || "");
+          resp.response = (rt === "blob" && typeof W.Blob === "function") ? new W.Blob([bytes]) : bytes.buffer;
+        } else if (rt === "json") {
+          resp.response = p.responseText ? _JSON.parse(p.responseText) : null;
+        } else if (rt === "document" && typeof W.DOMParser === "function") {
+          resp.response = new W.DOMParser().parseFromString(p.responseText || "", "text/html");
+          resp.responseXML = resp.response;
+        } else {
+          resp.response = p.responseText || "";
+        }
+      } catch (e) { resp.response = p.responseText || ""; }
+      return resp;
+    }
+    function xhrSerialize(details) {
+      var req = {
+        method: details.method || "GET", url: typeof details.url === "string" ? details.url : String(details.url),
+        headers: _Object.assign({}, details.headers || {}), responseType: details.responseType || "",
+        anonymous: !!details.anonymous
+      };
+      if (details.timeout) { req.timeout = details.timeout; }
+      function hasCT() { for (var k in req.headers) { if (k.toLowerCase() === "content-type") { return true; } } return false; }
+      var data = details.data;
+      if (typeof data === "string") { req.data = data; }
+      else if (data != null && typeof W.URLSearchParams === "function" && data instanceof W.URLSearchParams) {
+        req.data = data.toString();
+        if (!hasCT()) { req.headers["Content-Type"] = "application/x-www-form-urlencoded;charset=UTF-8"; }
+      } else if (data != null && typeof W.FormData === "function" && data instanceof W.FormData) {
+        var pairs = [];
+        data.forEach(function (v, k) { if (typeof v === "string") { pairs.push(encodeURIComponent(k) + "=" + encodeURIComponent(v)); } });
+        req.data = pairs.join("&");
+        if (!hasCT()) { req.headers["Content-Type"] = "application/x-www-form-urlencoded;charset=UTF-8"; }
+      } else if (data != null) {
+        if (data instanceof W.ArrayBuffer || (data.buffer instanceof W.ArrayBuffer)) { req.data = String(data); }
+        else { try { req.data = _JSON.stringify(data); } catch (e) { req.data = String(data); } }
+      }
+      return req;
+    }
+    function GM_xmlhttpRequest(details) {
+      details = details || {};
+      var entry = { resolve: null, reject: null };
+      var vault = W.__bbPageGM;
+      if (!vault || typeof vault.xhr !== "function") {
+        // No vault (handler unavailable) — fail closed with an onerror, like the isolated path's reject.
+        var er = { error: "BrownBear page-world XHR unavailable", readyState: 4 };
+        xhrSafeCall(details.onerror, er); return { abort: function () {} };
+      }
+      var requestId = vault.xhr(function (type, payload) {
+        var resp = xhrBuildResponse(payload || {}, details.responseType);
+        resp.context = details.context;
+        switch (type) {
+          case "loadstart": xhrSafeCall(details.onloadstart, resp); break;
+          case "progress": xhrSafeCall(details.onprogress, resp); break;
+          case "readystatechange": xhrSafeCall(details.onreadystatechange, resp); break;
+          case "load": xhrSafeCall(details.onload, resp); if (entry.resolve) { entry.resolve(resp); } break;
+          case "error": xhrSafeCall(details.onerror, resp); if (entry.reject) { entry.reject(resp); } break;
+          case "timeout": xhrSafeCall(details.ontimeout, resp); if (entry.reject) { entry.reject(resp); } break;
+          case "abort": xhrSafeCall(details.onabort, resp); if (entry.reject) { entry.reject(resp); } break;
+          case "loadend": xhrSafeCall(details.onloadend, resp); if (typeof vault.xhrDone === "function") { vault.xhrDone(requestId); } break;
+          default: break;
+        }
+      });
+      pageGM("GM_xmlhttpRequest", { requestId: requestId, request: xhrSerialize(details) });
+      return { _entry: entry, abort: function () { pageGM("GM_abortRequest", { requestId: requestId }); } };
+    }
+
     var GM_info = cfg.info || {};
     if (!GM_info.scriptHandler) { GM_info.scriptHandler = "BrownBear"; }
     (function deepFreeze(o) {
@@ -975,7 +1069,13 @@
       getResourceText: function (n) { return _Promise.resolve(GM_getResourceText(n)); },
       getResourceUrl: function (n) { return _Promise.resolve(GM_getResourceURL(n)); },
       getResourceURL: function (n) { return _Promise.resolve(GM_getResourceURL(n)); },
-      log: function () { GM_log.apply(null, arguments); return _Promise.resolve(); }
+      log: function () { GM_log.apply(null, arguments); return _Promise.resolve(); },
+      xmlHttpRequest: function (details) {
+        var handle = GM_xmlhttpRequest(details);
+        var promise = new _Promise(function (resolve, reject) { handle._entry.resolve = resolve; handle._entry.reject = reject; });
+        promise.abort = handle.abort;
+        return promise;
+      }
     };
 
     var registry = {
@@ -986,7 +1086,7 @@
       GM_removeValueChangeListener: GM_removeValueChangeListener,
       GM_getResourceText: GM_getResourceText, GM_getResourceURL: GM_getResourceURL,
       GM_getResourceUrl: GM_getResourceURL, GM_addStyle: GM_addStyle, GM_addElement: GM_addElement,
-      GM_info: GM_info
+      GM_xmlhttpRequest: GM_xmlhttpRequest, GM_info: GM_info
     };
 
     // A console that writes to the page's real console AND forwards to the dashboard Logs via the vault,
@@ -1118,15 +1218,16 @@
       grants.forEach(function (g) { grantSet[g] = true; });
 
       // An explicit @inject-into page that takes a GM grant outside the page-world-safe set — a
-      // cross-origin/streaming API (GM_xmlhttpRequest, cookies, downloads, notifications, menu/tab) —
-      // runs isolated; surface why, so an author knows unsafeWindow isn't the page window for this script
-      // (those need native→world callback streaming; a secure page-world path for them is coming).
+      // callback-streaming API (GM_cookie, GM_download, GM_notification, menu/tab, value-change
+      // listeners) — runs isolated; surface why, so an author knows unsafeWindow isn't the page window
+      // for this script (those still need native→world streaming; a page-world path for them is coming).
       if (!grantNone && data.injectInto === "page") {
         try {
           makeConsole(token).warn("[BrownBear] \"@inject-into page\" runs in the page world with @grant " +
             "none or page-world-safe grants (value reads/writes, GM_getResource*, GM_addStyle/" +
-            "GM_addElement, GM_setClipboard, GM_log). This script grants a cross-origin/streaming API " +
-            "(e.g. GM_xmlhttpRequest), so it runs in the isolated world (unsafeWindow is the isolated window).");
+            "GM_addElement, GM_setClipboard, GM_log, GM_xmlhttpRequest). This script grants a " +
+            "callback-streaming API (e.g. GM_cookie/GM_download/GM_notification), so it runs in the " +
+            "isolated world (unsafeWindow is the isolated window).");
         } catch (e) { /* logging must never break injection */ }
       }
 
