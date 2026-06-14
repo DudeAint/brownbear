@@ -108,10 +108,40 @@ final class UserScriptInstaller {
     /// Commit a preview: replace the matching installed script in place, or add a new one.
     @discardableResult
     func install(_ preview: Preview) async throws -> UserScript {
+        let installed: UserScript
         if let existingID = preview.existingID {
-            return try await scriptStore.updateSource(id: existingID, source: preview.source)
+            installed = try await scriptStore.updateSource(id: existingID, source: preview.source)
+        } else {
+            installed = try await scriptStore.add(source: preview.source)
         }
-        return try await scriptStore.add(source: preview.source)
+        // Warm the @require/@resource cache in the background so the FIRST page load already has the
+        // script's dependencies ready (and offline-safe) — Violentmonkey fetches @require at install.
+        // Best-effort and detached: a slow/failed download never blocks or fails the install; the
+        // runtime's normal fetch (which also warms the cache) is the fallback.
+        Self.prefetchAssets(for: installed.metadata)
+        return installed
+    }
+
+    /// Kick off a non-blocking warm-up of every declared @require/@resource into GMAssetCache, so a
+    /// freshly installed/updated script's dependencies are cached before its first matching navigation.
+    nonisolated static func prefetchAssets(for metadata: ScriptMetadata) {
+        let urls = assetURLs(for: metadata)
+        guard !urls.isEmpty else { return }
+        let connects = metadata.connects
+        Task.detached(priority: .utility) {
+            for string in urls {
+                guard let url = URL(string: string) else { continue }
+                _ = try? await ScriptMessageRouter.fetchAndCacheAsset(url, connects: connects)
+            }
+        }
+    }
+
+    /// Every asset URL to warm for a script: its @require URLs plus its @resource target URLs, de-duped
+    /// (a URL listed as both is fetched once). Pure (nonisolated, no IO) so it is unit-tested directly.
+    nonisolated static func assetURLs(for metadata: ScriptMetadata) -> Set<String> {
+        var urls = Set(metadata.requires)
+        urls.formUnion(metadata.resources.values)
+        return urls
     }
 
     /// An installed script with the same identity (@name + @namespace). Matching on both mirrors
