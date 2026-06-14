@@ -122,8 +122,10 @@ extension BrownBearBrowserViewController: UIScrollViewDelegate {
             // Otherwise slide the omnibox + toolbar fully below the screen (bar + toolbar + inset).
             bottomConstraint.constant = keyboardVisible ? -keyboardLiftOverlap : (hidden ? chromeHideDistance : 0)
             let revealStrip = hidden && !keyboardVisible
-            // Inset the page so its bottom rows scroll clear of the collapsed strip overlaying them.
-            applyCollapsedStripInset(reveal: revealStrip)
+            // No content inset: the content's bottom is now CLAMPED to the strip's top (+Layout), so the web
+            // view's viewport already ends above the strip — the page never extends under it, and a content
+            // inset on top of that would just leave a dead gap.
+            applyCollapsedStripInset(reveal: false)
             // Safari collapse morph: the chip settles in from a LARGER, slightly-raised state — the domain
             // "shrinking down" out of the full bar into the compact pill. Seeded here, settled to .identity.
             let chipCollapsing = CGAffineTransform(translationX: 0, y: -12).scaledBy(x: 1.22, y: 1.22)

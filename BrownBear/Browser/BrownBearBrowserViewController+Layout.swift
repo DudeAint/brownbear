@@ -146,10 +146,17 @@ extension BrownBearBrowserViewController {
         // the toolbar's bottom is the animatable anchor the bottom chrome slides on.
         let toolbarBottom = toolbar.bottomAnchor.constraint(equalTo: guide.bottomAnchor)
         bottomChromeBottomConstraint = toolbarBottom
+        // The content sits above the bar (== topChrome.top) — but only at high priority, so when the bar
+        // slides off-screen on scroll the content does NOT follow it down off the bottom. The required clamp
+        // below stops it at the collapsed strip's top instead: the web view's viewport ends there, so a page's
+        // fixed-bottom element (and 100vh) sit ABOVE the strip rather than dropping below the hidden area.
+        let contentAboveBar = contentContainer.bottomAnchor.constraint(equalTo: topChrome.topAnchor)
+        contentAboveBar.priority = UILayoutPriority(999)
         bottomPositionConstraints = [
             progressBar.topAnchor.constraint(equalTo: guide.topAnchor),
             contentContainer.topAnchor.constraint(equalTo: progressBar.bottomAnchor),
-            contentContainer.bottomAnchor.constraint(equalTo: topChrome.topAnchor),
+            contentAboveBar,
+            contentContainer.bottomAnchor.constraint(lessThanOrEqualTo: collapsedBottomBar.topAnchor),
             topChrome.bottomAnchor.constraint(equalTo: toolbar.topAnchor),
             toolbarBottom,
             omniboxSuggestions.topAnchor.constraint(equalTo: progressBar.bottomAnchor),
