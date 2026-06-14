@@ -37,8 +37,6 @@ final class TabSwipeSession {
     let rightTab: Tab?
     /// verticalUp: the page snapshot that shrinks toward its grid card as you drag up.
     let hero: UIView?
-    /// verticalUp: the darkening backdrop behind the shrinking page.
-    let dimView: UIView?
     /// verticalUp: the page image (same as `hero`'s) handed to the grid on release so it can finish the
     /// shrink into the active card's real frame.
     let pageImage: UIImage?
@@ -58,14 +56,13 @@ final class TabSwipeSession {
         self.leftTab = leftTab
         self.rightTab = rightTab
         self.hero = nil
-        self.dimView = nil
         self.pageImage = nil
         self.startFrame = .zero
         self.targetFrame = .zero
     }
 
     /// Interactive swipe-up → tab grid: the page snapshot shrinks from `startFrame` toward `targetFrame`.
-    init(hero: UIView, dimView: UIView, pageImage: UIImage?, startFrame: CGRect, targetFrame: CGRect) {
+    init(hero: UIView, pageImage: UIImage?, startFrame: CGRect, targetFrame: CGRect) {
         self.axis = .verticalUp
         self.contentHolder = nil
         self.barHolder = nil
@@ -73,7 +70,6 @@ final class TabSwipeSession {
         self.leftTab = nil
         self.rightTab = nil
         self.hero = hero
-        self.dimView = dimView
         self.pageImage = pageImage
         self.startFrame = startFrame
         self.targetFrame = targetFrame
@@ -162,7 +158,7 @@ extension BrownBearBrowserViewController: UIGestureRecognizerDelegate {
         let startFrame = contentContainer.frame
         guard startFrame.width > 0, let image = renderImage(of: contentContainer) else {
             // No snapshot — fall back to the plain (non-interactive) grid open on release.
-            tabSwipeSession = TabSwipeSession(hero: UIView(), dimView: UIView(), pageImage: nil,
+            tabSwipeSession = TabSwipeSession(hero: UIView(), pageImage: nil,
                                               startFrame: .zero, targetFrame: .zero)
             return
         }
@@ -172,16 +168,12 @@ extension BrownBearBrowserViewController: UIGestureRecognizerDelegate {
         hero.layer.cornerCurve = .continuous
         hero.clipsToBounds = true
 
-        let dim = UIView(frame: view.bounds)
-        dim.backgroundColor = .black
-        dim.alpha = 0
-        dim.isUserInteractionEnabled = false
-
-        view.addSubview(dim)
+        // No dimming backdrop — iOS Safari shrinks the page over the chrome without darkening it. The page
+        // (hero) shrinks over the content container's own background; the toolbar/address bar stay put.
         view.addSubview(hero)
         contentContainer.isHidden = true   // only the shrinking snapshot shows during the drag
 
-        tabSwipeSession = TabSwipeSession(hero: hero, dimView: dim, pageImage: image, startFrame: startFrame,
+        tabSwipeSession = TabSwipeSession(hero: hero, pageImage: image, startFrame: startFrame,
                                           targetFrame: tabGridCardTargetFrame(from: startFrame))
     }
 
@@ -197,19 +189,17 @@ extension BrownBearBrowserViewController: UIGestureRecognizerDelegate {
     }
 
     private func updateVerticalUp(translationY: CGFloat, session: TabSwipeSession) {
-        guard !session.committed, let hero = session.hero, let dim = session.dimView,
-              session.startFrame != .zero else { return }
+        guard !session.committed, let hero = session.hero, session.startFrame != .zero else { return }
         // The up-drag drives the shrink 0→1 over ~⅓ of the screen height; the page tracks the finger.
         let distance = max(view.bounds.height / 3, 1)
         let progress = min(max(-translationY / distance, 0), 1)
         hero.frame = interpolate(session.startFrame, session.targetFrame, progress)
         hero.layer.cornerRadius = progress * BrownBearTheme.Metrics.cellCornerRadius
-        dim.alpha = progress * 0.45
     }
 
     private func finishVerticalUp(translationY: CGFloat, velocityY: CGFloat, session: TabSwipeSession) {
         // Fallback (no snapshot): just open the grid on a committed up-swipe.
-        guard let hero = session.hero, let dim = session.dimView, session.startFrame != .zero else {
+        guard let hero = session.hero, session.startFrame != .zero else {
             if translationY < -tabSwipeUpThreshold || velocityY < -800 { toolbarDidTapTabs(toolbar) }
             clearTabSwipeSession(session)
             return
@@ -224,7 +214,6 @@ extension BrownBearBrowserViewController: UIGestureRecognizerDelegate {
             let releaseFrame = view.convert(hero.frame, to: nil)
             let corner = hero.layer.cornerRadius
             hero.removeFromSuperview()
-            dim.removeFromSuperview()
             contentContainer.isHidden = false
             if let image = session.pageImage {
                 presentTabGridWithoutAnimation { grid in
@@ -240,11 +229,9 @@ extension BrownBearBrowserViewController: UIGestureRecognizerDelegate {
                            options: [.curveEaseOut]) {
                 hero.frame = session.startFrame
                 hero.layer.cornerRadius = 0
-                dim.alpha = 0
             } completion: { [weak self] _ in
                 self?.contentContainer.isHidden = false
                 hero.removeFromSuperview()
-                dim.removeFromSuperview()
                 self?.clearTabSwipeSession(session)
             }
         }
