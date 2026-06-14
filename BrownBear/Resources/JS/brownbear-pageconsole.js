@@ -114,6 +114,11 @@
   // writes to the element — redefining a media accessor is what stalls WebKit video, so this cannot affect
   // playback. De-duped per (element, event) via a WeakMap so a stuck player can't flood the log.
   try {
+    // Build marker — bumped each video-fix build so a pasted [media] log unambiguously identifies WHICH
+    // build it came from (CI build+install lag had made every "still broken" report ambiguous about
+    // whether the latest fix was even installed). b2 = audio session activated WITHOUT mixWithOthers +
+    // re-activate on foreground + Keep-videos-inline default OFF.
+    var BB_BUILD = "b2";
     var MEDIA_ERR = { 1: "ABORTED", 2: "NETWORK", 3: "DECODE", 4: "SRC_NOT_SUPPORTED" };
     var NET_STATE = ["EMPTY", "IDLE", "LOADING", "NO_SOURCE"];
     var seen = (typeof WeakMap === "function") ? new WeakMap() : null;
@@ -153,6 +158,7 @@
         var dur = isFinite(media.duration) ? media.duration.toFixed(2) : "?";
         bits.push("t=" + (media.currentTime || 0).toFixed(2) + "/" + dur);
       } catch (e) {}
+      bits.push("build=" + BB_BUILD);
       return bits.join(" ");
     }
 
@@ -192,6 +198,7 @@
       // composite, and seeking still works because it force-decodes). hidden=true ⇒ a web-view hosting/
       // visibility bug; hidden=false ⇒ the audio-render pipeline.
       try { bits.push("hidden=" + document.hidden + " vis=" + document.visibilityState); } catch (e) {}
+      bits.push("build=" + BB_BUILD);
       return bits.join(" ");
     }
 
