@@ -312,65 +312,8 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         }
     }
 
-    /// Fetch a script asset (@require/@resource) natively. Returns text + base64 + mime so the
-    /// runtime can serve both GM_getResourceText and GM_getResourceURL (as a data: URL).
-    ///
-    /// Backed by `GMAssetCache`: a previously-fetched asset is revalidated with a conditional GET
-    /// (ETag / Last-Modified) so an unchanged require costs a 304 instead of a full download, and a
-    /// network failure falls back to the last good copy — so a library-dependent script keeps working
-    /// offline instead of silently loading an empty dependency. This is the Violentmonkey behavior
-    /// (fetch-once, cache, revalidate) ported to the bridge fetch path.
-    private func fetchAsset(_ url: URL, connects: [String]) async throws -> [String: Any] {
-        let cached = await GMAssetCache.shared.entry(for: url)
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 30
-        // We own the caching, so bypass URLSession's HTTP cache: this makes our conditional
-        // validators reach the origin and a real 304 surface (rather than URLSession transparently
-        // satisfying the request from its own store and hiding whether it changed).
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        if let etag = cached?.etag { request.setValue(etag, forHTTPHeaderField: "If-None-Match") }
-        if let lastModified = cached?.lastModified {
-            request.setValue(lastModified, forHTTPHeaderField: "If-Modified-Since")
-        }
-        // Re-validate @connect on every redirect hop so a 3xx can't bounce the @require/@resource fetch
-        // to an undeclared or internal host (SSRF). pageHost = the asset's own (declared) host, so the
-        // first hop is implicitly allowed; any cross-host redirect needs an @connect grant.
-        let redirectGuard = GMRedirectGuard(connects: connects, pageHost: url.host)
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request, delegate: redirectGuard)
-            let http = response as? HTTPURLResponse
-            // 304 Not Modified → the cached bytes are still current; serve them.
-            if http?.statusCode == 304, let cached {
-                return Self.assetPayload(data: cached.data, mime: cached.mimeType)
-            }
-            let mime = http?.value(forHTTPHeaderField: "Content-Type")
-                ?? cached?.mimeType ?? "application/octet-stream"
-            let entry = GMAssetCache.Entry(
-                data: data,
-                etag: http?.value(forHTTPHeaderField: "ETag"),
-                lastModified: http?.value(forHTTPHeaderField: "Last-Modified"),
-                mimeType: mime)
-            await GMAssetCache.shared.store(entry, for: url)
-            return Self.assetPayload(data: data, mime: mime)
-        } catch {
-            // Offline / transport failure: serve the last good copy if we have one, so a require that
-            // loaded once keeps the script working. Only propagate when there is nothing to fall back on.
-            if let cached {
-                return Self.assetPayload(data: cached.data, mime: cached.mimeType)
-            }
-            throw error
-        }
-    }
-
-    /// Shape fetched/cached asset bytes into the bridge payload the runtime expects (text + base64 +
-    /// mime), so GM_getResourceText and GM_getResourceURL (a data: URL) both resolve.
-    private static func assetPayload(data: Data, mime: String) -> [String: Any] {
-        return [
-            "text": String(data: data, encoding: .utf8) ?? "",
-            "base64": data.base64EncodedString(),
-            "mimeType": mime
-        ]
-    }
+    // fetchAsset / assetPayload / inlinedRequireCode / inlinedResourceMap live in
+    // ScriptMessageRouter+Assets.swift (the @require/@resource cache + inline path).
 
     // MARK: - Identity & grants
 
@@ -469,7 +412,15 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
             // Surface it as GM_info.isIncognito so privacy-aware scripts can adapt. Defaults to false
             // when the web view is gone (shouldn't happen during getScripts, but fail to non-private).
             let isIncognito = webView.map { $0.configuration.websiteDataStore.isPersistent == false } ?? false
-            result.append(Self.scriptPayload(script, token: token, values: values, isIncognito: isIncognito))
+            var payload = Self.scriptPayload(script, token: token, values: values, isIncognito: isIncognito)
+            // Inline any @require/@resource bodies already on disk (GMAssetCache) so the runtime runs
+            // the script WITHOUT a blocking fetchResource round-trip per asset at document-start. Cold
+            // assets are omitted and still fetched (and cached) by the runtime's normal path.
+            let inlinedRequires = await Self.inlinedRequireCode(meta.requires)
+            if !inlinedRequires.isEmpty { payload["inlinedRequires"] = inlinedRequires }
+            let inlinedResources = await Self.inlinedResourceMap(meta.resources)
+            if !inlinedResources.isEmpty { payload["inlinedResources"] = inlinedResources }
+            result.append(payload)
         }
         return result
     }
