@@ -111,6 +111,8 @@ extension BrownBearBrowserViewController: UIScrollViewDelegate {
             applyCollapsedStripInset(reveal: false)   // top mode never overlays the page bottom
             animateChrome(animated) {
                 self.omnibox.alpha = hidden ? 0 : 1   // clipped omnibox fades as the bar rolls away
+                self.omnibox.transform = .identity    // top mode collapses via height, not scale
+                self.toolbar.alpha = 1                // (reset, in case we just came from bottom mode)
                 self.collapsedBottomBar.alpha = 0     // the collapsed domain strip is a bottom-mode affordance
                 self.view.layoutIfNeeded()
             }
@@ -123,14 +125,19 @@ extension BrownBearBrowserViewController: UIScrollViewDelegate {
             let revealStrip = hidden && !keyboardVisible
             // Inset the page so its bottom rows scroll clear of the collapsed strip overlaying them.
             applyCollapsedStripInset(reveal: revealStrip)
-            // Seed a small upward offset so the lock + domain TRAVEL DOWN into place with the collapsing
-            // bar, rather than just popping in. The animation below settles them to rest (.identity).
-            if revealStrip { collapsedHostStack.transform = CGAffineTransform(translationX: 0, y: -10) }
+            // Safari collapse morph: the chip settles in from a LARGER, slightly-raised state — the domain
+            // "shrinking down" out of the full bar into the compact pill. Seeded here, settled to .identity.
+            let chipCollapsing = CGAffineTransform(translationX: 0, y: -12).scaledBy(x: 1.22, y: 1.22)
+            if revealStrip { collapsedHostStack.transform = chipCollapsing }
             animateChrome(animated) {
-                // Fade the Safari-style collapsed domain strip in as the bar slides away (never while
-                // editing), sliding the lock + domain down to their resting spot.
+                // The address field squishes down + fades as the bar slides to the bottom, and the toolbar
+                // buttons drop/fade away — so the full bar visibly condenses into the chip rather than just
+                // sliding off and swapping for a separate strip.
+                self.omnibox.transform = revealStrip ? CGAffineTransform(scaleX: 0.92, y: 0.82) : .identity
+                self.omnibox.alpha = revealStrip ? 0 : 1
+                self.toolbar.alpha = revealStrip ? 0 : 1
                 self.collapsedBottomBar.alpha = revealStrip ? 1 : 0
-                self.collapsedHostStack.transform = revealStrip ? .identity : CGAffineTransform(translationX: 0, y: -10)
+                self.collapsedHostStack.transform = revealStrip ? .identity : chipCollapsing
                 self.view.layoutIfNeeded()
             }
         }
