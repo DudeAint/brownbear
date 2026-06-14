@@ -469,9 +469,46 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
             // Surface it as GM_info.isIncognito so privacy-aware scripts can adapt. Defaults to false
             // when the web view is gone (shouldn't happen during getScripts, but fail to non-private).
             let isIncognito = webView.map { $0.configuration.websiteDataStore.isPersistent == false } ?? false
-            result.append(Self.scriptPayload(script, token: token, values: values, isIncognito: isIncognito))
+            var payload = Self.scriptPayload(script, token: token, values: values, isIncognito: isIncognito)
+            // Inline any @require/@resource bodies already on disk (GMAssetCache) so the runtime runs
+            // the script WITHOUT a blocking fetchResource round-trip per asset at document-start. Cold
+            // assets are omitted and still fetched (and cached) by the runtime's normal path.
+            let inlinedRequires = await Self.inlinedRequireCode(meta.requires)
+            if !inlinedRequires.isEmpty { payload["inlinedRequires"] = inlinedRequires }
+            let inlinedResources = await Self.inlinedResourceMap(meta.resources)
+            if !inlinedResources.isEmpty { payload["inlinedResources"] = inlinedResources }
+            result.append(payload)
         }
         return result
+    }
+
+    /// @require bodies already cached on disk, keyed by their URL, so the runtime can run the script
+    /// without a blocking fetch per require at document-start. Uncached URLs are omitted (the runtime
+    /// fetches them the normal way, which warms the cache for next time).
+    private static func inlinedRequireCode(_ requires: [String]) async -> [String: String] {
+        var out: [String: String] = [:]
+        for urlString in requires {
+            guard let url = URL(string: urlString),
+                  let entry = await GMAssetCache.shared.entry(for: url),
+                  let text = String(data: entry.data, encoding: .utf8) else { continue }
+            out[urlString] = text
+        }
+        return out
+    }
+
+    /// @resource bodies already cached on disk, keyed by resource NAME and shaped as the runtime's
+    /// `{ text, url }` (url = a data: URL), so GM_getResourceText/GM_getResourceURL resolve without a
+    /// fetch. Uncached resources are omitted and fetched the normal way.
+    private static func inlinedResourceMap(_ resources: [String: String]) async -> [String: [String: String]] {
+        var out: [String: [String: String]] = [:]
+        for (name, urlString) in resources {
+            guard let url = URL(string: urlString),
+                  let entry = await GMAssetCache.shared.entry(for: url) else { continue }
+            let text = String(data: entry.data, encoding: .utf8) ?? ""
+            let dataURL = "data:" + entry.mimeType + ";base64," + entry.data.base64EncodedString()
+            out[name] = ["text": text, "url": dataURL]
+        }
+        return out
     }
 
     /// The host/app version surfaced as `GM_info.version` (the userscript-manager version, NOT the
