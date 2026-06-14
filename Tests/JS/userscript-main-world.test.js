@@ -138,18 +138,18 @@ function injectCalls(calls) { return calls.filter((c) => c.api === "injectPageWo
 
     // --- has a NON-page-safe grant → ISOLATED world regardless of inject-into ---------------------
     // (Scripts whose grants are all page-world-SAFE — including GM_xmlhttpRequest — now run in the page
-    //  world; see page-world-granted.test.js. A still-callback-streaming grant like GM_cookie keeps the
+    //  world; see page-world-granted.test.js. A still-callback-streaming grant like GM_download keeps the
     //  script isolated, because its native→world callbacks aren't yet routed to the page world.)
     {
         const calls = await boot([scriptData({ injectInto: "auto", grantNone: false,
-                                               grants: ["GM_cookie"] })]);
-        test("a GM_cookie-granted script (auto) runs isolated — its callbacks aren't page-routed yet", () => {
+                                               grants: ["GM_download"] })]);
+        test("a GM_download-granted script (auto) runs isolated — its callbacks aren't page-routed yet", () => {
             assert.strictEqual(injectCalls(calls).length, 0);
         });
     }
     {
         const calls = await boot([scriptData({ injectInto: "page", grantNone: false,
-                                               grants: ["GM_cookie"] })]);
+                                               grants: ["GM_download"] })]);
         const logs = calls.filter((c) => c.api === "log");
         test("@inject-into page WITH a callback-streaming grant stays isolated", () => {
             assert.strictEqual(injectCalls(calls).length, 0, "no page inject");
@@ -161,7 +161,7 @@ function injectCalls(calls) { return calls.filter((c) => c.api === "injectPageWo
         });
     }
 
-    // --- mixed batch: grant-none page-world + a GM_cookie script that stays isolated --------------
+    // --- mixed batch: grant-none page-world + a GM_download script that stays isolated --------------
     {
         const calls = await boot([
             scriptData({ name: "iso", injectInto: "content", grantNone: true,
@@ -169,10 +169,10 @@ function injectCalls(calls) { return calls.filter((c) => c.api === "injectPageWo
             scriptData({ name: "pageworld", injectInto: "auto", grantNone: true,
                          source: "window.__pw = 2;" }),
             scriptData({ name: "granted", injectInto: "auto", grantNone: false,
-                         grants: ["GM_cookie"], source: "window.__g = 3;" })
+                         grants: ["GM_download"], source: "window.__g = 3;" })
         ]);
         const injects = injectCalls(calls);
-        test("mixed batch: the grant-none page-world script is page-injected, the GM_cookie one stays isolated", () => {
+        test("mixed batch: the grant-none page-world script is page-injected, the GM_download one stays isolated", () => {
             assert.strictEqual(injects.length, 1, "only one injectPageWorld");
             assert.ok(injects[0].payload.code.indexOf("window.__pw = 2;") !== -1,
                       "it is the @grant-none/auto script");

@@ -40,6 +40,11 @@
   // response. (The handler registry lives in this closure; the page can't read it.)
   var _cryptoRand = (W.crypto && typeof W.crypto.getRandomValues === "function") ? W.crypto.getRandomValues.bind(W.crypto) : null;
   var _U8 = W.Uint8Array;
+  // Pristine Promise#then, captured pre-page — used to settle a request/REPLY (GM_cookie/getTab/listTabs)
+  // result WITHOUT going through the live Promise.prototype.then a hostile page may have replaced. The
+  // reply value (e.g. cookies) reaches only the caller's closure callback; it is never on the DOM and never
+  // passes through a page-tamperable `.then`.
+  var _then = (W.Promise && W.Promise.prototype && typeof W.Promise.prototype.then === "function") ? W.Promise.prototype.then : null;
   var _idSeq = 0;
   function mintId() {
     _idSeq += 1;
@@ -78,7 +83,19 @@
     return id;
   };
   call.xhrDone = function (id) { delete xhrHandlers[id]; };
-  Object.freeze(call);   // lock call.xhr/xhrDone so a later page script can't wrap or replace them
+  // Request/REPLY (GM_cookie/getTab/saveTab/listTabs): post and settle the native reply to the caller's
+  // closure callback via the PRISTINE `.then`. The reply value materializes only in the caller's closure —
+  // not on any DOM/global, and not through a page-tamperable `.then` — so even sensitive cookie data is
+  // confidential. (More private than the streaming channel, whose dispatcher is a reachable global.)
+  call.reply = function (token, api, payload, cb, errcb) {
+    var p;
+    try { p = call(token, api, payload); } catch (e) { if (errcb) { errcb(String(e)); } return; }
+    if (!p || !_then) { if (errcb) { errcb("page-world reply channel unavailable"); } return; }
+    try {
+      _then.call(p, function (v) { if (cb) { cb(v); } }, function (e) { if (errcb) { errcb(String(e)); } });
+    } catch (e) { if (errcb) { errcb(String(e)); } }
+  };
+  Object.freeze(call);   // lock call.xhr/xhrDone/reply so a later page script can't wrap or replace them
 
   // Native streams XHR lifecycle events into the page world by evaluating window.__bbPageXHR(id, type,
   // payload) — a native→page eval, NOT a DOM channel, so a cross-origin response body never transits a
