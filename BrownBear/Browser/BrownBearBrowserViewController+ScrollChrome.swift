@@ -112,7 +112,6 @@ extension BrownBearBrowserViewController: UIScrollViewDelegate {
             animateChrome(animated) {
                 self.omnibox.alpha = hidden ? 0 : 1   // clipped omnibox fades as the bar rolls away
                 self.omnibox.transform = .identity    // top mode collapses via height, not scale
-                self.toolbar.alpha = 1                // (reset, in case we just came from bottom mode)
                 self.collapsedBottomBar.alpha = 0     // the collapsed domain strip is a bottom-mode affordance
                 self.view.layoutIfNeeded()
             }
@@ -130,12 +129,11 @@ extension BrownBearBrowserViewController: UIScrollViewDelegate {
             let chipCollapsing = CGAffineTransform(translationX: 0, y: -12).scaledBy(x: 1.22, y: 1.22)
             if revealStrip { collapsedHostStack.transform = chipCollapsing }
             animateChrome(animated) {
-                // The address field squishes down + fades as the bar slides to the bottom, and the toolbar
-                // buttons drop/fade away — so the full bar visibly condenses into the chip rather than just
-                // sliding off and swapping for a separate strip.
+                // The address field squishes down as the bar slides (drops) to the bottom, and the domain
+                // settles into the chip. The bar stays OPAQUE the whole way — NOT alpha-faded: fading the
+                // omnibox/toolbar revealed the page's grey backing (Palette.background, 0xF2F2F7) behind the
+                // bar, which read as a grey flash on collapse. Sliding opaque keeps it clean.
                 self.omnibox.transform = revealStrip ? CGAffineTransform(scaleX: 0.92, y: 0.82) : .identity
-                self.omnibox.alpha = revealStrip ? 0 : 1
-                self.toolbar.alpha = revealStrip ? 0 : 1
                 self.collapsedBottomBar.alpha = revealStrip ? 1 : 0
                 self.collapsedHostStack.transform = revealStrip ? .identity : chipCollapsing
                 self.view.layoutIfNeeded()

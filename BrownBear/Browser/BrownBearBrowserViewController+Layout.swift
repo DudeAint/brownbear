@@ -184,7 +184,6 @@ extension BrownBearBrowserViewController {
         chromeHidden = false
         omnibox.alpha = 1
         omnibox.transform = .identity   // clear any in-flight collapse squish
-        toolbar.alpha = 1               // clear any in-flight collapse fade
         collapsedBottomBar.alpha = 0   // fully shown in the new layout → no collapsed strip
         collapsedHostStack.transform = .identity   // clear any in-flight slide-down offset
         bottomChromeBottomConstraint?.constant = keyboardVisible ? -keyboardLiftOverlap : 0
