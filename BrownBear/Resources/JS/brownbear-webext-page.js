@@ -1043,8 +1043,15 @@
     DomainType: { FIRST_PARTY: 'firstParty', THIRD_PARTY: 'thirdParty' },
     UnsupportedRegexReason: { SYNTAX_ERROR: 'syntaxError', MEMORY_LIMIT_EXCEEDED: 'memoryLimitExceeded' },
     DYNAMIC_RULESET_ID: '_dynamic', SESSION_RULESET_ID: '_session',
+    // Chrome 121+ split the combined dynamic/session cap into per-bucket limits, and adblockers
+    // (uBO/uBO Lite, AdGuard, Ghostery) read these directly to chunk their rule writes. These are
+    // namespace constants Chrome exposes in EVERY extension context (popup/options too), so the page
+    // shim must match the background shim or a `rules.length < MAX_…` guard compares against undefined.
+    MAX_NUMBER_OF_DYNAMIC_RULES: 30000, MAX_NUMBER_OF_UNSAFE_DYNAMIC_RULES: 5000,
+    MAX_NUMBER_OF_SESSION_RULES: 5000, MAX_NUMBER_OF_UNSAFE_SESSION_RULES: 5000,
     MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES: 30000, MAX_NUMBER_OF_REGEX_RULES: 1000,
     MAX_NUMBER_OF_STATIC_RULESETS: 100, MAX_NUMBER_OF_ENABLED_STATIC_RULESETS: 50,
+    GUARANTEED_MINIMUM_STATIC_RULES: 30000,
     GETMATCHEDRULES_QUOTA_INTERVAL: 600, MAX_GETMATCHEDRULES_CALLS_PER_INTERVAL: 20,
     updateDynamicRules: function (options, callback) {
       return settle(bridge("dnr.updateDynamicRules", options || {}).then(unwrap).then(function () { return undefined; }), callback);
@@ -1072,11 +1079,7 @@
     },
     setExtensionActionOptions: function (options, callback) { return settle(_Promise.resolve(undefined), callback); },
     isRegexSupported: function (regexOptions, callback) { return settle(_Promise.resolve({ isSupported: true }), callback); },
-    onRuleMatchedDebug: { addListener: function () {}, removeListener: function () {}, hasListener: function () { return false; } },
-    MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES: 30000,
-    MAX_NUMBER_OF_ENABLED_STATIC_RULESETS: 50,
-    DYNAMIC_RULESET_ID: "_dynamic",
-    SESSION_RULESET_ID: "_session"
+    onRuleMatchedDebug: { addListener: function () {}, removeListener: function () {}, hasListener: function () { return false; } }
   };
   var userScripts = {
     register: function (scripts, callback) {
