@@ -21,6 +21,19 @@ final class UserScriptWorldTests: XCTestCase {
         XCTAssertEqual(s.effectiveWorld(registered: ""), "")
     }
 
+    func testManagerInfraBrokerKeepsMainEvenWhenSandboxed() {
+        // The manager's OWN MAIN-world infra broker (e.g. ScriptCat's "scriptcat-inject") must reach the
+        // page MAIN world to set the manager up — like Violentmonkey's broker — so it is exempt from the
+        // isolated remap, while the user's own page-world scripts stay sandboxed (immune to page breakage).
+        let s = UserScriptWorld.userScript
+        XCTAssertEqual(s.effectiveWorld(registered: "MAIN", scriptId: "scriptcat-inject"), "MAIN",
+                       "the manager's infra broker keeps the page MAIN world")
+        XCTAssertEqual(s.effectiveWorld(registered: "MAIN", scriptId: "user-uuid-123"), "USER_SCRIPT",
+                       "a user's own page-world script is still pulled into the sandbox")
+        // A non-MAIN broker registration is untouched; the exemption only matters for MAIN.
+        XCTAssertEqual(s.effectiveWorld(registered: "USER_SCRIPT", scriptId: "scriptcat-inject"), "USER_SCRIPT")
+    }
+
     func testMainForcesEverythingToMain() {
         let s = UserScriptWorld.main
         XCTAssertEqual(s.effectiveWorld(registered: "USER_SCRIPT"), "MAIN")

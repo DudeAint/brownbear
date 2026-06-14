@@ -894,7 +894,8 @@ extension WebExtensionMessageRouter {
                     // userScript managers (ScriptCat, Tampermonkey) register page-world scripts as MAIN.
                     // The user's "Userscript world" setting can override this — default is the isolated
                     // user-script world, so a userscript is immune to a page breaking its own globals.
-                    "world": AppSettings.userScriptWorld.effectiveWorld(registered: userScript.world),
+                    "world": AppSettings.userScriptWorld.effectiveWorld(registered: userScript.world,
+                                                                       scriptId: userScript.id),
                     "userScriptMessaging": userScriptMessaging,
                     "manifestJSON": ext.manifestJSON,
                     "baseURL": ext.baseURLString,
