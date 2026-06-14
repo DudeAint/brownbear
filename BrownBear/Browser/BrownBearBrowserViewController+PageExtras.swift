@@ -46,6 +46,33 @@ extension BrownBearBrowserViewController {
         present(DownloadsView.makeHostingController(), animated: true)
     }
 
+    /// Brief confirmation that the active page was saved to the reading list (the ••• menu has already
+    /// dismissed, so without this the action gives no feedback). Same capsule treatment as the download toast.
+    func presentReadingListToast() {
+        var config = UIButton.Configuration.filled()
+        config.baseBackgroundColor = BrownBearTheme.Palette.accent
+        config.baseForegroundColor = .white
+        config.cornerStyle = .capsule
+        config.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)
+        var title = AttributeContainer()
+        title.font = .systemFont(ofSize: 13, weight: .semibold)
+        config.attributedTitle = AttributedString("Added to Reading List", attributes: title)
+        let toast = UIButton(configuration: config)
+        toast.isUserInteractionEnabled = false
+        toast.alpha = 0
+        toast.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(toast)
+        NSLayoutConstraint.activate([
+            toast.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            toast.bottomAnchor.constraint(equalTo: toolbar.topAnchor, constant: -12)
+        ])
+        UIView.animate(withDuration: 0.25, animations: { toast.alpha = 1 }) { _ in
+            UIView.animate(withDuration: 0.3, delay: 1.6, options: []) {
+                toast.alpha = 0
+            } completion: { _ in toast.removeFromSuperview() }
+        }
+    }
+
     /// The bundled clean-room article extractor, loaded once.
     private static let readabilityScript: String = {
         guard let url = Bundle.main.url(forResource: "brownbear-readability", withExtension: "js")

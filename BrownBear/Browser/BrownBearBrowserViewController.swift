@@ -622,6 +622,20 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
         }), animated: true)
     }
 
+    private func presentReadingList() {
+        present(ReadingListView.makeHostingController(onOpen: { [weak self] url in
+            self?.openBookmark(url)
+        }), animated: true)
+    }
+
+    /// Save the active tab's page to the reading list, with a brief confirmation toast.
+    private func addActiveTabToReadingList() {
+        guard let tab = tabManager.activeTab, let url = tab.state.url else { return }
+        let title = tab.state.displayTitle
+        Task { await BrownBearServices.shared.readingListStore.add(title: title, url: url) }
+        presentReadingListToast()
+    }
+
     // Not `private`: the omnibox "see all" suggestions footer (in +Omnibox.swift) opens History too.
     func presentHistory() {
         present(HistoryView.makeHostingController(onOpen: { [weak self] url in
@@ -755,6 +769,10 @@ extension BrownBearBrowserViewController: BrowserMenuDelegate {
             toggleBookmarkForActiveTab()
         case .bookmarks:
             presentBookmarks()
+        case .addToReadingList:
+            addActiveTabToReadingList()
+        case .readingList:
+            presentReadingList()
         case .history:
             presentHistory()
         case .downloads:

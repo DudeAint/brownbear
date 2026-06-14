@@ -22,6 +22,8 @@ enum BrowserMenuAction {
     case installUserscript
     case toggleBookmark
     case bookmarks
+    case addToReadingList
+    case readingList
     case history
     case downloads
     case settings
@@ -217,6 +219,7 @@ final class BrowserMenuViewController: UIViewController {
             rows.append(makeRow(icon: state.isBookmarked ? "star.fill" : "star",
                                 title: state.isBookmarked ? "Remove Bookmark" : "Add Bookmark",
                                 action: .toggleBookmark))
+            rows.append(makeRow(icon: "eyeglasses", title: "Add to Reading List", action: .addToReadingList))
             rows.append(makeRow(icon: "link", title: "Copy Link", action: .copyLink))
             rows.append(makeRow(icon: "doc.plaintext", title: "Reader", action: .reader))
             rows.append(makeRow(icon: "textformat.size", title: "Zoom (\(state.zoomPercent)%)", action: .zoom))
@@ -239,6 +242,7 @@ final class BrowserMenuViewController: UIViewController {
             makeRow(icon: "scroll", title: "Userscripts", action: .userscripts),
             makeRow(icon: "puzzlepiece.extension", title: "Extensions", action: .extensions),
             makeRow(icon: "bookmark", title: "Bookmarks", action: .bookmarks),
+            makeRow(icon: "eyeglasses", title: "Reading List", action: .readingList),
             makeRow(icon: "clock.arrow.circlepath", title: "History", action: .history),
             makeRow(icon: "arrow.down.circle", title: "Downloads", action: .downloads),
             makeRow(icon: "gearshape", title: "Settings", action: .settings)
