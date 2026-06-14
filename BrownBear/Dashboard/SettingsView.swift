@@ -20,6 +20,8 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Key.userScriptWorld) private var userScriptWorldRaw = UserScriptWorld.userScript.rawValue
     @AppStorage(AppSettings.Key.keepVideosInline) private var keepVideosInline = true
     @AppStorage(AppSettings.Key.theme) private var themeRaw = AppTheme.system.rawValue
+    @AppStorage(AppSettings.Key.tabSwitcherStyle) private var tabSwitcherStyleRaw = TabSwitcherStyle.grid.rawValue
+    @AppStorage(AppSettings.Key.verticalTabsSide) private var verticalTabsSideRaw = VerticalTabsSide.right.rawValue
     @State private var isClearing = false
     @State private var didClear = false
     @State private var confirmingClear = false
@@ -59,6 +61,23 @@ struct SettingsView: View {
                     .tint(BBTheme.Color.toggleOn)
                 Text("The address bar slides away as you scroll down a page and returns when you scroll up. "
                     + "Set it at the top or, Safari-style, at the bottom (where the toolbar hides with it).")
+                    .font(.caption)
+                    .foregroundStyle(BBTheme.Color.textSecondary)
+
+                Picker("Tab switcher", selection: $tabSwitcherStyleRaw) {
+                    ForEach(TabSwitcherStyle.allCases) { style in
+                        Text(style.title).tag(style.rawValue)
+                    }
+                }
+                if tabSwitcherStyleRaw == TabSwitcherStyle.vertical.rawValue {
+                    Picker("Panel side", selection: $verticalTabsSideRaw) {
+                        ForEach(VerticalTabsSide.allCases) { side in
+                            Text(side.title).tag(side.rawValue)
+                        }
+                    }
+                }
+                Text("Grid shows tabs as snapshot cards. Vertical list is an Orion/Kagi-style panel that "
+                    + "slides in over the page and lists your tabs as rows — pick which edge it opens from.")
                     .font(.caption)
                     .foregroundStyle(BBTheme.Color.textSecondary)
             }

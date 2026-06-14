@@ -100,6 +100,22 @@ enum AppTheme: String, CaseIterable, Identifiable {
     var family: ThemeFamily { self == .ogBrown ? .og : .clean }
 }
 
+/// How the tab switcher is presented. `grid` is the default Chromium-style two-column snapshot grid;
+/// `vertical` is the Orion/Kagi-style slide-out side panel that lists tabs as rows over the page.
+enum TabSwitcherStyle: String, CaseIterable, Identifiable {
+    case grid, vertical
+    var id: String { rawValue }
+    var title: String { self == .grid ? "Grid" : "Vertical list" }
+}
+
+/// Which edge the vertical-tabs panel slides out from. Orion defaults to the right; left is offered for
+/// left-handed reach / personal taste. Only consulted when `tabSwitcherStyle == .vertical`.
+enum VerticalTabsSide: String, CaseIterable, Identifiable {
+    case right, left
+    var id: String { rawValue }
+    var title: String { self == .right ? "Right" : "Left" }
+}
+
 /// What happens when a `.user.js` is opened and one or more installed userscript-manager extensions
 /// (ScriptCat, Violentmonkey, Tampermonkey, …) claim it. The user keeps the power: BrownBear's own
 /// installer and any extension are both available.
@@ -194,6 +210,22 @@ enum AppSettings {
         static let keepVideosInline = "bbKeepVideosInline"
         static let theme = "bbTheme"
         static let extensionsToolbarHidden = "bbExtensionsToolbarHidden"
+        static let tabSwitcherStyle = "bbTabSwitcherStyle"
+        static let verticalTabsSide = "bbVerticalTabsSide"
+    }
+
+    /// How the tab switcher is shown. Default `.grid` (the existing snapshot grid). The Settings picker
+    /// uses @AppStorage on the same key, so the next tap of the tab button reads the new choice.
+    static var tabSwitcherStyle: TabSwitcherStyle {
+        get { TabSwitcherStyle(rawValue: UserDefaults.standard.string(forKey: Key.tabSwitcherStyle) ?? "") ?? .grid }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.tabSwitcherStyle) }
+    }
+
+    /// Which edge the vertical-tabs panel slides from. Default `.right` (Orion's default). Read each time
+    /// the panel is presented, so flipping it in Settings takes effect on the next open.
+    static var verticalTabsSide: VerticalTabsSide {
+        get { VerticalTabsSide(rawValue: UserDefaults.standard.string(forKey: Key.verticalTabsSide) ?? "") ?? .right }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.verticalTabsSide) }
     }
 
     /// The app's appearance. Default `.system` (clean Light/Dark following the OS); the Settings picker
