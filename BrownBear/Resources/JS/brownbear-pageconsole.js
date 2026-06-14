@@ -187,6 +187,11 @@
         if (media.videoWidth != null) { bits.push("size=" + media.videoWidth + "x" + media.videoHeight); }
       } catch (e) {}
       try { if (media.error) { bits.push("error=" + (MEDIA_ERR[media.error.code] || media.error.code)); } } catch (e) {}
+      // Page visibility — the decisive fork for a fully-loaded video that won't advance: if WebKit thinks
+      // the page is HIDDEN it suspends the media clock (the rendered frame you see is just a stale
+      // composite, and seeking still works because it force-decodes). hidden=true ⇒ a web-view hosting/
+      // visibility bug; hidden=false ⇒ the audio-render pipeline.
+      try { bits.push("hidden=" + document.hidden + " vis=" + document.visibilityState); } catch (e) {}
       return bits.join(" ");
     }
 
