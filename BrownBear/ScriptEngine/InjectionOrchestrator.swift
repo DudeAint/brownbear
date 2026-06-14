@@ -46,6 +46,7 @@ final class InjectionOrchestrator {
     private let network = GMNetworkService()
     private var extensionsObserver: NSObjectProtocol?
     private var blocklistObserver: NSObjectProtocol?
+    private var valueChangeObserver: NSObjectProtocol?
 
     /// Forwarded to the router so GM_openInTab can reach the browser.
     weak var bridgeHost: ScriptBridgeHost? {
@@ -98,6 +99,7 @@ final class InjectionOrchestrator {
     deinit {
         if let extensionsObserver { NotificationCenter.default.removeObserver(extensionsObserver) }
         if let blocklistObserver { NotificationCenter.default.removeObserver(blocklistObserver) }
+        if let valueChangeObserver { NotificationCenter.default.removeObserver(valueChangeObserver) }
     }
 
     // MARK: - Setup
@@ -250,6 +252,20 @@ final class InjectionOrchestrator {
             Task { @MainActor in self?.refreshExtensionContentBlockers() }
         }
         ContentBlocklistUpdater.shared.updateIfStale()
+
+        // A GM value changed outside a live page (background/@crontab runner or dashboard editor): push
+        // it into every open page running that script so GM_getValue / GM_addValueChangeListener stay in
+        // sync without a reload (TM/VM cross-context parity). Decoded off the notification before the hop
+        // so the @MainActor closure captures only Sendable data.
+        valueChangeObserver = NotificationCenter.default.addObserver(
+            forName: .brownBearGMValueChangedExternally, object: nil, queue: .main) { [weak self] note in
+            guard let broadcast = note.object as? GMValueChangeBroadcast else { return }
+            Task { @MainActor in
+                self?.router.broadcastExternalValueChanges(
+                    scriptID: broadcast.scriptID,
+                    changes: broadcast.changes.map { (key: $0.key, old: $0.old, new: $0.new) })
+            }
+        }
     }
 
     /// chrome.tabs.sendMessage delivery. Hands off to the shared extension content router, which owns
@@ -295,13 +311,6 @@ final class InjectionOrchestrator {
     /// Drop a closed tab's per-tab GM tab objects (GM_getTab/GM_saveTab), so they don't outlive it.
     func forgetUserScriptTabObjects(tabID: Int) {
         router.forgetTabObjects(tabID: tabID)
-    }
-
-    /// Propagate a GM value change made outside a live page — the background/@crontab runner or the
-    /// dashboard value editor — into every open page running that script, so GM_getValue and
-    /// GM_addValueChangeListener stay in sync without a reload (TM/VM cross-context parity).
-    func broadcastGMValueChange(scriptID: UUID, changes: [(key: String, old: String?, new: String?)]) {
-        router.broadcastExternalValueChanges(scriptID: scriptID, changes: changes)
     }
 
     /// Recompile and reinstall every enabled extension's content-blocking rules. Fire-and-forget;

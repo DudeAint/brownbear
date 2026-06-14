@@ -66,24 +66,23 @@ final class HeadlessScriptRunner: @unchecked Sendable {
         for key in scratch.touched {
             if let value = scratch.cache[key] { sets[key] = value } else { deletes.append(key) }
         }
-        var changes: [(key: String, old: String?, new: String?)] = []
+        var changes: [GMValueChange] = []
         if !sets.isEmpty {
             let olds = await valueStore.setValuesReturningOld(scriptID: script.id, entries: sets)
-            changes += olds.map { (key: $0.key, old: $0.old, new: sets[$0.key]) }
+            changes += olds.map { GMValueChange(key: $0.key, old: $0.old, new: sets[$0.key]) }
         }
         if !deletes.isEmpty {
             let olds = await valueStore.deleteValuesReturningOld(scriptID: script.id, keys: deletes)
-            changes += olds.map { (key: $0.key, old: $0.old, new: String?.none) }
+            changes += olds.map { GMValueChange(key: $0.key, old: $0.old, new: nil) }
         }
         // If a page is open running this script (a foreground @crontab run), live-sync the changed
         // values into it so GM_getValue / value-change listeners see them without a reload (TM/VM
-        // parity). A no-op when no page runs the script (the usual background case).
+        // parity). The foreground InjectionOrchestrator observes this; nothing observes it with the app
+        // closed (the usual background case), so it's a no-op exactly when there's no page to update.
         if !changes.isEmpty {
-            let scriptID = script.id
-            let payload = changes
-            await MainActor.run {
-                InjectionOrchestrator.shared.broadcastGMValueChange(scriptID: scriptID, changes: payload)
-            }
+            NotificationCenter.default.post(
+                name: .brownBearGMValueChangedExternally,
+                object: GMValueChangeBroadcast(scriptID: script.id, changes: changes))
         }
 
         return (outcome, scratch.logs)

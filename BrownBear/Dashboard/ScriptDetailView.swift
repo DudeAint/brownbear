@@ -273,9 +273,12 @@ struct ScriptDetailView: View {
         Task { @MainActor in
             let old = await valueStore.setValueReturningOld(scriptID: script.id, key: key, jsonValue: trimmed)
             // Push the edit into any open page running this script (live GM_getValue / value-change
-            // listeners), so a dashboard edit doesn't require a reload — TM/VM cross-context parity.
-            InjectionOrchestrator.shared.broadcastGMValueChange(
-                scriptID: script.id, changes: [(key: key, old: old, new: trimmed)])
+            // listeners), so a dashboard edit doesn't require a reload — TM/VM cross-context parity. The
+            // foreground InjectionOrchestrator observes this and broadcasts; a no-op if no page is open.
+            NotificationCenter.default.post(
+                name: .brownBearGMValueChangedExternally,
+                object: GMValueChangeBroadcast(scriptID: script.id,
+                                               changes: [GMValueChange(key: key, old: old, new: trimmed)]))
             await reloadStoredValues()
         }
     }
