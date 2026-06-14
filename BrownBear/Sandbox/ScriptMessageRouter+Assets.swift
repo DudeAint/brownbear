@@ -36,9 +36,17 @@ extension ScriptMessageRouter {
     /// runtime's run-time fetch and the installer's install-time prefetch (so both revalidate and
     /// fall back to cache identically). `nonisolated static` — pure, uses no actor state — so the
     /// installer can warm the cache off the main actor.
-    nonisolated static func fetchAndCacheAsset(_ url: URL, connects: [String]) async throws
+    nonisolated static func fetchAndCacheAsset(_ url: URL, connects: [String],
+                                               cache: GMAssetCache = .shared,
+                                               session: URLSession = .shared) async throws
         -> (data: Data, mime: String) {
-        let cached = await GMAssetCache.shared.entry(for: url)
+        // http(s) ONLY. A @require/@resource that names file:// (or any other scheme) must never be
+        // fetched: at install the prefetch would otherwise read a LOCAL FILE off disk, and at runtime
+        // it is an SSRF vector. This single chokepoint protects BOTH the prefetch and the bridge fetch.
+        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
+            throw BrownBearError.bridgeRejected("@require/@resource must be an http(s) URL")
+        }
+        let cached = await cache.entry(for: url)
         var request = URLRequest(url: url)
         request.timeoutInterval = 30
         // We own the caching, so bypass URLSession's HTTP cache: this makes our conditional
@@ -54,11 +62,21 @@ extension ScriptMessageRouter {
         // first hop is implicitly allowed; any cross-host redirect needs an @connect grant.
         let redirectGuard = GMRedirectGuard(connects: connects, pageHost: url.host)
         do {
-            let (data, response) = try await URLSession.shared.data(for: request, delegate: redirectGuard)
+            let (data, response) = try await session.data(for: request, delegate: redirectGuard)
             let http = response as? HTTPURLResponse
             // 304 Not Modified → the cached bytes are still current; serve them.
             if http?.statusCode == 304, let cached {
                 return (cached.data, cached.mimeType)
+            }
+            // ONLY a real 2xx body is a valid asset. A 4xx/5xx error page, or a 3xx redirect body that
+            // GMRedirectGuard blocked (completionHandler(nil) COMPLETES the task with the 3xx response —
+            // it does not throw), must NOT overwrite the last-good cache nor be served as the script's
+            // dependency: otherwise one transient CDN hiccup permanently poisons a working @require
+            // (offline fallback + every later navigation would inject the error/redirect HTML as code).
+            guard let status = http?.statusCode, (200...299).contains(status) else {
+                if let cached { return (cached.data, cached.mimeType) }
+                let code = http?.statusCode ?? -1
+                throw BrownBearError.bridgeRejected("asset fetch returned HTTP \(code) for \(url.absoluteString)")
             }
             let mime = http?.value(forHTTPHeaderField: "Content-Type")
                 ?? cached?.mimeType ?? "application/octet-stream"
@@ -67,7 +85,7 @@ extension ScriptMessageRouter {
                 etag: http?.value(forHTTPHeaderField: "ETag"),
                 lastModified: http?.value(forHTTPHeaderField: "Last-Modified"),
                 mimeType: mime)
-            await GMAssetCache.shared.store(entry, for: url)
+            await cache.store(entry, for: url)
             return (data, mime)
         } catch {
             // Offline / transport failure: serve the last good copy if we have one, so a require that
