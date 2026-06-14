@@ -53,6 +53,17 @@ enum OmniboxSuggestionEngine {
         let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return [] }
 
+        // Typing a leading bang ("!", "!y") → list the matching quick-search engines instead of the usual
+        // rows, so the shortcuts are discoverable. Choosing one opens that engine's home.
+        if query.hasPrefix("!"), !query.contains(" ") {
+            let bangRows = SearchBangRegistry.matchingPrefix(String(query.dropFirst()))
+                .compactMap { bang -> OmniboxSuggestion? in
+                    guard let home = URL(string: bang.home) else { return nil }
+                    return OmniboxSuggestion(kind: .search, title: "!\(bang.key)", subtitle: bang.name, url: home)
+                }
+            if !bangRows.isEmpty { return bangRows }
+        }
+
         var suggestions: [OmniboxSuggestion] = []
 
         // Default action — mirrors what pressing Enter will do, so the highlighted top row is honest.
@@ -63,8 +74,10 @@ enum OmniboxSuggestionEngine {
                 suggestions.append(OmniboxSuggestion(kind: .url, title: query,
                                                      subtitle: url.host, url: url))
             case .search(let url):
+                // Name the engine when a bang routes the search ("Search YouTube"), else the generic label.
+                let label = SearchBangRegistry.match(in: query).map { "Search \($0.bang.name)" } ?? "Search the web"
                 suggestions.append(OmniboxSuggestion(kind: .search, title: query,
-                                                     subtitle: "Search the web", url: url))
+                                                     subtitle: label, url: url))
             }
         }
 

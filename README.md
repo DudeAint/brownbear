@@ -53,6 +53,7 @@ transparently, with every scheduled job visible and stoppable.
 - Multi-tab architecture on `WKWebView`
 - **Square tab grid** with live snapshots
 - Custom **rounded omnibox** — URL/search detection, TLS indicator
+- **Quick-search bangs** — `!yt cats`, `swift docs !gh` jump straight to YouTube, GitHub, Wikipedia, …
 - Full back / forward / refresh / stop
 - Precise lifecycle via `WKNavigationDelegate`
 
