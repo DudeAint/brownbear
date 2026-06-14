@@ -50,6 +50,46 @@ final class HeadlessScriptRunnerTests: XCTestCase {
         XCTAssertEqual(stored, "2", "GM value snapshot should carry across background runs")
     }
 
+    func testBulkValueAPIsAndChangeListener() async throws {
+        let (runner, valueStore) = makeRunner()
+        let bulk = """
+        // ==UserScript==
+        // @name        Bulk
+        // @crontab     * * * * *
+        // ==/UserScript==
+        GM_setValues({ a: 1, b: 'two' });
+        var got = GM_getValues(['a', 'b', 'missing']);
+        GM_setValue('gotA', got.a);
+        GM_setValue('gotB', got.b);
+        GM_setValue('gotMissingType', typeof got.missing);
+        var fires = 0;
+        var id = GM_addValueChangeListener('watched', function (key, oldV, newV) { fires = newV; });
+        GM_setValue('watched', 42);
+        GM_setValue('firesSeen', fires);
+        GM_removeValueChangeListener(id);
+        GM_setValue('watched', 99);
+        GM_setValue('firesAfterRemove', fires);
+        GM_deleteValues(['a']);
+        GM_setValue('aAfterDelete', GM_getValue('a', 'gone'));
+        """
+        let userScript = try UserScript.make(from: bulk)
+        let (outcome, _) = await runner.run(userScript, deadline: Date().addingTimeInterval(10))
+        XCTAssertTrue(outcome.succeeded, "error: \(outcome.error ?? "")")
+        let id = userScript.id
+        let gotA = await valueStore.value(scriptID: id, key: "gotA")
+        let gotB = await valueStore.value(scriptID: id, key: "gotB")
+        let gotMissing = await valueStore.value(scriptID: id, key: "gotMissingType")
+        let firesSeen = await valueStore.value(scriptID: id, key: "firesSeen")
+        let firesAfterRemove = await valueStore.value(scriptID: id, key: "firesAfterRemove")
+        let aAfterDelete = await valueStore.value(scriptID: id, key: "aAfterDelete")
+        XCTAssertEqual(gotA, "1", "GM_getValues read a bulk-set numeric value")
+        XCTAssertEqual(gotB, "\"two\"", "GM_getValues read a bulk-set string value")
+        XCTAssertEqual(gotMissing, "\"undefined\"", "a missing key is absent from GM_getValues")
+        XCTAssertEqual(firesSeen, "42", "GM_addValueChangeListener fired with the new value")
+        XCTAssertEqual(firesAfterRemove, "42", "a removed listener no longer fires (stays at 42)")
+        XCTAssertEqual(aAfterDelete, "\"gone\"", "GM_deleteValues removed the key")
+    }
+
     func testSurfacesJSError() async throws {
         let (runner, _) = makeRunner()
         let bad = """
