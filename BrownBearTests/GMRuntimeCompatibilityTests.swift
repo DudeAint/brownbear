@@ -303,6 +303,50 @@ final class GMRuntimeCompatibilityTests: XCTestCase {
         XCTAssertEqual(store["evaled"], "7")
     }
 
+    func testGMDownloadReturnsRealAbortHandle() throws {
+        // GM_download(...).abort() must cancel the SAME native request: the abort call carries the
+        // requestId from the original download (parity with TM/VM). The native cancellation itself is
+        // integration-tested; here we prove the JS handle is real and correlated, not a no-op stub.
+        let runtime = try runtimeSource()
+        guard let context = JSContext() else { throw XCTSkip("no JSContext") }
+
+        var downloadRequestId: String?
+        var abortRequestId: String?
+        let scriptData: [String: Any] = [
+            "token": "tok", "runAt": "document-start", "name": "dltest",
+            "grants": ["GM_download"], "grantNone": false, "noFrames": false, "injectInto": "auto",
+            "requires": [String](), "resources": [String: String](),
+            "source": "var h = GM_download({ url: 'https://x.test/f.bin', name: 'f' }); h.abort();",
+            "values": [String: String](), "info": ["scriptHandler": "BrownBear"]
+        ]
+        let bridge: @convention(block) (String) -> String = { bodyJSON in
+            func reply(_ value: Any?) -> String {
+                let payload: [String: Any] = ["value": value ?? NSNull()]
+                let data = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data("{\"value\":null}".utf8)
+                return String(decoding: data, as: UTF8.self)
+            }
+            guard let data = bodyJSON.data(using: .utf8),
+                  let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let api = body["api"] as? String else { return "{\"value\":null}" }
+            let payload = body["payload"] as? [String: Any] ?? [:]
+            switch api {
+            case "getScripts": return reply([scriptData])
+            case "GM_download": downloadRequestId = payload["requestId"] as? String; return reply(nil)
+            case "GM_downloadAbort": abortRequestId = payload["requestId"] as? String; return reply(nil)
+            default: return reply(nil)
+            }
+        }
+        installDOMStubs(context)
+        context.setObject(bridge, forKeyedSubscript: "__nativeBridge" as NSString)
+        context.evaluateScript(Self.bridgePrelude)
+        context.evaluateScript(runtime)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertNotNil(downloadRequestId, "GM_download issued a native request")
+        XCTAssertEqual(abortRequestId, downloadRequestId,
+                       "abort() targets the SAME requestId as the download (a real handle, not a no-op)")
+    }
+
     func testObfuscatedBase64EvalScript() throws {
         // "Obfuscated": base64-encoded GM_setValue call, decoded and eval'd at runtime.
         // base64 of: GM_setValue('b64', 123);

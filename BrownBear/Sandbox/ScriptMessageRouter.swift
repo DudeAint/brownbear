@@ -97,6 +97,11 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
     /// same undeclared host shows ONE alert and the rest await its decision instead of stacking.
     private var pendingGrantDecisions: [String: Task<Bool, Never>] = [:]
 
+    /// In-flight GM_download fetches keyed by requestId, so GM_downloadAbort can cancel one mid-flight
+    /// (parity with GM_abortRequest for XHR — Tampermonkey/Violentmonkey both return a handle whose
+    /// abort() stops the transfer). The closure cancels the underlying URLSession task.
+    private var downloadCancels: [String: () -> Void] = [:]
+
     /// Cap a single forwarded log line so a runaway script can't bloat the on-disk log.
     private static let maxLogMessageLength = 8192
 
@@ -224,6 +229,11 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         // GM_abortRequest only cancels the caller's own request by id — safe without a grant.
         if api == "GM_abortRequest" {
             if let requestID = payload["requestId"] as? String { network.abort(requestID: requestID) }
+            return NSNull()
+        }
+
+        if api == "GM_downloadAbort" {
+            if let requestID = payload["requestId"] as? String { cancelDownload(requestID: requestID) }
             return NSNull()
         }
 
@@ -373,6 +383,24 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         guard !session.grants.isDisjoint(with: acceptable) else {
             throw BrownBearError.bridgeRejected("\(api) is not granted")
         }
+    }
+
+    // MARK: - GM_download cancellation
+
+    /// Register a cancel closure for an in-flight GM_download so GM_downloadAbort can stop it. Called by
+    /// handleDownload (the +Privileged extension) when the fetch starts; cleared by finishDownload.
+    func registerDownloadCancel(_ cancel: @escaping () -> Void, for requestID: String) {
+        downloadCancels[requestID] = cancel
+    }
+
+    /// Drop a finished/failed download's cancel entry. Called when handleDownload settles.
+    func finishDownload(_ requestID: String) {
+        downloadCancels.removeValue(forKey: requestID)
+    }
+
+    /// Cancel an in-flight download (GM_downloadAbort). No-op if it already finished.
+    func cancelDownload(requestID: String) {
+        downloadCancels.removeValue(forKey: requestID)?()
     }
 
     // MARK: - getScripts

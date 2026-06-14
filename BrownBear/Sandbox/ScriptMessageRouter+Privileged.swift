@@ -159,8 +159,15 @@ extension ScriptMessageRouter {
         for (field, value) in headers { request.setValue(value, forHTTPHeaderField: field) }
         if let timeoutMs, timeoutMs > 0 { request.timeoutInterval = timeoutMs / 1000.0 }
 
+        // Run the fetch in a child task so GM_downloadAbort can cancel it mid-transfer (the async
+        // URLSession call is cancellation-aware → throws URLError.cancelled). Registered by requestId
+        // and cleared when we settle, exactly like network.abort does for GM_xmlhttpRequest.
+        let fetchTask = Task { try await Self.downloadSession.data(for: request) }
+        registerDownloadCancel({ fetchTask.cancel() }, for: requestID)
+        defer { finishDownload(requestID) }
+
         do {
-            let (data, response) = try await Self.downloadSession.data(for: request)
+            let (data, response) = try await fetchTask.value
             // Re-validate the FINAL host (after any redirects URLSession followed) against @connect; a
             // declared host must not be able to bounce the fetch to an undeclared one.
             let finalHost = (response.url ?? url).host
@@ -182,7 +189,9 @@ extension ScriptMessageRouter {
                 "localPath": localURL?.path ?? ""
             ])
         } catch let error as NSError {
-            if error.code == NSURLErrorTimedOut {
+            if error.code == NSURLErrorCancelled {
+                emit("abort", ["error": "aborted"])
+            } else if error.code == NSURLErrorTimedOut {
                 emit("timeout", ["error": error.localizedDescription])
             } else {
                 emit("error", ["error": error.localizedDescription])
