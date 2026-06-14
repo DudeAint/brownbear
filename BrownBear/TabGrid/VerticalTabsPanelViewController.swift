@@ -37,7 +37,10 @@ final class VerticalTabsPanelViewController: UIViewController {
     private let searchBar = UISearchBar()
     private let tableView = UITableView(frame: .zero, style: .plain)
     private let backButton = UIButton(type: .system)
-    private let countLabel = UILabel()
+    /// Footer center: the group switcher (Orion's "19 Tabs ⌄"). Shows the current filter + a menu of
+    /// All Tabs / each group / New Group. `groupFilter` nil = every tab in the mode; otherwise one group.
+    private let groupButton = UIButton(type: .system)
+    private var groupFilter: UUID?
     private let newTabButton = UIButton(type: .system)
 
     init(tabManager: TabManager, showingPrivate: Bool, side: VerticalTabsSide) {
@@ -53,10 +56,12 @@ final class VerticalTabsPanelViewController: UIViewController {
 
     // MARK: - Tab sets
 
-    /// The current mode's tabs, pinned-first (stable sort preserves order within each group).
+    /// The current mode's tabs, pinned-first (stable sort preserves order within each group). When a group
+    /// filter is active (normal mode only — private tabs are never grouped), only that group's tabs show.
     private var displayedTabs: [Tab] {
         let set = showingPrivate ? tabManager.privateTabs : tabManager.normalTabs
-        return set.sorted { $0.isPinned && !$1.isPinned }
+        let scoped = (groupFilter == nil || showingPrivate) ? set : set.filter { $0.groupID == groupFilter }
+        return scoped.sorted { $0.isPinned && !$1.isPinned }
     }
 
     /// `displayedTabs` narrowed by the live search text (title + host).
@@ -258,11 +263,22 @@ final class VerticalTabsPanelViewController: UIViewController {
         backButton.translatesAutoresizingMaskIntoConstraints = false
         footer.addSubview(backButton)
 
-        countLabel.font = .systemFont(ofSize: 15, weight: .semibold)
-        countLabel.textColor = BrownBearTheme.Palette.textSecondary
-        countLabel.textAlignment = .center
-        countLabel.translatesAutoresizingMaskIntoConstraints = false
-        footer.addSubview(countLabel)
+        var groupConfig = UIButton.Configuration.plain()
+        groupConfig.image = UIImage(systemName: "chevron.up.chevron.down",
+                                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 11, weight: .semibold))
+        groupConfig.imagePlacement = .trailing
+        groupConfig.imagePadding = 5
+        groupConfig.contentInsets = .zero
+        groupConfig.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+            var out = incoming
+            out.font = .systemFont(ofSize: 15, weight: .semibold)
+            return out
+        }
+        groupButton.configuration = groupConfig
+        groupButton.tintColor = BrownBearTheme.Palette.textSecondary
+        groupButton.showsMenuAsPrimaryAction = true
+        groupButton.translatesAutoresizingMaskIntoConstraints = false
+        footer.addSubview(groupButton)
 
         let plusConfig = UIImage.SymbolConfiguration(pointSize: 20, weight: .semibold)
         newTabButton.setImage(UIImage(systemName: "plus", withConfiguration: plusConfig), for: .normal)
@@ -288,8 +304,9 @@ final class VerticalTabsPanelViewController: UIViewController {
 
             backButton.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: BrownBearTheme.Space.l),
             backButton.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
-            countLabel.centerXAnchor.constraint(equalTo: footer.centerXAnchor),
-            countLabel.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
+            groupButton.centerXAnchor.constraint(equalTo: footer.centerXAnchor),
+            groupButton.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
+            groupButton.leadingAnchor.constraint(greaterThanOrEqualTo: backButton.trailingAnchor, constant: 8),
             newTabButton.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -BrownBearTheme.Space.l),
             newTabButton.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
             newTabButton.widthAnchor.constraint(equalToConstant: 36),
@@ -332,11 +349,10 @@ final class VerticalTabsPanelViewController: UIViewController {
     /// Refresh the count label + mode-switcher visibility after any change. The mode switcher only shows
     /// once a private tab exists, so the common (no-private) case stays a clean Edit / Close All header.
     private func updateChrome() {
-        let n = displayedTabs.count
-        countLabel.text = "\(n) Tab\(n == 1 ? "" : "s")"
         modeControl.isHidden = !tabManager.hasPrivateTabs
         modeControl.selectedSegmentIndex = showingPrivate ? 1 : 0
         closeAllButton.isHidden = displayedTabs.isEmpty
+        refreshGroupButton()
     }
 
     private func reload() {
@@ -380,6 +396,7 @@ final class VerticalTabsPanelViewController: UIViewController {
 
     @objc private func modeChanged() {
         showingPrivate = (modeControl.selectedSegmentIndex == 1)
+        if showingPrivate { groupFilter = nil }   // private tabs are never grouped
         reload()
     }
 
@@ -416,7 +433,8 @@ extension VerticalTabsPanelViewController: UITableViewDataSource, UITableViewDel
         cell.configure(title: tab.state.displayTitle,
                        host: tab.state.url?.host,
                        isActive: tab.id == tabManager.activeTabID,
-                       isNewTab: tab.state.url == nil)
+                       isNewTab: tab.state.url == nil,
+                       groupColorHex: tabManager.group(for: tab.groupID)?.color.hex)
         cell.onClose = { [weak self] in self?.closeTab(id: tab.id) }
         return cell
     }
@@ -455,9 +473,10 @@ extension VerticalTabsPanelViewController: UITableViewDataSource, UITableViewDel
         closeTab(id: tabs[indexPath.row].id)
     }
 
-    // Reorder — only meaningful with no active search (a filtered subset can't be reordered unambiguously).
+    // Reorder — only with no active search and no group filter (a filtered subset can't be reordered
+    // unambiguously against the full tab list).
     func tableView(_ tableView: UITableView, canMoveRowAt indexPath: IndexPath) -> Bool {
-        searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        groupFilter == nil && searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     func tableView(_ tableView: UITableView, moveRowAt sourceIndexPath: IndexPath, to destinationIndexPath: IndexPath) {
@@ -480,5 +499,170 @@ extension VerticalTabsPanelViewController: UISearchBarDelegate {
 
     func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
         searchBar.resignFirstResponder()
+    }
+}
+
+// MARK: - Tab groups (footer switcher + per-row assignment)
+
+extension VerticalTabsPanelViewController {
+
+    /// Refresh the footer button's title to the current filter (a group's name, or the tab count) and
+    /// rebuild its menu so counts/checkmarks stay current.
+    func refreshGroupButton() {
+        let title: String
+        if let id = groupFilter, let group = tabManager.group(for: id) {
+            title = group.name
+        } else {
+            let n = displayedTabs.count
+            title = "\(n) Tab\(n == 1 ? "" : "s")"
+        }
+        var config = groupButton.configuration ?? UIButton.Configuration.plain()
+        config.title = title
+        groupButton.configuration = config
+        groupButton.menu = makeGroupMenu()
+    }
+
+    /// The footer menu: All Tabs · each group (with live count) · New Group · (rename/delete the current
+    /// group when one is the active filter).
+    private func makeGroupMenu() -> UIMenu {
+        var sections: [UIMenuElement] = []
+
+        let all = UIAction(title: "All Tabs", state: groupFilter == nil ? .on : .off) { [weak self] _ in
+            self?.groupFilter = nil
+            self?.reload()
+        }
+        sections.append(UIMenu(title: "", options: .displayInline, children: [all]))
+
+        let groupActions = tabManager.groups.map { group -> UIAction in
+            let count = tabManager.tabCount(inGroup: group.id)
+            return UIAction(title: "\(group.name)  (\(count))", image: Self.groupDot(group.color),
+                            state: groupFilter == group.id ? .on : .off) { [weak self] _ in
+                self?.groupFilter = group.id
+                self?.reload()
+            }
+        }
+        if !groupActions.isEmpty {
+            sections.append(UIMenu(title: "Groups", options: .displayInline, children: groupActions))
+        }
+
+        var manage: [UIMenuElement] = [
+            UIAction(title: "New Group…", image: UIImage(systemName: "plus")) { [weak self] _ in
+                self?.promptNewGroup(assigning: nil)
+            }
+        ]
+        if let id = groupFilter, let group = tabManager.group(for: id) {
+            manage.append(UIAction(title: "Rename Group",
+                                   image: UIImage(systemName: "pencil")) { [weak self] _ in
+                self?.promptRenameGroup(id)
+            })
+            manage.append(UIAction(title: "Delete Group", image: UIImage(systemName: "trash"),
+                                   attributes: .destructive) { [weak self] _ in
+                self?.tabManager.deleteGroup(id: id)
+                self?.groupFilter = nil
+                self?.reload()
+            })
+        }
+        sections.append(UIMenu(title: "", options: .displayInline, children: manage))
+        return UIMenu(children: sections)
+    }
+
+    /// A small filled circle in the group's color, for menu rows.
+    static func groupDot(_ color: TabGroupColor) -> UIImage? {
+        UIImage(systemName: "circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 10))?
+            .withTintColor(UIColor(hex: color.hex), renderingMode: .alwaysOriginal)
+    }
+
+    /// Per-row long-press: assign to / remove from a group, copy link, close.
+    func tableView(_ tableView: UITableView,
+                   contextMenuConfigurationForRowAt indexPath: IndexPath,
+                   point: CGPoint) -> UIContextMenuConfiguration? {
+        let tabs = visibleTabs
+        guard indexPath.row < tabs.count else { return nil }
+        let tab = tabs[indexPath.row]
+        return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
+            self?.rowMenu(for: tab)
+        }
+    }
+
+    private func rowMenu(for tab: Tab) -> UIMenu {
+        var actions: [UIMenuElement] = []
+        if let url = tab.state.url {
+            actions.append(UIAction(title: "Copy Link", image: UIImage(systemName: "link")) { _ in
+                UIPasteboard.general.url = url
+            })
+        }
+        if !tab.isPrivate {
+            actions.append(makeAssignGroupMenu(for: tab))
+            if tab.groupID != nil {
+                actions.append(UIAction(title: "Remove from Group",
+                                        image: UIImage(systemName: "rectangle.stack.badge.minus")) { [weak self] _ in
+                    self?.tabManager.setGroup(nil, forTab: tab.id)
+                    self?.reload()
+                })
+            }
+        }
+        actions.append(UIAction(title: "Close Tab", image: UIImage(systemName: "xmark"),
+                                attributes: .destructive) { [weak self] _ in
+            self?.closeTab(id: tab.id)
+        })
+        return UIMenu(children: actions)
+    }
+
+    /// The "Add to Group" submenu: New Group… plus every existing group (checked if the tab is in it).
+    private func makeAssignGroupMenu(for tab: Tab) -> UIMenu {
+        var children: [UIMenuElement] = [
+            UIAction(title: "New Group…", image: UIImage(systemName: "plus")) { [weak self] _ in
+                self?.promptNewGroup(assigning: tab.id)
+            }
+        ]
+        let existing = tabManager.groups.map { group -> UIAction in
+            UIAction(title: group.name, image: Self.groupDot(group.color),
+                     state: tab.groupID == group.id ? .on : .off) { [weak self] _ in
+                self?.tabManager.setGroup(group.id, forTab: tab.id)
+                self?.reload()
+            }
+        }
+        if !existing.isEmpty {
+            children.append(UIMenu(title: "", options: .displayInline, children: existing))
+        }
+        return UIMenu(title: "Add to Group",
+                      image: UIImage(systemName: "rectangle.stack.badge.plus"), children: children)
+    }
+
+    private func promptNewGroup(assigning tabID: UUID?) {
+        let alert = UIAlertController(title: "New Group", message: nil, preferredStyle: .alert)
+        alert.addTextField { field in
+            field.placeholder = "Group name"
+            field.autocapitalizationType = .words
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Create", style: .default) { [weak self, weak alert] _ in
+            guard let self else { return }
+            let name = alert?.textFields?.first?.text ?? ""
+            let group = self.tabManager.createGroup(name: name)
+            if let tabID {
+                self.tabManager.setGroup(group.id, forTab: tabID)
+            } else {
+                self.groupFilter = group.id
+            }
+            self.reload()
+        })
+        present(alert, animated: true)
+    }
+
+    private func promptRenameGroup(_ id: UUID) {
+        guard let group = tabManager.group(for: id) else { return }
+        let alert = UIAlertController(title: "Rename Group", message: nil, preferredStyle: .alert)
+        alert.addTextField { field in
+            field.text = group.name
+            field.autocapitalizationType = .words
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Save", style: .default) { [weak self, weak alert] _ in
+            guard let self, let name = alert?.textFields?.first?.text else { return }
+            self.tabManager.renameGroup(id: id, to: name)
+            self.reload()
+        })
+        present(alert, animated: true)
     }
 }

@@ -22,6 +22,9 @@ enum TabSessionStore {
         var id: String?
         /// Whether the tab was pinned. Optional so sessions written before pinning existed still decode.
         var isPinned: Bool?
+        /// The id of the tab group this tab belonged to (matches a TabGroupStore group), or nil if
+        /// ungrouped. Optional so sessions written before tab groups existed still decode.
+        var groupID: String?
     }
 
     /// The restored session: the ordered records and the index (within them) of the tab that was active.

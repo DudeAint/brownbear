@@ -249,6 +249,10 @@ final class BrownBearBrowserViewController: UIViewController {
                 restored.append(tab)
             }
             restored.last?.isPinned = record.isPinned ?? false   // restore the pinned state
+            if let tab = restored.last {
+                // Restore the tab's group membership (the group definitions were loaded by TabManager).
+                tabManager.restoreGroupMembership(record.groupID.flatMap(UUID.init), forTab: tab)
+            }
         }
         // Activate the saved active tab (installs + loads only it); fall back to the first.
         let index = session.activeIndex.flatMap { restored.indices.contains($0) ? $0 : nil } ?? 0
