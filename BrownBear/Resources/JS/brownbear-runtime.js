@@ -95,6 +95,7 @@
       case "progress": safeCall(d.onprogress, payload); break;
       case "timeout": safeCall(d.ontimeout, payload); settleDownload(entry, "reject", payload); delete downloadCallbacks[requestId]; break;
       case "error": safeCall(d.onerror, payload); settleDownload(entry, "reject", payload); delete downloadCallbacks[requestId]; break;
+      case "abort": safeCall(d.onabort || d.onerror, payload); settleDownload(entry, "reject", payload); delete downloadCallbacks[requestId]; break;
       case "load": safeCall(d.onload, payload); settleDownload(entry, "resolve", payload); delete downloadCallbacks[requestId]; break;
       default: break;
     }
@@ -629,8 +630,10 @@
         settleDownload(entry, "reject", p);
         delete downloadCallbacks[requestId];
       });
-      // Server-side fetch is fire-and-forget; abort is a best-effort no-op (documented limit).
-      return { abort: function () {} };
+      // Real handle: abort() cancels the native fetch mid-transfer (parity with Tampermonkey/
+      // Violentmonkey). The native side fires the "abort" lifecycle event, which rejects the promise
+      // and calls onabort/onerror.
+      return { abort: function () { call("GM_downloadAbort", { requestId: requestId }); } };
     }
 
     // GM_info: native supplies the full object (uuid, version, scriptHandler, scriptMetaStr,
