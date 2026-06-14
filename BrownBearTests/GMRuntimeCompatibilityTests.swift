@@ -405,6 +405,41 @@ final class GMRuntimeCompatibilityTests: XCTestCase {
         XCTAssertEqual(closeOpenId, openId, "close() targets the same openId as the open")
     }
 
+    func testGMAddStyleAppliesConstructedStylesheetForCSPResilience() throws {
+        // GM_addStyle must also apply a CONSTRUCTED stylesheet (adoptedStyleSheets), so the script's CSS
+        // lands even when a page's strict style-src refuses the isolated-world <style> element.
+        let runtime = try runtimeSource()
+        guard let context = JSContext() else { throw XCTSkip("no JSContext") }
+        let scriptData: [String: Any] = [
+            "token": "tok", "runAt": "document-start", "name": "styletest",
+            "grants": ["GM_addStyle"], "grantNone": false, "noFrames": false, "injectInto": "auto",
+            "requires": [String](), "resources": [String: String](),
+            "source": "GM_addStyle('body { color: red }');",
+            "values": [String: String](), "info": ["scriptHandler": "BrownBear"]
+        ]
+        let bridge: @convention(block) (String) -> String = { bodyJSON in
+            func reply(_ value: Any?) -> String {
+                let payload: [String: Any] = ["value": value ?? NSNull()]
+                let data = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data("{\"value\":null}".utf8)
+                return String(decoding: data, as: UTF8.self)
+            }
+            guard let data = bodyJSON.data(using: .utf8),
+                  let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let api = body["api"] as? String else { return "{\"value\":null}" }
+            return api == "getScripts" ? reply([scriptData]) : reply(nil)
+        }
+        installDOMStubs(context)
+        context.setObject(bridge, forKeyedSubscript: "__nativeBridge" as NSString)
+        context.evaluateScript(Self.bridgePrelude)
+        context.evaluateScript(runtime)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertEqual(context.evaluateScript("document.adoptedStyleSheets.length")?.toInt32(), 1,
+                       "GM_addStyle adds a constructed stylesheet (CSP-resilient) to adoptedStyleSheets")
+        XCTAssertEqual(context.evaluateScript("document.adoptedStyleSheets[0].cssText")?.toString(),
+                       "body { color: red }", "the constructed sheet carries the script's CSS")
+    }
+
     func testObfuscatedBase64EvalScript() throws {
         // "Obfuscated": base64-encoded GM_setValue call, decoded and eval'd at runtime.
         // base64 of: GM_setValue('b64', 123);
@@ -457,9 +492,11 @@ final class GMRuntimeCompatibilityTests: XCTestCase {
       addEventListener: function () {},
       createElement: function () { return { textContent: "", setAttribute: function () {}, appendChild: function () {} }; },
       head: { appendChild: function () {} },
-      documentElement: { appendChild: function () {} }
+      documentElement: { appendChild: function () {} },
+      adoptedStyleSheets: []
     };
     var document = window.document;
+    window.CSSStyleSheet = function () { this.replaceSync = function (css) { this.cssText = css; }; };
     window.webkit = { messageHandlers: { brownbear: { postMessage: function (body) {
       return new Promise(function (resolve, reject) {
         var raw = __nativeBridge(JSON.stringify(body));
