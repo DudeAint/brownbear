@@ -84,7 +84,9 @@ final class GMAssetCacheTests: XCTestCase {
         let entry = GMAssetCache.Entry(data: Data("x".utf8), etag: nil, lastModified: nil, mimeType: "text/plain")
         await cache.store(entry, for: url("https://example.com/one.js"))
         await cache.store(entry, for: url("https://example.com/two.js"))
-        XCTAssertNotNil(await cache.entry(for: url("https://example.com/one.js")), "precondition: stored")
+        // `await` can't live inside an XCTAssert autoclosure (it doesn't support concurrency); bind first.
+        let precondition = await cache.entry(for: url("https://example.com/one.js"))
+        XCTAssertNotNil(precondition, "precondition: stored")
         await cache.clear()
         let loaded = await cache.entry(for: url("https://example.com/one.js"))
         XCTAssertNil(loaded, "clear() removes every cached asset")
