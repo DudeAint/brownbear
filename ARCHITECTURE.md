@@ -74,7 +74,10 @@ The app is built in five sequenced modules. Each is shippable and verifiable on 
 - `InjectionPlanner` — given a navigation URL + lifecycle phase, returns the ordered list of
   scripts to inject (respecting `@run-at` and `@weight`).
 - `WKUserContentController` wiring installs `WKUserScript`s at `.atDocumentStart` and
-  `.atDocumentEnd`; `document-idle` is simulated via a post-load dispatch.
+  `.atDocumentEnd`; the injected runtime then schedules each script at its `@run-at` moment:
+  `document-end` at `DOMContentLoaded`, and `document-idle` one macrotask after `DOMContentLoaded`
+  (Violentmonkey/Tampermonkey parity) — **not** at the window `load` event, which would wait for
+  every image and subresource and fire seconds later.
 - **Per-script overrides** (`ScriptOverrides` on `UserScript`) layer user choices over the parsed
   metadata without editing source: `@run-at`, `@inject-into`, and auto-update participation. The
   runtime gates on `UserScript.effectiveRunAt`/`effectiveInjectInto` (override ?? metadata), edited

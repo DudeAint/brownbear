@@ -29,6 +29,8 @@
   var _CSSStyleSheet = W.CSSStyleSheet;   // constructable-stylesheet ctor (CSP-resilient GM_addStyle)
   var _atob = W.atob ? W.atob.bind(W) : null;
   var _fetch = W.fetch ? W.fetch.bind(W) : null;
+  var _MessageChannel = W.MessageChannel || null;
+  var _setTimeout = W.setTimeout ? W.setTimeout.bind(W) : null;
   var _console = W.console || { log: function () {}, error: function () {} };
   var handler = (W.webkit && W.webkit.messageHandlers && W.webkit.messageHandlers.brownbear) || null;
 
@@ -872,9 +874,26 @@
     if (document.readyState === "interactive" || document.readyState === "complete") { cb(); }
     else { document.addEventListener("DOMContentLoaded", cb, { once: true }); }
   }
-  function whenLoaded(cb) {
-    if (document.readyState === "complete") { cb(); }
-    else { W.addEventListener("load", cb, { once: true }); }
+  // @run-at document-idle. Violentmonkey/Tampermonkey fire idle scripts right after DOMContentLoaded —
+  // NOT at the window `load` event, which waits for every image and subresource and can land many
+  // seconds later. We mirror VM exactly (inject.js: `await injectAll('end'); await injectAll('idle')`
+  // where idle additionally `await nextTask()`): once the DOM is ready, yield ONE macrotask so the
+  // page's own DOMContentLoaded handlers and our document-end scripts run first, then run. This is the
+  // difference between "feels as instant as Violentmonkey" and "runs only after the whole page paints".
+  function nextMacroTask(cb) {
+    if (_MessageChannel) {
+      try {
+        var ch = new _MessageChannel();
+        ch.port1.onmessage = function () { try { ch.port1.close(); } catch (e) { /* ignore */ } cb(); };
+        ch.port2.postMessage(0);
+        return;
+      } catch (e) { /* MessageChannel blocked — fall through */ }
+    }
+    if (_setTimeout) { _setTimeout(cb, 0); return; }
+    _Promise.resolve().then(cb);   // last resort: a microtask still beats waiting for `load`
+  }
+  function whenIdle(cb) {
+    whenDOMReady(function () { nextMacroTask(cb); });
   }
 
   function loadAndRun() {
@@ -904,7 +923,7 @@
         }
         if (starts.length) { runAll(starts); }
         if (ends.length) { whenDOMReady(function () { runAll(ends); }); }
-        if (idles.length) { whenLoaded(function () { runAll(idles); }); }
+        if (idles.length) { whenIdle(function () { runAll(idles); }); }
       })
       .catch(function (e) {
         if (_console.error) { _console.error("[BrownBear] loader error:", e); }
