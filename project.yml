@@ -65,6 +65,7 @@ targets:
         UIBackgroundModes:
           - fetch
           - processing
+          - audio   # keep video playing in Picture-in-Picture when the app is backgrounded
         BGTaskSchedulerPermittedIdentifiers:
           - com.brownbear.refresh
           - com.brownbear.processing

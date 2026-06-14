@@ -46,6 +46,8 @@ final class WebViewConfigurationFactory {
             config.websiteDataStore = websiteDataStore
         }
         config.allowsInlineMediaPlayback = true
+        config.allowsPictureInPictureMediaPlayback = true   // floating-window video (paired with the
+        // `audio` background mode + the .playback audio session set in AppDelegate)
         config.mediaTypesRequiringUserActionForPlayback = []
         config.suppressesIncrementalRendering = false
         config.defaultWebpagePreferences.allowsContentJavaScript = true
