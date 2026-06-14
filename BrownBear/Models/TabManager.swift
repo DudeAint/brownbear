@@ -32,6 +32,11 @@ final class TabManager {
     private(set) var recentlyClosed: [ClosedTabRecord] = []
     private let maxRecentlyClosed = 25
 
+    /// User-defined tab groups (Safari-style named groups), loaded at launch and persisted on every
+    /// change. Group MEMBERSHIP lives on each `Tab.groupID`; this holds the group definitions (name +
+    /// color), in display order. Private tabs are never grouped.
+    private(set) var groups: [TabGroup] = TabGroupStore.load()
+
     private let configurationFactory: WebViewConfigurationFactory
 
     init(configurationFactory: WebViewConfigurationFactory) {
@@ -196,6 +201,71 @@ final class TabManager {
         tabs = reordered + rest
     }
 
+    // MARK: - Tab groups
+
+    /// The group definition for an id (nil id or unknown id → nil).
+    func group(for id: UUID?) -> TabGroup? {
+        guard let id else { return nil }
+        return groups.first { $0.id == id }
+    }
+
+    /// The (ordered) tabs that belong to a group, scoped to normal tabs (private tabs are never grouped).
+    func tabs(inGroup id: UUID) -> [Tab] { normalTabs.filter { $0.groupID == id } }
+
+    /// How many normal tabs are in a group — for the group switcher's count badges.
+    func tabCount(inGroup id: UUID) -> Int { normalTabs.reduce(0) { $0 + ($1.groupID == id ? 1 : 0) } }
+
+    /// Create a new group. The color defaults to the next palette color so back-to-back groups differ.
+    @discardableResult
+    func createGroup(name: String, color: TabGroupColor? = nil) -> TabGroup {
+        let group = TabGroup(name: name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "New Group" : name,
+                             color: color ?? TabGroupColor.suggested(forExistingCount: groups.count))
+        groups.append(group)
+        TabGroupStore.save(groups)
+        return group
+    }
+
+    func renameGroup(id: UUID, to name: String) {
+        guard let index = groups.firstIndex(where: { $0.id == id }) else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        groups[index].name = trimmed
+        TabGroupStore.save(groups)
+    }
+
+    func recolorGroup(id: UUID, to color: TabGroupColor) {
+        guard let index = groups.firstIndex(where: { $0.id == id }) else { return }
+        groups[index].color = color
+        TabGroupStore.save(groups)
+    }
+
+    /// Delete a group. Its tabs stay open, just ungrouped.
+    func deleteGroup(id: UUID) {
+        guard groups.contains(where: { $0.id == id }) else { return }
+        groups.removeAll { $0.id == id }
+        for tab in tabs where tab.groupID == id { tab.groupID = nil }
+        TabGroupStore.save(groups)
+        persistSession()
+    }
+
+    /// Assign a tab to a group (pass nil to ungroup). Private tabs are never grouped. Persists the change.
+    func setGroup(_ groupID: UUID?, forTab tabID: UUID) {
+        guard let tab = tab(for: tabID), !tab.isPrivate else { return }
+        if let groupID, !groups.contains(where: { $0.id == groupID }) { return }   // ignore unknown group
+        tab.groupID = groupID
+        persistSession()
+    }
+
+    /// Apply a persisted group membership to an already-restored tab (called by the browser's restore
+    /// loop). Drops the membership if its group no longer exists or the tab is private.
+    func restoreGroupMembership(_ groupID: UUID?, forTab tab: Tab) {
+        guard let groupID, !tab.isPrivate, groups.contains(where: { $0.id == groupID }) else {
+            tab.groupID = nil
+            return
+        }
+        tab.groupID = groupID
+    }
+
     // MARK: - Session persistence
 
     /// Persist the current NORMAL tabs (url + title, in order) and which one is active, so they're
@@ -208,7 +278,8 @@ final class TabManager {
             TabSessionStore.Record(url: (tab.pendingURL ?? tab.state.url)?.absoluteString,
                                    title: tab.state.displayTitle,
                                    id: tab.id.uuidString,
-                                   isPinned: tab.isPinned)
+                                   isPinned: tab.isPinned,
+                                   groupID: tab.groupID?.uuidString)
         }
         // Persist each tab's thumbnail (best-effort) so the grid shows a preview after relaunch, and drop
         // snapshots for tabs no longer open so the cache can't grow without bound.

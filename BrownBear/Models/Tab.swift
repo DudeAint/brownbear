@@ -74,6 +74,11 @@ final class Tab {
     /// stay put. Persisted across launches in the session record. Private tabs are never pinned.
     var isPinned = false
 
+    /// The tab group this tab belongs to (Chrome/Safari-style), or nil if ungrouped. A tab is in at most
+    /// one group; the group's definition (name + color) lives in TabManager.groups. Persisted across
+    /// launches in the session record. Private tabs are never grouped.
+    var groupID: UUID?
+
     /// Whether the user turned JavaScript OFF for this tab's site (per-site Shields). Applied
     /// per-navigation via the nav delegate's `WKWebpagePreferences.allowsContentJavaScript`. Seeded
     /// from the host's stored SiteSettings before content loads; defaults to false (JS enabled).

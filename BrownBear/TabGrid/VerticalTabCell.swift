@@ -20,6 +20,9 @@ final class VerticalTabCell: UITableViewCell {
     private let titleLabel = UILabel()
     private let closeButton = UIButton(type: .system)
     private let selectionWash = UIView()
+    /// A thin colored bar at the leading edge marking the tab's group (Chrome/Safari style); hidden when
+    /// the tab is ungrouped.
+    private let groupBar = UIView()
     /// Bumped on every `configure`; an async favicon callback only applies if it still matches, so a
     /// recycled cell never shows the previous tab's icon.
     private var faviconToken = 0
@@ -44,6 +47,12 @@ final class VerticalTabCell: UITableViewCell {
         selectionWash.isHidden = true
         selectionWash.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(selectionWash)
+
+        groupBar.layer.cornerRadius = 1.5
+        groupBar.layer.cornerCurve = .continuous
+        groupBar.isHidden = true
+        groupBar.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(groupBar)
 
         faviconView.contentMode = .scaleAspectFit
         faviconView.clipsToBounds = true
@@ -71,6 +80,11 @@ final class VerticalTabCell: UITableViewCell {
             selectionWash.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 3),
             selectionWash.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -3),
 
+            groupBar.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 5),
+            groupBar.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+            groupBar.widthAnchor.constraint(equalToConstant: 3),
+            groupBar.heightAnchor.constraint(equalToConstant: 22),
+
             faviconView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 18),
             faviconView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
             faviconView.widthAnchor.constraint(equalToConstant: 22),
@@ -89,10 +103,17 @@ final class VerticalTabCell: UITableViewCell {
 
     /// Configure the row. `host` is nil for a tab still on the New Tab page (no navigation yet) — shown
     /// with a sparkle glyph, matching the panel's "Empty Tab" rows. `isActive` tints the whole row.
-    func configure(title: String, host: String?, isActive: Bool, isNewTab: Bool) {
+    /// `groupColorHex` colors the leading group bar (nil = ungrouped, bar hidden).
+    func configure(title: String, host: String?, isActive: Bool, isNewTab: Bool, groupColorHex: UInt32?) {
         // In edit (reorder/delete) mode the table shows its own delete control + reorder grip, so the
         // custom × is hidden to avoid two delete affordances on one row.
         closeButton.isHidden = isEditing
+        if let groupColorHex {
+            groupBar.backgroundColor = UIColor(hex: groupColorHex)
+            groupBar.isHidden = false
+        } else {
+            groupBar.isHidden = true
+        }
         titleLabel.text = title
         titleLabel.textColor = isActive ? BrownBearTheme.Palette.accent : BrownBearTheme.Palette.textPrimary
         titleLabel.font = isActive
@@ -140,6 +161,7 @@ final class VerticalTabCell: UITableViewCell {
         onClose = nil
         faviconView.image = nil
         selectionWash.isHidden = true
+        groupBar.isHidden = true
     }
 
     @objc private func tapClose() { onClose?() }
