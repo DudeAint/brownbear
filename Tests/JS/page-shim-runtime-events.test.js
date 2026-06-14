@@ -239,5 +239,26 @@ test("page chrome.webNavigation has onTabReplaced + onReferenceFragmentUpdated (
         "onTabReplaced.addListener must not throw (iCloud Passwords reads it at boot)");
 });
 
+// Chrome exposes the declarativeNetRequest LIMIT constants in EVERY extension context (a popup or
+// options page reads e.g. MAX_NUMBER_OF_DYNAMIC_RULES to show "X / limit rules used"), so the page
+// shim must carry the same set Chrome 121+ does — and the SAME values as our background shim, or a
+// `rules.length < MAX_…` guard would compare against undefined. Regression guard: the page block had
+// duplicate keys and was missing the per-bucket limits Chrome 121 split out.
+test("page chrome.declarativeNetRequest exposes the Chrome 121 limit constants (matches background)", function () {
+    const dnr = bootPageShim().declarativeNetRequest;
+    const expected = {
+        DYNAMIC_RULESET_ID: "_dynamic", SESSION_RULESET_ID: "_session",
+        MAX_NUMBER_OF_DYNAMIC_RULES: 30000, MAX_NUMBER_OF_UNSAFE_DYNAMIC_RULES: 5000,
+        MAX_NUMBER_OF_SESSION_RULES: 5000, MAX_NUMBER_OF_UNSAFE_SESSION_RULES: 5000,
+        MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES: 30000, MAX_NUMBER_OF_REGEX_RULES: 1000,
+        MAX_NUMBER_OF_STATIC_RULESETS: 100, MAX_NUMBER_OF_ENABLED_STATIC_RULESETS: 50,
+        GUARANTEED_MINIMUM_STATIC_RULES: 30000,
+        GETMATCHEDRULES_QUOTA_INTERVAL: 600, MAX_GETMATCHEDRULES_CALLS_PER_INTERVAL: 20
+    };
+    Object.keys(expected).forEach(function (key) {
+        assert.strictEqual(dnr[key], expected[key], "declarativeNetRequest." + key + " must be " + expected[key]);
+    });
+});
+
 console.log("\n" + passed + " passed, " + failed + " failed");
 process.exit(failed === 0 ? 0 : 1);
