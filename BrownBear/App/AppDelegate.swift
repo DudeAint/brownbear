@@ -42,11 +42,12 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
 
     // MARK: Audio session
 
-    /// Set the audio session category so web video is audible with the ringer silent — see
-    /// `AudioSessionManager`. We no longer ACTIVATE the session ourselves; WebKit owns activation
-    /// (Chromium/Safari behaviour).
+    /// Put the app's audio session in the `.playback` category so web video plays with sound (even with the
+    /// ringer silent, like Safari) and — together with the `audio` background mode — keeps running in
+    /// Picture-in-Picture when the app is backgrounded. We only set the category; WebKit activates the
+    /// session when a video actually plays, so this doesn't grab audio focus from other apps at launch.
     private func configureAudioSessionForVideo() {
-        AudioSessionManager.configureForVideo()
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
     }
 
     // MARK: Appearance
