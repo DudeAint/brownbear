@@ -132,6 +132,23 @@ final class InjectionOrchestrator {
                                                       name: ScriptMessageRouter.handlerName)
         addBootstrap(resource: "brownbear-runtime")
 
+        // Page-world GM write bridge. A granted page-world userscript serves reads page-local but must
+        // reach native to PERSIST its own-data writes (GM_setValue/setClipboard/log). It does so via the
+        // RESTRICTED `brownbearPage` handler (same router, but `route` gates page-world callers to the
+        // own-data write allowlist — no getScripts/inject/cross-origin) plus a document-start vault that
+        // captures that handler PRISTINE, before any page script, and exposes `window.__bbPageGM`. The
+        // vault running pre-page is what stops a hostile page from MITM-ing the token; native re-checks the
+        // per-injection token + grant on every write. Registered in `.page` (the existing pattern used by
+        // pageConsole/shieldCounter/networkLogger), all frames, document-start.
+        userContentController.addScriptMessageHandler(router,
+                                                      contentWorld: .page,
+                                                      name: ScriptMessageRouter.pageHandlerName)
+        let pageWorldVault = WKUserScript(source: Self.bootstrapSource("brownbear-pageworld-vault"),
+                                          injectionTime: .atDocumentStart,
+                                          forMainFrameOnly: false,
+                                          in: .page)
+        userContentController.addUserScript(pageWorldVault)
+
         // Browser-extension runtime (Module 6).
         userContentController.addScriptMessageHandler(webExtensionRouter,
                                                       contentWorld: contentWorld,

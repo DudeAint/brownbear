@@ -57,6 +57,8 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
 
     /// The message handler name JS posts to: `window.webkit.messageHandlers.brownbear`.
     static let handlerName = "brownbear"
+    // The restricted page-world handler name + its own-data write allowlist live in
+    // ScriptMessageRouter+Privileged.swift (`pageHandlerName`, `pageWorldWriteAPIs`).
 
     /// The native-bound identity behind a token. Created in getScripts, looked up on every call.
     /// `fileprivate` (not `private`) so the same-file GM-handler extension can name it in the signatures
@@ -201,6 +203,10 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         let frameInfo = message.frameInfo
         let frameURL = frameInfo.request.url
         let webView = message.webView
+        // Messages on the restricted page-world handler are gated to the own-data write allowlist. The
+        // name is an honest world discriminator: `pageHandlerName` is registered ONLY in WKContentWorld
+        // .page, so a page script cannot reach the full `brownbear` handler (it lives in the isolated world).
+        let fromPageWorld = message.name == Self.pageHandlerName
 
         Task { @MainActor in
             do {
@@ -209,7 +215,8 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
                                                   token: token,
                                                   frameURL: frameURL,
                                                   frameInfo: frameInfo,
-                                                  webView: webView)
+                                                  webView: webView,
+                                                  fromPageWorld: fromPageWorld)
                 replyHandler(result, nil)
             } catch let error as BrownBearError {
                 replyHandler(nil, error.errorDescription ?? "bridge error")
@@ -226,7 +233,15 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
                        token: String?,
                        frameURL: URL?,
                        frameInfo: WKFrameInfo?,
-                       webView: WKWebView?) async throws -> Any? {
+                       webView: WKWebView?,
+                       fromPageWorld: Bool = false) async throws -> Any? {
+        // The SINGLE restriction point for the page-world handler: a page-world caller may invoke ONLY the
+        // own-data write allowlist. Runs BEFORE the tokenless getScripts/revalidate/abort + injectPageWorld
+        // paths, so a page script can never mint tokens, inject code, or reach a cross-origin API here.
+        // Allowlisted writes then flow through the same resolveSession + ensureGranted checks below.
+        if fromPageWorld, !Self.pageWorldWriteAPIs.contains(api) {
+            throw BrownBearError.bridgeRejected("\(api) is not available from the page world")
+        }
         // getScripts is the loader's privilege; it needs no token and mints them.
         if api == "getScripts" {
             return try await handleGetScripts(payload: payload, webView: webView, frameInfo: frameInfo)
