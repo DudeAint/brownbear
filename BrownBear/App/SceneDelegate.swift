@@ -56,10 +56,6 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     func sceneDidBecomeActive(_ scene: UIScene) {
         // Skip during unit tests (no full app stack booted; see willConnectTo).
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
-        // Re-activate the audio session every foreground — an active session can be deactivated while the
-        // app is backgrounded or by an interruption, and without this the next web video silently stalls
-        // (currentTime frozen at 0). Cheap + idempotent.
-        AudioSessionManager.activateForVideo()
         // Opportunistic catch-up: iOS background tasks are unreliable, so run any @crontab/@background
         // script that has come due since its last run whenever the app is opened. This is what makes
         // scheduled scripts actually run (and get a "last run") on a real device.
