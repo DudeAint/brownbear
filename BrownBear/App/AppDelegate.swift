@@ -44,10 +44,13 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
 
     /// Put the app's audio session in the `.playback` category so web video plays with sound (even with the
     /// ringer silent, like Safari) and — together with the `audio` background mode — keeps running in
-    /// Picture-in-Picture when the app is backgrounded. We only set the category; WebKit activates the
-    /// session when a video actually plays, so this doesn't grab audio focus from other apps at launch.
+    /// Picture-in-Picture when the app is backgrounded. We only set the CATEGORY and deliberately do NOT
+    /// pin a `mode`: WebKit drives the media playback clock through its own audio session/mode when a video
+    /// plays, and forcing `.moviePlayback` here can fight that setup (a candidate cause of "video loads and
+    /// seeks but the clock won't advance"). WebKit activates the session itself, so this never grabs audio
+    /// focus from other apps at launch.
     private func configureAudioSessionForVideo() {
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+        try? AVAudioSession.sharedInstance().setCategory(.playback)
     }
 
     // MARK: Appearance

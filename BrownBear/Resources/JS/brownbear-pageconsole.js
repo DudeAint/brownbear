@@ -156,6 +156,40 @@
       return bits.join(" ");
     }
 
+    // A compact summary of the buffered time ranges, so a "stuck" video tells data-present (clock stall)
+    // apart from data-absent (network).
+    function bufferedSummary(media) {
+      try {
+        var ranges = media.buffered, parts = [];
+        for (var i = 0; i < ranges.length && i < 4; i++) {
+          parts.push(ranges.start(i).toFixed(1) + "-" + ranges.end(i).toFixed(1));
+        }
+        return parts.length ? parts.join(",") : "none";
+      } catch (e) { return "?"; }
+    }
+
+    // The decisive snapshot: a video that won't advance AFTER play() was called. Logs every property that
+    // distinguishes the causes — paused/ended (something re-paused it), playbackRate (0 = frozen),
+    // muted/volume, readyState/networkState/buffered (data present vs. starved), size, error.
+    function describeStuck(media) {
+      var bits = ["[media] STUCK after play: " + String(media.tagName).toLowerCase()];
+      try { bits.push("paused=" + media.paused + " ended=" + media.ended); } catch (e) {}
+      try { bits.push("rate=" + media.playbackRate); } catch (e) {}
+      try { bits.push("muted=" + media.muted + " vol=" + media.volume); } catch (e) {}
+      try { bits.push("readyState=" + media.readyState); } catch (e) {}
+      try { bits.push("networkState=" + (NET_STATE[media.networkState] || media.networkState)); } catch (e) {}
+      try { bits.push("buffered=" + bufferedSummary(media)); } catch (e) {}
+      try {
+        var dur = isFinite(media.duration) ? media.duration.toFixed(2) : "?";
+        bits.push("t=" + (media.currentTime || 0).toFixed(2) + "/" + dur);
+      } catch (e) {}
+      try {
+        if (media.videoWidth != null) { bits.push("size=" + media.videoWidth + "x" + media.videoHeight); }
+      } catch (e) {}
+      try { if (media.error) { bits.push("error=" + (MEDIA_ERR[media.error.code] || media.error.code)); } } catch (e) {}
+      return bits.join(" ");
+    }
+
     function onMediaEvent(evt) {
       return function (e) {
         var media = mediaElementFor(e && e.target);
@@ -165,10 +199,32 @@
     }
 
     // 'error' = a hard failure (its MediaError code is the key signal); 'stalled'/'waiting' = the player
-    // ran out of data and can't advance (the textbook "stuck at 0s / stutter"); 'abort'/'emptied' = the
-    // load was cancelled. Capture phase so non-bubbling media events still reach this top-level listener.
-    ["error", "stalled", "waiting", "abort", "emptied"].forEach(function (evt) {
+    // ran out of data and can't advance. Capture phase so non-bubbling media events reach this top-level
+    // listener. (We dropped 'emptied'/'abort' — they fire transiently during a NORMAL load and were a
+    // red herring.)
+    ["error", "stalled", "waiting"].forEach(function (evt) {
       window.addEventListener(evt, onMediaEvent(evt), true);
     });
+
+    // STUCK DETECTOR — the key probe for "plays but the clock never advances". On each play(), note the
+    // time; ~2s later, if it's not paused/ended but currentTime hasn't moved, log the full snapshot. This
+    // is what separates an audio-clock stall (data buffered, rate 1, but t frozen) from every other cause.
+    var _setTimeout = (typeof window.setTimeout === "function") ? window.setTimeout.bind(window) : null;
+    if (_setTimeout) {
+      window.addEventListener("play", function (e) {
+        var media = mediaElementFor(e && e.target);
+        if (!media) { return; }
+        var startTime = 0;
+        try { startTime = media.currentTime || 0; } catch (e2) {}
+        _setTimeout(function () {
+          try {
+            if (media.paused || media.ended) { return; }            // paused/ended on its own — fine
+            if ((media.currentTime || 0) > startTime + 0.1) { return; }   // advancing — healthy
+            if (alreadyLogged(media, "stuck")) { return; }          // once per element
+            forward("error", [describeStuck(media)]);
+          } catch (e3) { /* ignore */ }
+        }, 2000);
+      }, true);
+    }
   } catch (e) { /* never break a page over diagnostics */ }
 })();
