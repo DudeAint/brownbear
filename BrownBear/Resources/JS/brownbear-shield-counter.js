@@ -204,9 +204,11 @@
     wrapURLAttr(W.HTMLScriptElement && W.HTMLScriptElement.prototype, "src");
     wrapURLAttr(W.HTMLImageElement && W.HTMLImageElement.prototype, "src");
     wrapURLAttr(W.HTMLIFrameElement && W.HTMLIFrameElement.prototype, "src");
-    wrapURLAttr(W.HTMLMediaElement && W.HTMLMediaElement.prototype, "src");   // audio/video
-    wrapURLAttr(W.HTMLSourceElement && W.HTMLSourceElement.prototype, "src");
-    wrapURLAttr(W.HTMLTrackElement && W.HTMLTrackElement.prototype, "src");
+    // NOTE: we deliberately DO NOT wrap HTMLMediaElement / HTMLSourceElement `src`. Redefining the media
+    // element's `src` accessor (even as a transparent delegate) can break <video>/<audio> playback —
+    // it stalls at 0s — for reasons internal to WebKit's resource-selection / media pipeline. The only
+    // thing we'd gain is COUNTING media requests in the Shields tally; WebKit still BLOCKS them via the
+    // content-rule list regardless, so the loss is just a stat. Never touch the media element here.
     wrapURLAttr(W.HTMLLinkElement && W.HTMLLinkElement.prototype, "href");    // stylesheets, preloads
   } catch (e) {}
 
