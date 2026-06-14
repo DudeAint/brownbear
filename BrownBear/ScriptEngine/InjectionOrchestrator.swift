@@ -297,6 +297,13 @@ final class InjectionOrchestrator {
         router.forgetTabObjects(tabID: tabID)
     }
 
+    /// Propagate a GM value change made outside a live page — the background/@crontab runner or the
+    /// dashboard value editor — into every open page running that script, so GM_getValue and
+    /// GM_addValueChangeListener stay in sync without a reload (TM/VM cross-context parity).
+    func broadcastGMValueChange(scriptID: UUID, changes: [(key: String, old: String?, new: String?)]) {
+        router.broadcastExternalValueChanges(scriptID: scriptID, changes: changes)
+    }
+
     /// Recompile and reinstall every enabled extension's content-blocking rules. Fire-and-forget;
     /// the next navigation picks up the new rule lists.
     func refreshExtensionContentBlockers() {

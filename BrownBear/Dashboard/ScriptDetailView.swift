@@ -271,7 +271,11 @@ struct ScriptDetailView: View {
             return
         }
         Task { @MainActor in
-            await valueStore.setValue(scriptID: script.id, key: key, jsonValue: trimmed)
+            let old = await valueStore.setValueReturningOld(scriptID: script.id, key: key, jsonValue: trimmed)
+            // Push the edit into any open page running this script (live GM_getValue / value-change
+            // listeners), so a dashboard edit doesn't require a reload — TM/VM cross-context parity.
+            InjectionOrchestrator.shared.broadcastGMValueChange(
+                scriptID: script.id, changes: [(key: key, old: old, new: trimmed)])
             await reloadStoredValues()
         }
     }

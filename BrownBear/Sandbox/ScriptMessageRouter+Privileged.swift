@@ -20,6 +20,20 @@ import WebKit
 
 extension ScriptMessageRouter {
 
+    // MARK: - GM_openInTab close notification
+
+    /// Notify a GM_openInTab handle that the tab it opened has closed — flips `.closed` and fires
+    /// `onclose` — dispatched into the OPENER's frame + isolated world (iframe-aware). Internal (not
+    /// private) so the router's GM_openInTab handler can call it across the file boundary; takes only
+    /// primitives, so it never needs the fileprivate ScriptSession.
+    func dispatchTabClosed(openId: String, webView: WKWebView?, frame: WKFrameInfo?,
+                           world: WKContentWorld) {
+        guard let webView else { return }
+        let js = "window.__brownbear && window.__brownbear.dispatchTabClosed && "
+            + "window.__brownbear.dispatchTabClosed('\(Self.escapeForJSStringLiteral(openId))');"
+        BBEvaluateJavaScriptInFrame(webView, js, frame, world)
+    }
+
     // MARK: - GM_notification
 
     /// GM_notification: post a local banner attributed to this script; route a tap back to its
