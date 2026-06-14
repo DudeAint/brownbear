@@ -53,10 +53,12 @@ final class GMRuntimeCompatibilityTests: XCTestCase {
         var resourceTextByURL: [String: String] = [:]
         for (name, text) in resources { resourceTextByURL["res://\(name)"] = text }
 
-        // Build the script payload getScripts will return.
+        // Build the script payload getScripts will return. @inject-into content keeps the script in the
+        // ISOLATED world — this harness exercises the isolated GM bridge round-trip (it doesn't evaluate the
+        // injectPageWorld payload a page-world script produces; that path is covered by Tests/JS/*).
         let scriptData: [String: Any] = [
             "token": "tok", "runAt": "document-start", "name": "test",
-            "grants": grants, "grantNone": false, "noFrames": false, "injectInto": "auto",
+            "grants": grants, "grantNone": false, "noFrames": false, "injectInto": "content",
             "requires": Array(requires.keys),
             "resources": Dictionary(uniqueKeysWithValues: resources.keys.map { ($0, "res://\($0)") }),
             "source": script, "values": [String: String](), "info": ["scriptHandler": "BrownBear"]
@@ -258,7 +260,7 @@ final class GMRuntimeCompatibilityTests: XCTestCase {
         let requireURL = "https://cdn.test/inlined-lib.js"
         let scriptData: [String: Any] = [
             "token": "tok", "runAt": "document-start", "name": "inlinetest",
-            "grants": Self.defaultGrants, "grantNone": false, "noFrames": false, "injectInto": "auto",
+            "grants": Self.defaultGrants, "grantNone": false, "noFrames": false, "injectInto": "content",
             "requires": [requireURL],
             "inlinedRequires": [requireURL: "var REQVAL = 7;"],
             "resources": [String: String](),
