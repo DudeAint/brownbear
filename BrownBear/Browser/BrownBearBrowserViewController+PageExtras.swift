@@ -81,4 +81,32 @@ extension BrownBearBrowserViewController {
         alert.addAction(UIAlertAction(title: "OK", style: .default))
         present(alert, animated: true)
     }
+
+    // MARK: - Full-page screenshot
+
+    /// Capture the ENTIRE scrollable page (not just the visible area) as a PDF and offer it via the share
+    /// sheet — the same artifact iOS Safari's full-page screenshot produces, so it saves to Files, AirDrops,
+    /// prints, etc. `createPDF` renders the whole content; its completion lands on the main thread.
+    func captureFullPageScreenshot() {
+        guard let tab = tabManager.activeTab else { return }
+        let title = tab.state.displayTitle
+        tab.webView.createPDF { [weak self] result in
+            guard let self, case .success(let data) = result else { return }
+            self.shareFullPagePDF(data, title: title)
+        }
+    }
+
+    private func shareFullPagePDF(_ data: Data, title: String) {
+        // A filesystem-safe file name from the page title so the share sheet shows something recognisable.
+        let illegal = CharacterSet(charactersIn: "/\\:?%*|\"<>")
+        let cleaned = title.components(separatedBy: illegal).joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = cleaned.isEmpty ? "Page" : String(cleaned.prefix(60))
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(base + ".pdf")
+        guard (try? data.write(to: url, options: .atomic)) != nil else { return }
+        let share = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        share.popoverPresentationController?.sourceView = toolbar
+        share.popoverPresentationController?.sourceRect = toolbar.bounds
+        present(share, animated: true)
+    }
 }

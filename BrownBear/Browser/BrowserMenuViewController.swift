@@ -17,6 +17,7 @@ enum BrowserMenuAction {
     case copyLink
     case findOnPage
     case toggleDesktopSite
+    case fullPageScreenshot
     case userscripts
     case extensions
     case installUserscript
@@ -219,6 +220,8 @@ final class BrowserMenuViewController: UIViewController {
                                 action: .toggleBookmark))
             rows.append(makeRow(icon: "link", title: "Copy Link", action: .copyLink))
             rows.append(makeRow(icon: "doc.plaintext", title: "Reader", action: .reader))
+            rows.append(makeRow(icon: "rectangle.dashed", title: "Full Page Screenshot",
+                                action: .fullPageScreenshot))
             rows.append(makeRow(icon: "textformat.size", title: "Zoom (\(state.zoomPercent)%)", action: .zoom))
         }
         if state.canInstallUserscript {
