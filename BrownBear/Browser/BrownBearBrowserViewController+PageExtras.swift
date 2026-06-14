@@ -90,8 +90,10 @@ extension BrownBearBrowserViewController {
     func captureFullPageScreenshot() {
         guard let tab = tabManager.activeTab else { return }
         let title = tab.state.displayTitle
-        tab.webView.createPDF { [weak self] result in
-            guard let self, case .success(let data) = result else { return }
+        // Via the ObjC bridge, NOT WKWebView.createPDF's Swift Result API — that links the Swift WebKit
+        // overlay, which aborts a 16.4-deployment app at launch (same reason the eval calls are bridged).
+        BBCreatePDF(tab.webView) { [weak self] data, _ in
+            guard let self, let data else { return }
             self.shareFullPagePDF(data, title: title)
         }
     }
