@@ -253,7 +253,7 @@ test("page chrome.declarativeNetRequest exposes the Chrome 121 limit constants (
         MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES: 30000, MAX_NUMBER_OF_REGEX_RULES: 1000,
         MAX_NUMBER_OF_STATIC_RULESETS: 100, MAX_NUMBER_OF_ENABLED_STATIC_RULESETS: 50,
         GUARANTEED_MINIMUM_STATIC_RULES: 30000,
-        GETMATCHEDRULES_QUOTA_INTERVAL: 600, MAX_GETMATCHEDRULES_CALLS_PER_INTERVAL: 20
+        GETMATCHEDRULES_QUOTA_INTERVAL: 10, MAX_GETMATCHEDRULES_CALLS_PER_INTERVAL: 20
     };
     Object.keys(expected).forEach(function (key) {
         assert.strictEqual(dnr[key], expected[key], "declarativeNetRequest." + key + " must be " + expected[key]);
