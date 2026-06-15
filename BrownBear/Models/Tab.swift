@@ -105,6 +105,13 @@ final class Tab {
         self.id = id
         self.isPrivate = isPrivate
         self.webView = WKWebView(frame: .zero, configuration: configuration)
+        // Web Inspector (Safari → Develop → this device): OFF by default — inspectable web content is a
+        // privacy surface (anyone with the device + a Mac could read the page). Enable it from Settings to
+        // debug page/userscript/extension execution directly (full console, breakpoints) instead of the
+        // rate-limited Logs tab. iOS 16.4+ (our minimum). Absent default == off.
+        if UserDefaults.standard.bool(forKey: "bbWebInspector") {
+            self.webView.isInspectable = true
+        }
         self.webView.allowsBackForwardNavigationGestures = true
         self.webView.isFindInteractionEnabled = true   // native Find-on-Page (iOS 16+)
         self.webView.scrollView.contentInsetAdjustmentBehavior = .never
