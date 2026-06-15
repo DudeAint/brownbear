@@ -27,14 +27,14 @@ function test(name, fn) {
     catch (e) { console.log("  FAIL " + name + "\n       " + (e && e.message ? e.message : e)); failed++; }
 }
 
-function bootForCode(grants, source) {
+function bootForCode(grants, source, grantNone) {
     const calls = [];
     function postMessage(msg) {
         calls.push(msg);
         if (msg.api === "getScripts") {
             return Promise.resolve([{
                 token: "tok-url", name: "url", uuid: "66666666-6666-6666-6666-666666666666",
-                runAt: "document-start", grants: grants, grantNone: false, noFrames: false,
+                runAt: "document-start", grants: grants, grantNone: !!grantNone, noFrames: false,
                 injectInto: "auto", requires: [], resources: {}, source: source, values: {},
                 info: { scriptHandler: "BrownBear" }
             }]);
@@ -115,6 +115,36 @@ function runPage(code) {
     test("a same-URL replaceState does NOT re-fire onurlchange", () => {
         assert.strictEqual(pageWin.__obs.onurl, "UNCHANGED");
     });
+
+    // --- GRANT-NONE page world (buildPageWorldSource path, NOT the granted client) ---------------
+    // A @grant none + @inject-into auto script runs in the page world via buildPageWorldSource. It must
+    // ALSO get SPA URL tracking (the isolated world and the granted page-world client both install it).
+    {
+        const gnBody = [
+            "window.__obs = { onurl: null, evt: null };",
+            "window.onurlchange = function (e) { window.__obs.onurl = e.url; };",
+            "window.addEventListener('urlchange', function (e) { window.__obs.evt = e.detail.url; });"
+        ].join("\n");
+        const gnCalls = bootForCode([], gnBody, true);   // grantNone: true
+        await new Promise((r) => setTimeout(r, 10));
+
+        const injects = gnCalls.filter((c) => c.api === "injectPageWorld");
+        test("a @grant none page-world script routes to the page world", () => {
+            assert.strictEqual(injects.length, 1);
+        });
+        test("the grant-none page-world source installs SPA URL tracking", () => {
+            assert.ok(injects[0].payload.code.indexOf("__bbPageUrlChangeOn") !== -1,
+                "buildPageWorldSource includes the urlchange installer");
+        });
+
+        const { pageWin } = runPage(injects[0].payload.code);
+        pageWin.history.pushState({}, "", "https://example.com/gn");
+        await new Promise((r) => setImmediate(r));
+        test("grant-none page-world: history.pushState fires window.onurlchange + the urlchange event", () => {
+            assert.strictEqual(pageWin.__obs.onurl, "https://example.com/gn");
+            assert.strictEqual(pageWin.__obs.evt, "https://example.com/gn");
+        });
+    }
 
     console.log("\n" + passed + " passed, " + failed + " failed");
     if (failed) { process.exitCode = 1; }
