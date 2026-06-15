@@ -32,15 +32,15 @@ extension ScriptMessageRouter {
     /// The exhaustive allowlist a page-world caller may invoke: a script's OWN-DATA writes, `log`, the
     /// network `GM_xmlhttpRequest`/`GM_abortRequest` and `GM_download`/`GM_downloadAbort` (lifecycle streamed
     /// native→page via window.__bbPageXHR; both @connect-gated per the token), the menu APIs
-    /// `GM_registerMenuCommand`/`GM_unregisterMenuCommand` (a tap streams native→page via the same channel),
-    /// and the request→reply APIs `GM_cookie`/`GM_getTab`/`GM_saveTab`/`GM_listTabs` (their result is
-    /// RETURNED through the WKScriptMessageHandlerWithReply reply promise — never on the DOM). Anything not
-    /// here (getScripts, injectPageWorld, notifications, openInTab, and reads — served page-local) is
-    /// rejected for page-world callers.
+    /// `GM_registerMenuCommand`/`GM_unregisterMenuCommand` and `GM_openInTab`/`GM_closeTab` (a tap / a tab
+    /// close streams native→page via the same channel), and the request→reply APIs
+    /// `GM_cookie`/`GM_getTab`/`GM_saveTab`/`GM_listTabs` (their result is RETURNED through the
+    /// WKScriptMessageHandlerWithReply reply promise — never on the DOM). Anything not here (getScripts,
+    /// injectPageWorld, notifications, and reads — served page-local) is rejected for page-world callers.
     static let pageWorldWriteAPIs: Set<String> = [
         "GM_setValue", "GM_deleteValue", "GM_setValues", "GM_deleteValues", "GM_setClipboard", "GM_log", "log",
         "GM_xmlhttpRequest", "GM_abortRequest", "GM_download", "GM_downloadAbort",
-        "GM_registerMenuCommand", "GM_unregisterMenuCommand",
+        "GM_registerMenuCommand", "GM_unregisterMenuCommand", "GM_openInTab", "GM_closeTab",
         "GM_cookie", "GM_getTab", "GM_saveTab", "GM_listTabs"
     ]
 
@@ -51,10 +51,16 @@ extension ScriptMessageRouter {
     /// private) so the router's GM_openInTab handler can call it across the file boundary; takes only
     /// primitives, so it never needs the fileprivate ScriptSession.
     func dispatchTabClosed(openId: String, webView: WKWebView?, frame: WKFrameInfo?,
-                           world: WKContentWorld) {
+                           world: WKContentWorld, isPageWorld: Bool = false) {
         guard let webView else { return }
-        let js = "window.__brownbear && window.__brownbear.dispatchTabClosed && "
-            + "window.__brownbear.dispatchTabClosed('\(Self.escapeForJSStringLiteral(openId))');"
+        let idLiteral = Self.escapeForJSStringLiteral(openId)
+        // A page-world opener streams the close back via the vault's minted-id channel (window.__bbPageXHR,
+        // native→page eval) into .page — routed to the handler registered under this openId — never the
+        // isolated __brownbear dispatcher. The world passed in is already .page for that case.
+        let js = isPageWorld
+            ? "window.__bbPageXHR && window.__bbPageXHR('\(idLiteral)','close',{});"
+            : "window.__brownbear && window.__brownbear.dispatchTabClosed && "
+                + "window.__brownbear.dispatchTabClosed('\(idLiteral)');"
         BBEvaluateJavaScriptInFrame(webView, js, frame, world)
     }
 

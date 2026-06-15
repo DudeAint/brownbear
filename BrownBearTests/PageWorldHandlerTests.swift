@@ -27,9 +27,9 @@ final class PageWorldHandlerTests: XCTestCase {
                        ["GM_setValue", "GM_deleteValue", "GM_setValues", "GM_deleteValues",
                         "GM_setClipboard", "GM_log", "log", "GM_xmlhttpRequest", "GM_abortRequest",
                         "GM_download", "GM_downloadAbort",
-                        "GM_registerMenuCommand", "GM_unregisterMenuCommand",
+                        "GM_registerMenuCommand", "GM_unregisterMenuCommand", "GM_openInTab", "GM_closeTab",
                         "GM_cookie", "GM_getTab", "GM_saveTab", "GM_listTabs"],
-                       "the page-world allowlist is own-data writes + log + xhr + download + menu + cookie/tab")
+                       "the page-world allowlist is own-data writes + log + xhr + download + menu + tab + cookie/tab")
     }
 
     func testAllowlistExcludesPrivilegedAndStreamingCallbackAPIs() {
@@ -37,8 +37,7 @@ final class PageWorldHandlerTests: XCTestCase {
         // STREAMING-callback ones not yet routed to the page world. NONE may be reachable.
         let forbidden = [
             "getScripts", "injectPageWorld", "revalidateSessions",
-            "GM_notification", "GM_notificationClear",
-            "GM_openInTab", "fetchResource", "GM_closeTab"
+            "GM_notification", "GM_notificationClear", "fetchResource"
         ]
         for api in forbidden {
             XCTAssertFalse(ScriptMessageRouter.pageWorldWriteAPIs.contains(api),

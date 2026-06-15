@@ -417,7 +417,10 @@ final class GMRuntimeCompatibilityTests: XCTestCase {
         var closeOpenId: String?
         let scriptData: [String: Any] = [
             "token": "tok", "runAt": "document-start", "name": "tabtest",
-            "grants": ["GM_openInTab", "GM_setValue"], "grantNone": false, "noFrames": false, "injectInto": "auto",
+            // @inject-into content: GM_openInTab + GM_setValue are both page-world-safe now, so `auto` would
+            // route to the page world (injectPageWorld) which this JSContext harness can't eval — pin to the
+            // isolated bridge this test exercises.
+            "grants": ["GM_openInTab", "GM_setValue"], "grantNone": false, "noFrames": false, "injectInto": "content",
             "requires": [String](), "resources": [String: String](),
             "source": "window.__t = GM_openInTab('https://x.test/');"
                 + " window.__t.onclose = function () { GM_setValue('closedFired', true); };",
