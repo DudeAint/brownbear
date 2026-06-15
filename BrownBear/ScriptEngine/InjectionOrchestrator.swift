@@ -47,6 +47,10 @@ final class InjectionOrchestrator {
     private var extensionsObserver: NSObjectProtocol?
     private var blocklistObserver: NSObjectProtocol?
     private var valueChangeObserver: NSObjectProtocol?
+    private var userScriptsObserver: NSObjectProtocol?
+    /// The static document-start WKUserScripts (INJ-A) currently installed, tracked by reference so a
+    /// rebuild can re-add the OTHER (shim/bootstrap) user scripts verbatim and swap only these out.
+    private var staticUserScripts: [WKUserScript] = []
 
     /// Forwarded to the router so GM_openInTab can reach the browser.
     weak var bridgeHost: ScriptBridgeHost? {
@@ -100,6 +104,7 @@ final class InjectionOrchestrator {
         if let extensionsObserver { NotificationCenter.default.removeObserver(extensionsObserver) }
         if let blocklistObserver { NotificationCenter.default.removeObserver(blocklistObserver) }
         if let valueChangeObserver { NotificationCenter.default.removeObserver(valueChangeObserver) }
+        if let userScriptsObserver { NotificationCenter.default.removeObserver(userScriptsObserver) }
     }
 
     // MARK: - Setup
@@ -283,6 +288,52 @@ final class InjectionOrchestrator {
                     changes: broadcast.changes.map { (key: $0.key, old: $0.old, new: $0.new) })
             }
         }
+
+        // INJ-A: true document-start injection for grant-none page-world scripts, behind the default-OFF
+        // "Static document-start" setting (bbStaticDocumentStart). refreshStaticDocumentStart() is a no-op
+        // until the setting is enabled (and again once it's turned off and cleaned up), so this changes
+        // NOTHING for anyone who hasn't opted in. Rebuilt for the NEXT navigation whenever the userscript
+        // library changes — in particular so a just-disabled script's static injection is removed.
+        userScriptsObserver = NotificationCenter.default.addObserver(
+            forName: .brownBearUserScriptsDidChange, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.refreshStaticDocumentStart() }
+        }
+        refreshStaticDocumentStart()
+    }
+
+    /// Rebuild the static document-start (INJ-A) user-script set for the NEXT navigation. A no-op by
+    /// default: only does work once the `bbStaticDocumentStart` setting has been enabled (or to clean up
+    /// after it's disabled). Eligible scripts = grant-none, page/auto, document-start, no @require/@noframes
+    /// (see StaticPageWorldInjector). The dynamic getScripts path keeps running everything; the shared
+    /// run-once guard (window.__bbRanUS) means a script runs exactly once on whichever path fires first.
+    func refreshStaticDocumentStart() {
+        let on = UserDefaults.standard.bool(forKey: "bbStaticDocumentStart")
+        // Default state (off, nothing installed) does no work and never touches the shared script set.
+        guard on || !staticUserScripts.isEmpty else { return }
+        let staticJS = Self.bootstrapSource("brownbear-pageworld-static")
+        Task { @MainActor in
+            let scripts = on ? await self.scriptStore.enabledScripts() : []
+            let fresh = on
+                ? StaticPageWorldInjector.userScripts(from: scripts, isIncognito: false, staticJS: staticJS)
+                : []
+            self.installStaticUserScripts(fresh)
+        }
+    }
+
+    /// Swap the static (INJ-A) user scripts for `fresh` without disturbing any other user script. WebKit
+    /// only allows removing ALL user scripts, so capture the live set, drop the OLD static ones by
+    /// reference, remove all, then re-add the survivors verbatim + the fresh static set. This avoids any
+    /// risk of losing a shim/bootstrap script (they're re-added as the exact same objects) and applies to
+    /// the NEXT navigation (already-loaded pages keep what they have). Handlers are untouched by
+    /// removeAllUserScripts, so messaging/the GM bridge are unaffected.
+    private func installStaticUserScripts(_ fresh: [WKUserScript]) {
+        let survivors = userContentController.userScripts.filter { current in
+            !staticUserScripts.contains(where: { $0 === current })
+        }
+        userContentController.removeAllUserScripts()
+        survivors.forEach { userContentController.addUserScript($0) }
+        fresh.forEach { userContentController.addUserScript($0) }
+        staticUserScripts = fresh
     }
 
     /// chrome.tabs.sendMessage delivery. Hands off to the shared extension content router, which owns

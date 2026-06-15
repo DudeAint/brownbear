@@ -350,4 +350,10 @@ extension Notification.Name {
     /// Posted when `AppSettings.extensionsToolbarHidden` changes (e.g. the Extensions tab's "Show in
     /// toolbar" toggle, or the icon's "Hide" menu), so the open browser re-evaluates the toolbar icon.
     static let brownBearExtensionsToolbarChanged = Notification.Name("brownBearExtensionsToolbarChanged")
+
+    /// Posted when the userscript library changes (install / edit / enable-disable / delete), so the
+    /// static document-start injector (INJ-A) can rebuild its set for the NEXT navigation — in particular
+    /// so a just-disabled script's static injection is removed. The dynamic getScripts path is already
+    /// live (it re-queries per navigation); this is only needed for the static fast-path.
+    static let brownBearUserScriptsDidChange = Notification.Name("brownBearUserScriptsDidChange")
 }

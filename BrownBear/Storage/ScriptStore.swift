@@ -126,6 +126,11 @@ actor ScriptStore {
             // Persistence failure must not crash; the in-memory set stays authoritative for
             // this session. Surfaced to logs in Module 4.
         }
+        // The library changed (install/edit/enable-disable/override/delete) — let the static document-start
+        // injector (INJ-A) rebuild its set for the next navigation (esp. so a just-disabled script's static
+        // injection is dropped). Posted regardless of write success: the in-memory set is authoritative.
+        // Observers hop to the main queue; a no-op when the static fast-path setting is off.
+        NotificationCenter.default.post(name: .brownBearUserScriptsDidChange, object: nil)
     }
 }
 

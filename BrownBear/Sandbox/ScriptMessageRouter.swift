@@ -539,6 +539,21 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         ]
     }
 
+    /// The `GM_info` a grant-none page-world script gets — for the static document-start fast-path
+    /// (StaticPageWorldInjector), which has no token/values (a grant-none script can't touch the value
+    /// store). Mirrors the dynamic getScripts path's info EXACTLY so a script behaves the same on either
+    /// path. Internal (not private) so the static injector can reuse it; pure (no session state).
+    static func pageWorldGMInfo(for script: UserScript, isIncognito: Bool) -> [String: Any] {
+        let meta = script.metadata
+        let runAt = script.effectiveRunAt.rawValue
+        let injectInto = script.effectiveInjectInto.rawValue
+        let hasUpdateSource = (meta.downloadURL?.isEmpty == false) || (meta.updateURL?.isEmpty == false)
+        let scriptWillUpdate = hasUpdateSource && (script.overrides?.autoUpdate ?? AppSettings.autoUpdateScripts)
+        let scriptObject = scriptSubObject(meta, runAt: runAt, scriptWillUpdate: scriptWillUpdate)
+        return gmInfo(script, meta: meta, isIncognito: isIncognito, runAt: runAt,
+                      injectInto: injectInto, scriptObject: scriptObject, scriptWillUpdate: scriptWillUpdate)
+    }
+
     /// The full `GM_info.script` sub-object Tampermonkey/Violentmonkey expose. Empty optionals become
     /// empty strings (never JS `undefined` over the bridge) so scripts can read fields uniformly.
     private static func scriptSubObject(_ meta: ScriptMetadata,
