@@ -33,9 +33,18 @@ actor GMAssetCache {
     private let directory: URL
     private let fileManager = FileManager.default
 
+    /// Soft cap on total cached bytes. A `store` that pushes the cache past this evicts least-recently-
+    /// USED entries (read touches the file's mtime, so a hot asset like jQuery — read every navigation but
+    /// written once — survives) down to `evictTargetBytes`. Without this the cache was unbounded: a user
+    /// with many @require-heavy scripts accumulated cached bundles forever (an iPad-storage creep bug).
+    private let maxBytes: Int
+    /// Evict down to this (80% of the cap) rather than exactly the cap, so we don't re-scan-and-evict on
+    /// every single store once the cache is full.
+    private let evictTargetBytes: Int
+
     /// `directory` defaults to `Caches/GMAssets`; tests inject a temporary directory so they never
-    /// touch the real cache.
-    init(directory: URL? = nil) {
+    /// touch the real cache. `maxBytes` is the eviction cap (default 50 MB; tests pass a tiny value).
+    init(directory: URL? = nil, maxBytes: Int = 50 * 1024 * 1024) {
         if let directory {
             self.directory = directory
         } else {
@@ -43,19 +52,56 @@ actor GMAssetCache {
                 ?? FileManager.default.temporaryDirectory
             self.directory = caches.appendingPathComponent("GMAssets", isDirectory: true)
         }
+        self.maxBytes = max(1, maxBytes)
+        self.evictTargetBytes = max(1, maxBytes * 4 / 5)
         try? fileManager.createDirectory(at: self.directory, withIntermediateDirectories: true)
     }
 
     /// The cached entry for `url`, or nil if nothing has been stored for it yet.
     func entry(for url: URL) -> Entry? {
-        guard let data = try? Data(contentsOf: fileURL(for: url)) else { return nil }
-        return try? JSONDecoder().decode(Entry.self, from: data)
+        let file = fileURL(for: url)
+        guard let data = try? Data(contentsOf: file) else { return nil }
+        guard let decoded = try? JSONDecoder().decode(Entry.self, from: data) else { return nil }
+        // Mark as recently used so LRU eviction keeps assets that are read often but rarely re-written.
+        try? fileManager.setAttributes([.modificationDate: Date()], ofItemAtPath: file.path)
+        return decoded
     }
 
-    /// Persist `entry` for `url`, replacing any prior copy.
+    /// Persist `entry` for `url`, replacing any prior copy, then evict LRU entries if over the cap.
     func store(_ entry: Entry, for url: URL) {
         guard let encoded = try? JSONEncoder().encode(entry) else { return }
         try? encoded.write(to: fileURL(for: url), options: .atomic)
+        evictIfOverCap()
+    }
+
+    /// Total bytes currently on disk. Diagnostic + the eviction trigger; also unit-tested directly.
+    func totalBytes() -> Int {
+        guard let urls = try? fileManager.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
+        return urls.reduce(0) { $0 + (((try? $1.resourceValues(forKeys: [.fileSizeKey]))?.fileSize) ?? 0) }
+    }
+
+    /// If the cache exceeds `maxBytes`, remove least-recently-used entries (oldest mtime first) until it's
+    /// back under `evictTargetBytes`. A single entry larger than the target is kept — evicting everything
+    /// else still leaves it, and the loop stops rather than spinning (it's the only thing left to serve).
+    private func evictIfOverCap() {
+        let keys: Set<URLResourceKey> = [.fileSizeKey, .contentModificationDateKey]
+        guard let urls = try? fileManager.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: Array(keys)) else { return }
+        var items: [(url: URL, size: Int, mtime: Date)] = []
+        var total = 0
+        for url in urls {
+            let values = try? url.resourceValues(forKeys: keys)
+            let size = values?.fileSize ?? 0
+            items.append((url, size, values?.contentModificationDate ?? .distantPast))
+            total += size
+        }
+        guard total > maxBytes else { return }
+        items.sort { $0.mtime < $1.mtime }   // least-recently-used first
+        for item in items {
+            if total <= evictTargetBytes { break }
+            if (try? fileManager.removeItem(at: item.url)) != nil { total -= item.size }
+        }
     }
 
     /// Drop every cached asset. Wired into "Clear browsing data".
