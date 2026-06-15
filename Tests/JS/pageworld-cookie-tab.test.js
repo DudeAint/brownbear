@@ -142,6 +142,27 @@ function injectCode(calls) { return calls.filter((c) => c.api === "injectPageWor
         });
     }
 
+    // --- GM_getTabs (Tampermonkey's name for the all-tabs accessor — alias of GM_listTabs) -------
+    {
+        const body = [
+            "window.__obs = {};",
+            "GM_getTabs(function (m) { window.__obs.tabs = m; });"
+        ].join("\n");
+        const calls = bootForCode(["GM_getTabs"], body);
+        await new Promise((r) => setTimeout(r, 10));
+        test("a GM_getTabs-granted script routes to the page world (page-world-safe grant)", () => {
+            assert.strictEqual(calls.filter((c) => c.api === "injectPageWorld").length, 1);
+        });
+        const { pageWin, relayed } = runPage(injectCode(calls), function (api) {
+            if (api === "GM_listTabs") { return { "7": JSON.stringify({ z: 9 }) }; }
+            return null;
+        });
+        test("GM_getTabs relays as GM_listTabs and returns the all-tabs map (TM parity)", () => {
+            assert.strictEqual(relayed.filter((r) => r.api === "GM_listTabs").length, 1);
+            assert.strictEqual(JSON.stringify(pageWin.__obs.tabs), JSON.stringify({ "7": { z: 9 } }));
+        });
+    }
+
     console.log("\n" + passed + " passed, " + failed + " failed");
     if (failed) { process.exitCode = 1; }
 })();
