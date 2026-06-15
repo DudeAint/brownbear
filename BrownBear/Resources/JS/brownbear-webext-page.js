@@ -1140,8 +1140,9 @@
       managed: storageArea("managed"),   // read-only policy store; resolves {} with no MDM policy
       onChanged: makeEvent(storageListeners)
     },
-    // chrome.identity — getRedirectURL is the real Chrome value an extension registers as its OAuth
-    // redirect URI; launchWebAuthFlow's interactive UI lands in a follow-up (rejects clearly until then).
+    // chrome.identity — getRedirectURL is the real Chrome value an extension registers as its OAuth redirect
+    // URI; launchWebAuthFlow presents a native system auth session (ASWebAuthenticationSession, iOS 17.4+)
+    // and resolves with the redirect URL the provider lands on. Popups/options pages are the usual caller.
     identity: {
       getRedirectURL: function (path) {
         var p = (path == null) ? "" : String(path);
@@ -1149,7 +1150,9 @@
         return "https://" + data.extensionId + ".chromiumapp.org/" + p;
       },
       launchWebAuthFlow: function (details, cb) {
-        return settle(_Promise.reject(new Error("identity.launchWebAuthFlow is not yet available")), cb);
+        details = details || {};
+        return settle(bridge("identity.launchWebAuthFlow",
+          { url: details.url, interactive: details.interactive === true }), cb);
       },
       getAuthToken: function (details, cb) {
         if (typeof details === "function") { cb = details; }

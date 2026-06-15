@@ -142,8 +142,13 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
 
         Task { @MainActor in
             do {
-                let result = try await self.route(api: api, payload: payload, token: token,
-                                                  webView: webView, frameInfo: frameInfo)
+                // chrome.identity.launchWebAuthFlow is intercepted here (rather than in route()'s already
+                // complexity-capped dispatch switch); it presents a system auth session and resolves with
+                // the redirect URL.
+                let result = (api == "identity.launchWebAuthFlow")
+                    ? try await self.routeIdentity(payload: payload, token: token)
+                    : try await self.route(api: api, payload: payload, token: token,
+                                           webView: webView, frameInfo: frameInfo)
                 replyHandler(result, nil)
             } catch let error as BrownBearError {
                 let msg = error.errorDescription ?? "extension bridge error"
@@ -160,6 +165,18 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
     /// thrown failure was previously returned ONLY to the JS promise, so an extension that fire-and-forgets
     /// or omits .catch (most chrome.* calls) lost the error with zero Logs signal. Best-effort attribution:
     /// resolve the extension from the token (nil/stale token → unattributed engine line).
+    /// chrome.identity.launchWebAuthFlow — presents a native system auth session and resolves with the
+    /// provider's redirect URL. The chromiumapp.org callback host is derived from the TRUSTED session
+    /// extensionID (a non-mutating token lookup), never the page payload, so a page can only ever match its
+    /// own `<id>.chromiumapp.org` redirect. Rejects (throws) with the error message on failure/cancel.
+    private func routeIdentity(payload: [String: Any], token: String?) async throws -> Any? {
+        let extensionID = token.flatMap { sessions[$0]?.extensionID } ?? ""
+        let result = await WebExtensionWebAuthFlow.dispatch(
+            method: "launchWebAuthFlow", args: payload, extensionID: extensionID)
+        if let url = result["responseUrl"] as? String { return url }
+        throw BrownBearError.bridgeRejected((result["error"] as? String) ?? "launchWebAuthFlow failed")
+    }
+
     private func logBridgeError(api: String, token: String?, message: String) async {
         // Non-mutating token→extension lookup (resolve() would evict a disabled session as a side effect).
         let extensionID = token.flatMap { sessions[$0]?.extensionID } ?? ""

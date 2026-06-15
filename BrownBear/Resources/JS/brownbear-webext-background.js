@@ -3955,9 +3955,22 @@
   };
 
   // chrome.identity. getRedirectURL is the real Chrome value (https://<id>.chromiumapp.org/<path>) an
-  // extension registers as its OAuth redirect URI. launchWebAuthFlow's interactive auth UI lands in a
-  // follow-up (it needs a presented web view); until then it rejects clearly rather than hanging or
-  // throwing on an undefined namespace. getProfileUserInfo/getAccounts report empty (no iOS account).
+  // extension registers as its OAuth redirect URI. launchWebAuthFlow presents a native system auth session
+  // (__bb_identity → ASWebAuthenticationSession, iOS 17.4+) and resolves with the redirect URL the provider
+  // lands on. getProfileUserInfo/getAccounts report empty (no iOS account).
+  function identityCall(method, args) {
+    return new Promise(function (resolve, reject) {
+      if (typeof __bb_identity !== 'function') {
+        reject(new Error('identity.' + method + ' is not available'));
+        return;
+      }
+      __bb_identity(method, JSON.stringify(args || {}), function (resJSON) {
+        var res = parseJSON(resJSON) || {};
+        if (res.error) { reject(new Error(res.error)); }
+        else { resolve(res.responseUrl); }
+      });
+    });
+  }
   var identity = {
     getRedirectURL: function (path) {
       var p = (path == null) ? '' : String(path);
@@ -3965,7 +3978,9 @@
       return 'https://' + extId + '.chromiumapp.org/' + p;
     },
     launchWebAuthFlow: function (details, cb) {
-      return settleBg(Promise.reject(new Error('identity.launchWebAuthFlow is not yet available')), cb);
+      details = details || {};
+      return settleBg(identityCall('launchWebAuthFlow',
+        { url: details.url, interactive: details.interactive === true }), cb);
     },
     getAuthToken: function (details, cb) {
       if (typeof details === 'function') { cb = details; }
