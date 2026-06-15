@@ -91,4 +91,50 @@ final class GMAssetCacheTests: XCTestCase {
         let loaded = await cache.entry(for: url("https://example.com/one.js"))
         XCTAssertNil(loaded, "clear() removes every cached asset")
     }
+
+    // MARK: - Size cap + LRU eviction
+
+    /// ~20 KB of data encodes to ~27 KB on disk (base64). A cap that fits two such entries but not three
+    /// makes the eviction behavior deterministic without depending on exact byte counts.
+    private func bigEntry(_ tag: UInt8) -> GMAssetCache.Entry {
+        GMAssetCache.Entry(data: Data(repeating: tag, count: 20_000),
+                           etag: nil, lastModified: nil, mimeType: "text/plain")
+    }
+
+    func testTotalBytesCountsTheOnDiskEntry() async {
+        let cache = GMAssetCache(directory: directory, maxBytes: 10_000_000)
+        let empty = await cache.totalBytes()
+        XCTAssertEqual(empty, 0, "an empty cache is zero bytes")
+        await cache.store(bigEntry(0x11), for: url("https://example.com/a.js"))
+        let bytes = await cache.totalBytes()
+        XCTAssertGreaterThan(bytes, 20_000, "totalBytes reflects the stored (base64-encoded) entry on disk")
+    }
+
+    func testStoringPastTheCapEvictsBackUnderIt() async {
+        let cache = GMAssetCache(directory: directory, maxBytes: 75_000)   // fits ~two 27 KB entries, not three
+        await cache.store(bigEntry(0x01), for: url("https://example.com/1.js"))
+        await cache.store(bigEntry(0x02), for: url("https://example.com/2.js"))
+        await cache.store(bigEntry(0x03), for: url("https://example.com/3.js"))
+        let total = await cache.totalBytes()
+        XCTAssertLessThanOrEqual(total, 75_000, "the third store evicts the cache back under the cap")
+        XCTAssertGreaterThan(total, 0, "eviction trims to the target, it doesn't wipe the cache")
+    }
+
+    func testEvictionIsLRU_recentlyReadEntrySurvives() async {
+        let cache = GMAssetCache(directory: directory, maxBytes: 75_000)
+        let a = url("https://example.com/a.js")
+        let b = url("https://example.com/b.js")
+        let c = url("https://example.com/c.js")
+        await cache.store(bigEntry(0xAA), for: a)
+        await cache.store(bigEntry(0xBB), for: b)
+        // Read A so it's the most-recently-used; B becomes the least-recently-used.
+        _ = await cache.entry(for: a)
+        await cache.store(bigEntry(0xCC), for: c)   // pushes over the cap → evicts the LRU entry
+        let survivesA = await cache.entry(for: a)
+        let evictedB = await cache.entry(for: b)
+        let survivesC = await cache.entry(for: c)
+        XCTAssertNotNil(survivesA, "the recently-read entry (jQuery-on-every-nav pattern) is kept")
+        XCTAssertNil(evictedB, "the least-recently-used entry is evicted first")
+        XCTAssertNotNil(survivesC, "the just-stored entry is kept")
+    }
 }
