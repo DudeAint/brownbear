@@ -2196,18 +2196,32 @@
       else if (typeof info.delayInMinutes === 'number') { when = Date.now() + info.delayInMinutes * 60000; }
       if (typeof info.periodInMinutes === 'number') { period = info.periodInMinutes; }
       __bb_alarm_create(String(name || ''), when, period);
+      return Promise.resolve();   // Chrome 111+ create() returns a Promise<void>
     },
+    // Each returns a Promise when no callback is passed (MV3 service-worker form, what `browser.alarms.*`
+    // and `await chrome.alarms.*` need) and fires the callback when one is — settleBg gives both, mirroring
+    // the page shim. Was callback-only, so `await chrome.alarms.getAll()` resolved to undefined.
     clear: function (name, cb) {
-      __bb_alarm_clear(String(name || ''), function (res) { if (typeof cb === 'function') { cb(parseJSON(res) === true); } });
+      if (typeof name === 'function') { cb = name; name = ''; }
+      return settleBg(new Promise(function (resolve) {
+        __bb_alarm_clear(String(name || ''), function (res) { resolve(parseJSON(res) === true); });
+      }), cb);
     },
     clearAll: function (cb) {
-      __bb_alarm_clear_all(function (res) { if (typeof cb === 'function') { cb(parseJSON(res) === true); } });
+      return settleBg(new Promise(function (resolve) {
+        __bb_alarm_clear_all(function (res) { resolve(parseJSON(res) === true); });
+      }), cb);
     },
     get: function (name, cb) {
-      __bb_alarm_get(String(name || ''), function (res) { if (typeof cb === 'function') { cb(parseJSON(res) || undefined); } });
+      if (typeof name === 'function') { cb = name; name = ''; }
+      return settleBg(new Promise(function (resolve) {
+        __bb_alarm_get(String(name || ''), function (res) { resolve(parseJSON(res) || undefined); });
+      }), cb);
     },
     getAll: function (cb) {
-      __bb_alarm_get_all(function (res) { if (typeof cb === 'function') { cb(parseJSON(res) || []); } });
+      return settleBg(new Promise(function (resolve) {
+        __bb_alarm_get_all(function (res) { resolve(parseJSON(res) || []); });
+      }), cb);
     },
     onAlarm: makeEvent(alarmListeners)
   };
