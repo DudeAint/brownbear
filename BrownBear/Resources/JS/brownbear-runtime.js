@@ -28,6 +28,7 @@
   var _Error = Error;
   var _CSSStyleSheet = W.CSSStyleSheet;   // constructable-stylesheet ctor (CSP-resilient GM_addStyle)
   var _atob = W.atob ? W.atob.bind(W) : null;
+  var _btoa = W.btoa ? W.btoa.bind(W) : null;
   var _fetch = W.fetch ? W.fetch.bind(W) : null;
   var _MessageChannel = W.MessageChannel || null;
   var _setTimeout = W.setTimeout ? W.setTimeout.bind(W) : null;
@@ -184,6 +185,33 @@
     return bytes;
   }
 
+  // Base64-encode raw bytes for binary GM_xmlhttpRequest request bodies. Chunked so a large body
+  // never blows the argument limit of String.fromCharCode(...). Returns null if btoa is unavailable.
+  function bytesToB64(bytes, btoaFn) {
+    var enc = btoaFn || _btoa;
+    if (!enc) { return null; }
+    var CHUNK = 0x8000, parts = [];
+    for (var i = 0; i < bytes.length; i += CHUNK) {
+      parts.push(String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK)));
+    }
+    return enc(parts.join(""));
+  }
+
+  // Encode a binary request body (ArrayBuffer / typed array / DataView) to a base64 string so it
+  // crosses the bridge byte-exact. Returns { data, dataIsBase64 } or null when `data` isn't binary.
+  function encodeBinaryBody(data, ABCtor, btoaFn) {
+    if (data == null) { return null; }
+    var bytes = null;
+    if (ABCtor && data instanceof ABCtor) { bytes = new Uint8Array(data); }
+    else if (data.buffer instanceof (ABCtor || ArrayBuffer) && typeof data.byteLength === "number") {
+      // Typed array or DataView — view its own byte range, not the whole backing buffer.
+      bytes = new Uint8Array(data.buffer, data.byteOffset || 0, data.byteLength);
+    }
+    if (!bytes) { return null; }
+    var b64 = bytesToB64(bytes, btoaFn);
+    return (b64 == null) ? null : { data: b64, dataIsBase64: true };
+  }
+
   function buildXHRResponse(p, responseType) {
     var resp = {
       readyState: p.readyState != null ? p.readyState : 4,
@@ -204,7 +232,9 @@
     try {
       if (p.isBase64 && (rt === "arraybuffer" || rt === "blob")) {
         var bytes = b64ToBytes(p.response || "");
-        resp.response = (rt === "blob") ? new Blob([bytes]) : bytes.buffer;
+        resp.response = (rt === "blob")
+          ? new Blob([bytes], p.contentType ? { type: p.contentType } : undefined)
+          : bytes.buffer;
       } else if (rt === "json") {
         resp.response = p.responseText ? _JSON.parse(p.responseText) : null;
       } else if (rt === "document") {
@@ -256,14 +286,21 @@
       anonymous: !!details.anonymous
     };
     if (details.timeout) { req.timeout = details.timeout; }
+    if (typeof details.overrideMimeType === "string" && details.overrideMimeType) {
+      req.overrideMimeType = details.overrideMimeType;
+    }
     req.headers = _Object.assign({}, details.headers || {});   // clone so we can default Content-Type
     function hasContentType() {
       for (var hk in req.headers) { if (hk.toLowerCase() === "content-type") { return true; } }
       return false;
     }
     var data = details.data;
+    var bin = encodeBinaryBody(data, ArrayBuffer, _btoa);
     if (typeof data === "string") { req.data = data; }
-    else if (data != null && typeof URLSearchParams === "function" && data instanceof URLSearchParams) {
+    else if (bin) {
+      // ArrayBuffer / typed array / DataView — send the bytes verbatim (base64), not "[object …]".
+      req.data = bin.data; req.dataIsBase64 = true;
+    } else if (data != null && typeof URLSearchParams === "function" && data instanceof URLSearchParams) {
       req.data = data.toString();   // x-www-form-urlencoded, NOT JSON
       if (!hasContentType()) { req.headers["Content-Type"] = "application/x-www-form-urlencoded;charset=UTF-8"; }
     } else if (data != null && typeof FormData === "function" && data instanceof FormData) {
@@ -273,10 +310,8 @@
       req.data = pairs.join("&");
       if (!hasContentType()) { req.headers["Content-Type"] = "application/x-www-form-urlencoded;charset=UTF-8"; }
     } else if (data != null) {
-      // Don't JSON.stringify ArrayBuffers/typed arrays into "{}" — send their string form; a real string
-      // body should be passed as a string (handled above). Objects still serialize to JSON.
-      if (data instanceof ArrayBuffer || (data.buffer instanceof ArrayBuffer)) { req.data = String(data); }
-      else { try { req.data = _JSON.stringify(data); } catch (e) { req.data = String(data); } }
+      // Objects serialize to JSON; a real string body is handled above.
+      try { req.data = _JSON.stringify(data); } catch (e) { req.data = String(data); }
     }
     return req;
   }
@@ -865,6 +900,7 @@
     "use strict";
     var W = window, D = document;
     var _JSON = W.JSON, _Object = W.Object, _Array = W.Array, _Promise = W.Promise;
+    var _btoaPage = W.btoa ? W.btoa.bind(W) : null;
 
     // Persist an own-data write to native via the pristine vault. Fire-and-forget — the page-local cache
     // already reflected the change synchronously. No-op if the vault didn't install (restricted handler
@@ -1007,7 +1043,9 @@
       try {
         if (p.isBase64 && (rt === "arraybuffer" || rt === "blob")) {
           var bytes = xhrB64ToBytes(p.response || "");
-          resp.response = (rt === "blob" && typeof W.Blob === "function") ? new W.Blob([bytes]) : bytes.buffer;
+          resp.response = (rt === "blob" && typeof W.Blob === "function")
+            ? new W.Blob([bytes], p.contentType ? { type: p.contentType } : undefined)
+            : bytes.buffer;
         } else if (rt === "json") {
           resp.response = p.responseText ? _JSON.parse(p.responseText) : null;
         } else if (rt === "document" && typeof W.DOMParser === "function") {
@@ -1019,6 +1057,24 @@
       } catch (e) { resp.response = p.responseText || ""; }
       return resp;
     }
+    // Self-contained binary-body encoder — the module-scope encodeBinaryBody/bytesToB64 helpers live in
+    // the isolated IIFE and are NOT in this serialized page-world closure, so the page world needs its own.
+    // ArrayBuffer / typed array / DataView -> { data: base64, dataIsBase64: true }; null otherwise.
+    function pwEncodeBinaryBody(data) {
+      if (data == null || !_btoaPage) { return null; }
+      var AB = W.ArrayBuffer, U8 = W.Uint8Array, bytes = null;
+      if (!U8) { return null; }
+      if (AB && data instanceof AB) { bytes = new U8(data); }
+      else if (AB && data.buffer instanceof AB && typeof data.byteLength === "number") {
+        bytes = new U8(data.buffer, data.byteOffset || 0, data.byteLength);
+      }
+      if (!bytes) { return null; }
+      var CHUNK = 0x8000, parts = [];
+      for (var i = 0; i < bytes.length; i += CHUNK) {
+        parts.push(String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK)));
+      }
+      return { data: _btoaPage(parts.join("")), dataIsBase64: true };
+    }
     function xhrSerialize(details) {
       var req = {
         method: details.method || "GET", url: typeof details.url === "string" ? details.url : String(details.url),
@@ -1026,10 +1082,16 @@
         anonymous: !!details.anonymous
       };
       if (details.timeout) { req.timeout = details.timeout; }
+      if (typeof details.overrideMimeType === "string" && details.overrideMimeType) {
+        req.overrideMimeType = details.overrideMimeType;
+      }
       function hasCT() { for (var k in req.headers) { if (k.toLowerCase() === "content-type") { return true; } } return false; }
       var data = details.data;
+      var bin = pwEncodeBinaryBody(data);
       if (typeof data === "string") { req.data = data; }
-      else if (data != null && typeof W.URLSearchParams === "function" && data instanceof W.URLSearchParams) {
+      else if (bin) {
+        req.data = bin.data; req.dataIsBase64 = true;   // bytes verbatim across the bridge
+      } else if (data != null && typeof W.URLSearchParams === "function" && data instanceof W.URLSearchParams) {
         req.data = data.toString();
         if (!hasCT()) { req.headers["Content-Type"] = "application/x-www-form-urlencoded;charset=UTF-8"; }
       } else if (data != null && typeof W.FormData === "function" && data instanceof W.FormData) {
@@ -1038,8 +1100,7 @@
         req.data = pairs.join("&");
         if (!hasCT()) { req.headers["Content-Type"] = "application/x-www-form-urlencoded;charset=UTF-8"; }
       } else if (data != null) {
-        if (data instanceof W.ArrayBuffer || (data.buffer instanceof W.ArrayBuffer)) { req.data = String(data); }
-        else { try { req.data = _JSON.stringify(data); } catch (e) { req.data = String(data); } }
+        try { req.data = _JSON.stringify(data); } catch (e) { req.data = String(data); }
       }
       return req;
     }
