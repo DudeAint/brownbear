@@ -865,6 +865,53 @@
         __pbEmit("[bb-perfbridge] " + dir + " " + n + "b");
       }
 
+      // Eval/CSP capability probe (diagnostic for the ScriptCat eval-loader class of bot: a granted
+      // userscript that GM_xhr-fetches an encrypted module, decrypts it, then new Function()/eval()s it).
+      // ScriptCat compiles every body with `new Function` (utils.ts compileScript) and EXPECTS to need a
+      // CSP-relaxed world — on desktop it sets userScripts.configureWorld({csp:"...unsafe-eval..."}) on the
+      // USER_SCRIPT world. The body runs in whichever world its registration lands in: MAIN (inject.js) is
+      // the page realm and inherits the PAGE's CSP, so a strict script-src there silently kills the final
+      // new Function(decryptedModule) — "scriptcat says running" (the loader ran) but "doesn't inject" (the
+      // module never evals). The isolated content world is CSP-immune. Probe BOTH roles and surface the
+      // answer in the Logs tab — no desktop Web Inspector needed. Self-contained (the page copy is
+      // toString-injected with no closure refs beyond `role`/`doc`/`__pbEmit`). Runs once per world.
+      try {
+        var __ev = (typeof window !== "undefined") ? window : ((typeof self !== "undefined") ? self : null);
+        if (__ev && !__ev.__bbEvalProbed) {
+          __ev.__bbEvalProbed = 1;
+          var __fnOK = false, __evOK = false, __fnErr = "", __evErr = "";
+          try { __fnOK = ((new Function("return 1"))() === 1); }
+          catch (e) { __fnErr = (e && e.name) || "err"; }
+          try { __evOK = ((0, eval)("1") === 1); }
+          catch (e2) { __evErr = (e2 && e2.name) || "err"; }
+          var __metaCsp = "";
+          try {
+            var __m = doc.querySelector('meta[http-equiv="Content-Security-Policy" i]');
+            if (__m) { __metaCsp = (__m.getAttribute("content") || "").slice(0, 200); }
+          } catch (e3) {}
+          __pbEmit("[bb-evalprobe] " + role
+            + " Function:" + (__fnOK ? "OK" : ("BLOCKED(" + __fnErr + ")"))
+            + " eval:" + (__evOK ? "OK" : ("BLOCKED(" + __evErr + ")"))
+            + (__metaCsp ? " metaCSP=" + __metaCsp : ""));
+          // Live capture in the page realm: when the page's CSP actually refuses a script/eval (e.g. the
+          // bot's new Function(module)), the browser fires securitypolicyviolation carrying the exact
+          // directive — even for a header-delivered CSP we can't read from JS. Cap so a noisy page can't
+          // flood the Logs tab. This pins down Theory A (page-CSP-blocked eval) vs a cross-world bridge gap.
+          if (role === "page") {
+            var __cspN = 0;
+            doc.addEventListener("securitypolicyviolation", function (cv) {
+              if (++__cspN > 5) { return; }
+              try {
+                __pbEmit("[bb-evalprobe] CSP-VIOLATION "
+                  + (cv.violatedDirective || cv.effectiveDirective || "?")
+                  + " blocked=" + (cv.blockedURI || "?")
+                  + (cv.sample ? " sample=" + String(cv.sample).slice(0, 60) : ""));
+              } catch (e4) {}
+            });
+          }
+        }
+      } catch (e0) {}
+
       // One shared sentinel element, the same DOM node in every world (find-or-create).
       var chan = rootEl.querySelector("bb-perf-bridge[data-bb-perf-bridge]");
       if (!chan) {
