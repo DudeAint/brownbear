@@ -62,7 +62,7 @@ function bootIsolated(source) {
     };
     win.window = win; win.self = win; win.top = win;
     const document = { readyState: "complete", addEventListener() {} };
-    const ctx = { console, window: win, document, location: win.location, globalThis: undefined, Blob: BlobShim };
+    const ctx = { console, window: win, document, location: win.location, globalThis: undefined, Blob: BlobShim, URL };
     ctx.globalThis = ctx;
     vm.createContext(ctx); vm.runInContext(SRC, ctx);
     return { calls, win };
@@ -109,7 +109,7 @@ function runPageWorldXHR(code) {
     };
     const pageWin = {
         document: pageDoc, JSON, Object, Array, Promise, console, __bbPageGM: bbPageGM,
-        btoa: nodeBtoa, atob: nodeAtob
+        btoa: nodeBtoa, atob: nodeAtob, URL, location: { href: "https://example.com/p" }
     };
     pageWin.window = pageWin; pageWin.self = pageWin; pageWin.top = pageWin;
     const ctx = { window: pageWin, document: pageDoc, console, globalThis: undefined };
@@ -167,6 +167,26 @@ function runPageWorldXHR(code) {
         });
     }
 
+    // ---- Relative URLs are resolved against the page (native can't follow a host-less url) -------
+    {
+        const src = "GM_xmlhttpRequest({ url: '/api/x?y=1' });";   // page is https://example.com/p
+        const { calls } = bootIsolated(src);
+        await new Promise((r) => setTimeout(r, 10));
+        const xhr = calls.filter((c) => c.api === "GM_xmlhttpRequest")[0];
+        test("isolated: a relative url is resolved to absolute against the page location", () => {
+            assert.strictEqual(xhr.payload.request.url, "https://example.com/api/x?y=1");
+        });
+    }
+    {
+        const src = "GM_xmlhttpRequest({ url: 'https://other.test/abs' });";
+        const { calls } = bootIsolated(src);
+        await new Promise((r) => setTimeout(r, 10));
+        const xhr = calls.filter((c) => c.api === "GM_xmlhttpRequest")[0];
+        test("isolated: an absolute url passes through unchanged", () => {
+            assert.strictEqual(xhr.payload.request.url, "https://other.test/abs");
+        });
+    }
+
     // ---- Isolated world: a Blob response uses contentType for its type --------------------------
     {
         const src = "GM_xmlhttpRequest({ method: 'GET', url: 'https://google.com/i.png', responseType: 'blob', "
@@ -221,6 +241,18 @@ function runPageWorldXHR(code) {
         });
         test("page world: overrideMimeType is passed through to native", () => {
             assert.strictEqual(xhrWrite.payload.request.overrideMimeType, "text/plain; charset=x-user-defined");
+        });
+    }
+
+    // ---- Page world: a relative url is resolved against the page too ----------------------------
+    {
+        const src = "GM_xmlhttpRequest({ url: '/pw/rel' });";   // page is https://example.com/p
+        const calls = bootPageWorld(src);
+        await new Promise((r) => setTimeout(r, 10));
+        const writes = runPageWorldXHR(calls.filter((c) => c.api === "injectPageWorld")[0].payload.code);
+        const xhrWrite = writes.filter((w) => w.api === "GM_xmlhttpRequest")[0];
+        test("page world: a relative url is resolved to absolute against the page location", () => {
+            assert.strictEqual(xhrWrite.payload.request.url, "https://example.com/pw/rel");
         });
     }
 

@@ -277,10 +277,23 @@
     }
   }
 
+  // Resolve a (possibly relative) GM_xmlhttpRequest URL against `base` to an ABSOLUTE url — native parses
+  // with URL(string:) which can't follow a relative/host-less url, so "/api/x" would fail. TM/VM resolve
+  // relative urls against the page. Already-absolute urls pass through unchanged; an unparseable url falls
+  // back to its raw string. `URLCtor` is the world's URL constructor.
+  function resolveXHRURL(u, base, URLCtor) {
+    var s = (typeof u === "string") ? u : String(u);
+    var C = URLCtor || (typeof URL === "function" ? URL : null);
+    if (!C || !base) { return s; }
+    try { return new C(s, base).href; } catch (e) { return s; }
+  }
+
   function serializeXHRDetails(details) {
+    var pageBase;
+    try { pageBase = (typeof location !== "undefined" && location.href) || undefined; } catch (e) { pageBase = undefined; }
     var req = {
       method: details.method || "GET",
-      url: typeof details.url === "string" ? details.url : String(details.url),
+      url: resolveXHRURL(details.url, pageBase),
       headers: details.headers || {},
       responseType: details.responseType || "",
       anonymous: !!details.anonymous
@@ -1116,9 +1129,17 @@
       }
       return { data: _btoaPage(parts.join("")), dataIsBase64: true };
     }
+    function pwResolveURL(u) {
+      // Resolve a relative GM_xhr url against the page (native can't follow a host-less url). Self-contained
+      // (the module-scope resolveXHRURL isn't in this page-world closure). Absolute urls pass through.
+      var s = (typeof u === "string") ? u : String(u);
+      var base; try { base = W.location && W.location.href; } catch (e) { base = undefined; }
+      if (typeof W.URL !== "function" || !base) { return s; }
+      try { return new W.URL(s, base).href; } catch (e) { return s; }
+    }
     function xhrSerialize(details) {
       var req = {
-        method: details.method || "GET", url: typeof details.url === "string" ? details.url : String(details.url),
+        method: details.method || "GET", url: pwResolveURL(details.url),
         headers: _Object.assign({}, details.headers || {}), responseType: details.responseType || "",
         anonymous: !!details.anonymous
       };
