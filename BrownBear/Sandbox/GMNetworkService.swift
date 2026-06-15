@@ -22,6 +22,10 @@ struct GMXHRRequest {
     let responseType: String   // "" | "text" | "json" | "arraybuffer" | "blob" | "document"
     let timeout: TimeInterval?
     let anonymous: Bool
+    /// Tampermonkey/Violentmonkey `overrideMimeType`: forces how the response body is interpreted.
+    /// Its main use is the `text/plain; charset=x-user-defined` trick to read a binary response as a
+    /// byte-preserving string via `responseText`. nil when the script didn't set it.
+    let overrideMimeType: String?
 
     init?(payload: [String: Any]) {
         guard let urlString = payload["url"] as? String, let url = URL(string: urlString) else {
@@ -31,7 +35,14 @@ struct GMXHRRequest {
         self.method = (payload["method"] as? String)?.uppercased() ?? "GET"
         self.headers = (payload["headers"] as? [String: String]) ?? [:]
         if let bodyString = payload["data"] as? String {
-            self.body = bodyString.data(using: .utf8)
+            // A binary request body (ArrayBuffer/typed array) crosses the bridge base64-encoded; decode it
+            // back to the exact bytes. A malformed base64 string fails closed to no body rather than
+            // smuggling the literal base64 text as the payload.
+            if payload["dataIsBase64"] as? Bool == true {
+                self.body = Data(base64Encoded: bodyString)
+            } else {
+                self.body = bodyString.data(using: .utf8)
+            }
         } else {
             self.body = nil
         }
@@ -42,9 +53,29 @@ struct GMXHRRequest {
             self.timeout = nil
         }
         self.anonymous = (payload["anonymous"] as? Bool) ?? false
+        if let omt = (payload["overrideMimeType"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !omt.isEmpty {
+            self.overrideMimeType = omt
+        } else {
+            self.overrideMimeType = nil
+        }
     }
 
+    /// The response body must be delivered as raw bytes (not UTF-8 text) when the script asked for an
+    /// arraybuffer/blob, OR when `overrideMimeType` forces byte-preserving decoding — the
+    /// `charset=x-user-defined` binary-string trick, or any non-text MIME.
     var wantsBinary: Bool { responseType == "arraybuffer" || responseType == "blob" }
+
+    /// `overrideMimeType` forces a byte-preserving `responseText` (responseType is text/empty, but the
+    /// override marks the payload as binary). Distinct from `wantsBinary`, which delivers via `response`.
+    var overrideForcesBinaryText: Bool {
+        guard !wantsBinary, let mime = overrideMimeType?.lowercased() else { return false }
+        if mime.contains("x-user-defined") { return true }
+        if mime.hasPrefix("text/") { return false }
+        if mime.contains("json") || mime.contains("xml") || mime.contains("html")
+            || mime.contains("javascript") || mime.contains("urlencoded") { return false }
+        return true
+    }
 }
 
 /// Shared across the @MainActor router and its own background URLSession delegate queue; all
@@ -187,10 +218,24 @@ final class GMNetworkService: NSObject, @unchecked Sendable {
             "total": Int(max(context.expectedLength, Int64(context.received.count))),
             "lengthComputable": context.expectedLength >= 0
         ]
+        // contentType the client can use for a Blob's `type`: the script's overrideMimeType wins, else the
+        // response's actual Content-Type.
+        if let override = context.request.overrideMimeType {
+            payload["contentType"] = override
+        } else if let ct = http?.value(forHTTPHeaderField: "Content-Type") {
+            payload["contentType"] = ct
+        }
         if context.request.wantsBinary {
             payload["isBase64"] = true
             payload["response"] = context.received.base64EncodedString()
             payload["responseText"] = ""
+        } else if context.request.overrideForcesBinaryText {
+            // overrideMimeType (x-user-defined / non-text MIME): responseText is a byte-preserving string
+            // (one char per byte, charCodeAt 0-255) so the script can read the raw bytes the TM/VM way.
+            let binaryText = Self.binaryString(context.received)
+            payload["isBase64"] = false
+            payload["responseText"] = binaryText
+            payload["response"] = binaryText
         } else {
             let text = String(data: context.received, encoding: .utf8) ?? ""
             payload["isBase64"] = false
@@ -198,6 +243,16 @@ final class GMNetworkService: NSObject, @unchecked Sendable {
             payload["response"] = text
         }
         return payload
+    }
+
+    /// Build a byte-preserving "binary string": each byte becomes one character with that code point
+    /// (0-255), matching the JS string a userscript reads from `responseText` under
+    /// `overrideMimeType: 'text/plain; charset=x-user-defined'`. Crosses the JSON bridge intact.
+    private static func binaryString(_ data: Data) -> String {
+        var scalars = String.UnicodeScalarView()
+        scalars.reserveCapacity(data.count)
+        for byte in data { scalars.append(Unicode.Scalar(byte)) }
+        return String(scalars)
     }
 
     private static func formatHeaders(_ response: HTTPURLResponse?) -> String {
