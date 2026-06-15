@@ -791,6 +791,16 @@
       },
       onPortMessage: function (portId, message) {
         var p = ports[portId];
+        // Diagnostic: a worker port message reaching THIS content world (e.g. a ScriptCat GM_xmlhttpRequest
+        // response arriving at scripting.js). If the SW logged "port post" but this never logs, the
+        // worker→content port delivery is the gap; if this logs but the userscript still stalls, the gap is
+        // the content→page relay. Pinpoints which side of the chain drops the response.
+        try {
+          if (handler && __bbLogToken) {
+            var _sz = 0; try { _sz = JSON.stringify(message == null ? null : message).length; } catch (e) { _sz = -1; }
+            bridge("runtime.frameLog", { level: "debug", message: "[content] port recv " + portId + " " + _sz + "b" + (p ? "" : " (NO PORT)") }, null).catch(function () {});
+          }
+        } catch (e) { /* diagnostic must never break delivery */ }
         if (p) { p._fireMessage(message); }
       },
       onPortDisconnect: function (portId) {

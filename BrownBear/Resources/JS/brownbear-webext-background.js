@@ -2253,7 +2253,14 @@
       onDisconnect: makeEvent(discListeners),
       postMessage: function (msg) {
         if (disconnected) { return; }
-        try { __bb_port_post(portId, JSON.stringify(msg === undefined ? null : msg)); } catch (e) {}
+        try {
+          var __j = JSON.stringify(msg === undefined ? null : msg);
+          // Diagnostic: the worker streaming OUT on a port (e.g. a ScriptCat GM_xmlhttpRequest response,
+          // which rides a chrome.runtime.connect port, not the sendMessage reply). Pinpoints whether the
+          // SW actually posts the response back toward the content side.
+          __bb_log('debug', '[bb-bg] port post ' + portId + ' ' + (__j ? __j.length : 0) + 'b');
+          __bb_port_post(portId, __j);
+        } catch (e) {}
       },
       disconnect: function () {
         if (disconnected) { return; }
@@ -4454,6 +4461,9 @@
       // The reverse channel: an offscreen document registering itself as a service-worker client so the
       // worker can reach it via clients.matchAll() + client.postMessage (Stylus's offscreen pipeline).
       if (name === '__bb_swclient_host') { bindServiceWorkerClientHostPort(port); return; }
+      // Diagnostic: a content/page port reaching the worker's chrome.runtime.onConnect (ScriptCat opens
+      // one per GM_xmlhttpRequest). If this never logs, the connection never reached the SW.
+      __bb_log('debug', '[bb-bg] port onConnect ' + portId + ' name="' + (typeof name === 'string' ? name : '') + '" listeners=' + connectListeners.length);
       for (var i = 0; i < connectListeners.length; i++) {
         try { connectListeners[i](port); }
         catch (e) { __bb_log('error', 'runtime.onConnect listener threw: ' + (e && e.message ? e.message : e)); }
