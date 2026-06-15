@@ -856,7 +856,11 @@
     // GM_download streams its lifecycle (progress/load/error/abort) native→page via the vault's minted-id
     // channel (__bbPageXHR), exactly like GM_xmlhttpRequest; the @connect host is enforced natively. See
     // pageWorldGMClient.GM_download + the native handleDownload fromPageWorld branch.
-    GM_download: 1
+    GM_download: 1,
+    // GM_registerMenuCommand registers in the native "•••" menu; a tap streams back native→page via the
+    // vault's minted-id channel (__bbPageXHR(commandId, "menu")) to the script's callback. The minted id IS
+    // the command id. See pageWorldGMClient.GM_registerMenuCommand + the native fireMenuCommand page branch.
+    GM_registerMenuCommand: 1, GM_unregisterMenuCommand: 1
   };
   // DECLARATION grants that aren't relayed APIs — they're page-world-native capabilities a script asks for.
   // `@grant unsafeWindow` is the canonical "I want the REAL page window" request (the page-world client
@@ -1173,6 +1177,37 @@
       return { abort: function () { pageGM("GM_downloadAbort", { requestId: requestId }); } };
     }
 
+    // --- GM_registerMenuCommand / GM_unregisterMenuCommand (page world) -------------------------
+    // The command lives in the native "•••" menu; when the user taps it, native streams back via the
+    // vault's minted-id channel (window.__bbPageXHR(commandId, "menu")) to the callback registered here.
+    // The vault-minted id IS the command id (unguessable, page can't forge a tap). The handler PERSISTS
+    // (a command fires on every tap) until GM_unregisterMenuCommand reaps it. TM/VM signature parity.
+    function GM_registerMenuCommand(title, callback, optionsOrAccessKey) {
+      if (typeof callback !== "function") { return null; }
+      var vault = W.__bbPageGM;
+      if (!vault || typeof vault.xhr !== "function") { return null; }
+      var accessKey = null, autoClose = true;
+      if (typeof optionsOrAccessKey === "string") {
+        accessKey = optionsOrAccessKey;
+      } else if (optionsOrAccessKey && typeof optionsOrAccessKey === "object") {
+        if (typeof optionsOrAccessKey.accessKey === "string") { accessKey = optionsOrAccessKey.accessKey; }
+        if (optionsOrAccessKey.autoClose === false) { autoClose = false; }
+      }
+      var commandId = vault.xhr(function (type) {
+        if (type === "menu") { try { callback(); } catch (e) { /* a command must not break delivery */ } }
+      });
+      pageGM("GM_registerMenuCommand", {
+        commandId: commandId, title: String(title == null ? "" : title),
+        accessKey: accessKey, autoClose: autoClose
+      });
+      return commandId;
+    }
+    function GM_unregisterMenuCommand(commandId) {
+      var id = String(commandId);
+      pageGM("GM_unregisterMenuCommand", { commandId: id });
+      if (typeof W.__bbPageGM.xhrDone === "function") { W.__bbPageGM.xhrDone(id); }
+    }
+
     // --- GM_cookie / GM_getTab / GM_saveTab / GM_listTabs (request → REPLY) ----------------------
     // One-shot APIs that return data (cookies are sensitive cross-origin data; tab objects the script's
     // own). The request goes out via the vault; native runs it (@connect-gated for cookies) and RETURNS
@@ -1269,7 +1304,9 @@
       getTab: function () { return new _Promise(function (resolve) { GM_getTab(resolve); }); },
       saveTab: function (obj) { return new _Promise(function (resolve) { GM_saveTab(obj, function () { resolve(); }); }); },
       listTabs: function () { return new _Promise(function (resolve) { GM_listTabs(resolve); }); },
-      download: function () { return GM_download.apply(null, arguments); }
+      download: function () { return GM_download.apply(null, arguments); },
+      registerMenuCommand: function () { return GM_registerMenuCommand.apply(null, arguments); },
+      unregisterMenuCommand: function () { return GM_unregisterMenuCommand.apply(null, arguments); }
     };
 
     var registry = {
@@ -1281,7 +1318,9 @@
       GM_getResourceText: GM_getResourceText, GM_getResourceURL: GM_getResourceURL,
       GM_getResourceUrl: GM_getResourceURL, GM_addStyle: GM_addStyle, GM_addElement: GM_addElement,
       GM_xmlhttpRequest: GM_xmlhttpRequest, GM_cookie: GM_cookie, GM_getTab: GM_getTab,
-      GM_saveTab: GM_saveTab, GM_listTabs: GM_listTabs, GM_download: GM_download, GM_info: GM_info
+      GM_saveTab: GM_saveTab, GM_listTabs: GM_listTabs, GM_download: GM_download,
+      GM_registerMenuCommand: GM_registerMenuCommand, GM_unregisterMenuCommand: GM_unregisterMenuCommand,
+      GM_info: GM_info
     };
 
     // A console that writes to the page's real console AND forwards to the dashboard Logs via the vault,
