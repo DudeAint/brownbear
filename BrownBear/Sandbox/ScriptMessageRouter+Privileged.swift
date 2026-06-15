@@ -32,15 +32,17 @@ extension ScriptMessageRouter {
     /// The exhaustive allowlist a page-world caller may invoke: a script's OWN-DATA writes, `log`, the
     /// network `GM_xmlhttpRequest`/`GM_abortRequest` and `GM_download`/`GM_downloadAbort` (lifecycle streamed
     /// native→page via window.__bbPageXHR; both @connect-gated per the token), the menu APIs
-    /// `GM_registerMenuCommand`/`GM_unregisterMenuCommand` and `GM_openInTab`/`GM_closeTab` (a tap / a tab
-    /// close streams native→page via the same channel), and the request→reply APIs
-    /// `GM_cookie`/`GM_getTab`/`GM_saveTab`/`GM_listTabs` (their result is RETURNED through the
+    /// `GM_registerMenuCommand`/`GM_unregisterMenuCommand`, `GM_openInTab`/`GM_closeTab`, and
+    /// `GM_notification`/`GM_notificationClear` (a tap / a tab close / a notification click streams native→page
+    /// via the same channel — GM_notification also returns its id through the reply promise), and the
+    /// request→reply APIs `GM_cookie`/`GM_getTab`/`GM_saveTab`/`GM_listTabs` (result RETURNED through the
     /// WKScriptMessageHandlerWithReply reply promise — never on the DOM). Anything not here (getScripts,
-    /// injectPageWorld, notifications, and reads — served page-local) is rejected for page-world callers.
+    /// injectPageWorld, and reads — served page-local) is rejected for page-world callers.
     static let pageWorldWriteAPIs: Set<String> = [
         "GM_setValue", "GM_deleteValue", "GM_setValues", "GM_deleteValues", "GM_setClipboard", "GM_log", "log",
         "GM_xmlhttpRequest", "GM_abortRequest", "GM_download", "GM_downloadAbort",
         "GM_registerMenuCommand", "GM_unregisterMenuCommand", "GM_openInTab", "GM_closeTab",
+        "GM_notification", "GM_notificationClear",
         "GM_cookie", "GM_getTab", "GM_saveTab", "GM_listTabs"
     ]
 
@@ -97,16 +99,22 @@ extension ScriptMessageRouter {
 
     /// GM_notification: post a local banner attributed to this script; route a tap back to its
     /// content world as the onclick callback. No host reached, so only the grant gates it. Returns
-    /// { id, shown } so the runtime's control object can later remove it.
-    func handleNotification(payload: [String: Any], session: PrivilegedSession) async throws -> Any? {
+    /// { id, shown } so the runtime's control object can later remove it. A page-world caller passes a
+    /// vault-minted `streamId`; its click/close stream into .page via __bbPageXHR (the reply id is still
+    /// returned for .remove()).
+    func handleNotification(payload: [String: Any], session: PrivilegedSession,
+                            fromPageWorld: Bool = false) async throws -> Any? {
         let details = (payload["details"] as? [String: Any]) ?? [:]
         let notificationID = payload["id"] as? String
         let wantClick = (payload["wantClick"] as? Bool) ?? false
+        let streamID = (payload["streamId"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         let target = UserScriptNotificationTarget(scriptID: session.id,
                                                   scriptName: session.name,
                                                   webView: session.webView,
                                                   frameInfo: session.frameInfo,
-                                                  contentWorld: privilegedContentWorld)
+                                                  contentWorld: fromPageWorld ? WKContentWorld.page
+                                                      : privilegedContentWorld,
+                                                  pageWorldStreamID: fromPageWorld ? streamID : nil)
         let result = await UserScriptNotificationManager.shared.create(target: target,
                                                                        notificationID: notificationID,
                                                                        options: details,

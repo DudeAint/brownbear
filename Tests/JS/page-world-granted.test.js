@@ -174,9 +174,18 @@ async function bootAndInject(overrides) {
         });
     }
     {
-        // A grant whose callback streaming is NOT yet page-routed (GM_notification) keeps the script ISOLATED.
+        // GM_notification now streams click/close native→page via the vault, so it routes to the PAGE world
+        // too (see pageworld-notification.test.js). Every standard streaming grant is page-routed now.
         const calls = await bootAndInject({ injectInto: "auto", grants: ["GM_notification"] });
-        test("a still-callback-streaming grant (GM_notification) keeps the script ISOLATED", () => {
+        test("GM_notification now routes to the page world (click/close native→page via the vault)", () => {
+            assert.strictEqual(injectCalls(calls).length, 1);
+        });
+    }
+    {
+        // A grant OUTSIDE the page-world-safe set (a hypothetical not-yet-routed API) keeps the script
+        // ISOLATED — the allGrantsPageSafe gate still rejects anything it doesn't recognize.
+        const calls = await bootAndInject({ injectInto: "auto", grants: ["GM_unsupportedFutureApi"] });
+        test("an unrecognized (non-page-safe) grant keeps the script ISOLATED", () => {
             assert.strictEqual(injectCalls(calls).length, 0);
         });
     }
