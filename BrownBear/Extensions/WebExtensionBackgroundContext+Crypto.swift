@@ -183,6 +183,8 @@ extension WebExtensionBackgroundContext {
                 return okData(key.withUnsafeBytes { Data($0) })
             case "ecdsaGenerate", "ecdsaSign", "ecdsaVerify", "ecdsaImportJwk", "ecdsaExportJwk":
                 return Self.ecdsa(op: op, params: p)
+            case "rsaGenerate", "rsaSign", "rsaVerify", "rsaEncrypt", "rsaDecrypt", "rsaImportJwk", "rsaExportJwk":
+                return Self.rsa(op: op, params: p)
             default:
                 return fail("unsupported subtle op: \(op)")
             }
@@ -295,14 +297,14 @@ extension WebExtensionBackgroundContext {
     }
 
     /// base64url (RFC 4648 §5, no padding) ↔ Data — the JWK coordinate encoding.
-    private static func base64urlEncode(_ d: Data) -> String {
+    static func base64urlEncode(_ d: Data) -> String {
         d.base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
     }
 
-    private static func base64urlDecode(_ s: String) -> Data {
+    static func base64urlDecode(_ s: String) -> Data {
         var b = s.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
         while b.count % 4 != 0 { b += "=" }
         return Data(base64Encoded: b) ?? Data()
@@ -354,7 +356,7 @@ extension WebExtensionBackgroundContext {
         return status == kCCSuccess ? out : nil
     }
 
-    private static func encodeSubtle(_ dict: [String: Any]) -> String {
+    static func encodeSubtle(_ dict: [String: Any]) -> String {
         (try? JSONSerialization.data(withJSONObject: dict)).flatMap { String(data: $0, encoding: .utf8) }
             ?? "{\"error\":\"encode failed\"}"
     }
