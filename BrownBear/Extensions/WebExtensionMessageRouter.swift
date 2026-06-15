@@ -498,14 +498,18 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
                                                          allFrames: (payload["allFrames"] as? Bool) ?? false)
             return results.map { $0["result"] ?? NSNull() }   // MV2 returns the raw results array
 
-        case "tabs.insertCSS":
+        case "tabs.insertCSS", "tabs.removeCSS":
             guard let host else { return NSNull() }
             let tabId = payload["tabId"] as? Int
             guard await canInjectIntoTab(extensionID: extensionID, isMV3: false, extTabId: tabId) else { return NSNull() }
             var css = payload["code"] as? String ?? ""
             if css.isEmpty, let file = payload["file"] as? String,
                let text = await store.text(extensionID: extensionID, path: file) { css = text }
-            host.webExtInsertCSS(extTabId: tabId, css: css)
+            if api == "tabs.insertCSS" {
+                host.webExtInsertCSS(extTabId: tabId, css: css)
+            } else {
+                host.webExtRemoveCSS(extTabId: tabId, css: css)   // MV2 chrome.tabs.removeCSS (pairs with insertCSS)
+            }
             return NSNull()
 
         default:

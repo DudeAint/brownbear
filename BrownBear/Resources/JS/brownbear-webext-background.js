@@ -3175,6 +3175,12 @@
       details = details || {};
       return settleBg(scriptingCall('insertCSS', { tabId: id, css: details.code, files: details.file ? [details.file] : undefined }).then(function () { return undefined; }), cb);
     },
+    removeCSS: function (id, details, cb) {
+      // MV2 chrome.tabs.removeCSS — remove CSS previously injected with insertCSS (same (tabId, details) shape).
+      if (id !== null && typeof id === 'object') { cb = details; details = id; id = undefined; }
+      details = details || {};
+      return settleBg(scriptingCall('removeCSS', { tabId: id, css: details.code, files: details.file ? [details.file] : undefined }).then(function () { return undefined; }), cb);
+    },
     // chrome.tabs.highlight — focuses a window and selects specified tabs. iOS has a single window
     // with no multi-tab selection concept, so we resolve as a graceful no-op (Chrome Remote Desktop
     // uses this to focus the CRD tab after connecting). Returns the window info shape.
