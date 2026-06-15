@@ -231,16 +231,36 @@ final class BrownBearBrowserViewController: UIViewController {
         if records.count == 1, records[0].url == nil { return false }
 
         var restored: [Tab] = []
+        // Persisted chrome-extension:// / moz-extension:// tabs (an extension's options page, or any
+        // extension page it opened in a tab) can't be created as normal tabs — that scheme needs the
+        // per-extension scheme handler + page bridge, built asynchronously. We stand up an ordered
+        // placeholder for each now (so order, count, and the active index are correct immediately) and
+        // upgrade them in place once the loop has run. Pairs the placeholder with its persisted URL.
+        var extensionUpgrades: [(placeholder: Tab, url: URL)] = []
         for record in records {
             // The saved title + thumbnail, seeded so the tab grid shows the real title and a preview for a
             // restored tab BEFORE it's activated and actually loads (otherwise every tab read "New Tab").
             let snapshot = record.id.flatMap { TabSnapshotStore.load(id: $0) }
-            if let string = record.url, let url = URL(string: string),
-               ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
+            let url = record.url.flatMap(URL.init(string:))
+            let scheme = url?.scheme?.lowercased() ?? ""
+            if let url, ["http", "https"].contains(scheme) {
                 let tab = tabManager.createTab(loading: url, activate: false)   // pending; loads on activate
                 tab.delegate = self
                 tab.restoreForDisplay(url: url, title: record.title, snapshot: snapshot)
                 restored.append(tab)
+            } else if let url, ["chrome-extension", "moz-extension"].contains(scheme) {
+                // Placeholder shows the plain New Tab page (no override swap — that would close it and break
+                // the in-place upgrade) until upgradeExtensionPlaceholder rebuilds the real extension tab.
+                let tab = tabManager.createTab(activate: false)
+                tab.delegate = self
+                loadNewTabPage(in: tab, allowExtensionOverride: false)
+                tab.restoreForDisplay(url: nil, title: record.title, snapshot: snapshot)
+                // Persistence-only: if the app backgrounds during the async upgrade window below, persistSession
+                // re-emits this extension URL instead of saving the placeholder's nil state.url (which would
+                // drop the tab to a blank New Tab next launch). Never auto-loaded — the upgrade does the load.
+                tab.restoreURL = url
+                restored.append(tab)
+                extensionUpgrades.append((tab, url))
             } else {
                 let tab = tabManager.createTab(activate: false)
                 tab.delegate = self
@@ -260,6 +280,14 @@ final class BrownBearBrowserViewController: UIViewController {
             tabManager.setActiveTab(restored[index])
         }
         refreshChrome()
+        // Now rebuild any extension placeholders in place (extension lookup + page-session config are async).
+        if !extensionUpgrades.isEmpty {
+            Task { @MainActor in
+                for upgrade in extensionUpgrades {
+                    await upgradeExtensionPlaceholder(upgrade.placeholder, to: upgrade.url)
+                }
+            }
+        }
         return true
     }
 

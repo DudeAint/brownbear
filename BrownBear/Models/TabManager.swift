@@ -95,6 +95,34 @@ final class TabManager {
         return tab
     }
 
+    /// Replace `old` with a new tab built from `configuration`, **in place** — preserving its position,
+    /// pinned state, and group membership, and transferring active selection if `old` was active. Used by
+    /// session restore to upgrade an extension placeholder into the real chrome-extension page tab it
+    /// can't be created as up front (a normal tab can't host that scheme; the page session is built
+    /// asynchronously). This is an internal swap, NOT a user close, so it records no recently-closed entry.
+    /// Returns the new tab, or nil if `old` is no longer present (e.g. the user closed it meanwhile).
+    @discardableResult
+    func replaceTab(_ old: Tab, adopting configuration: WKWebViewConfiguration) -> Tab? {
+        guard let index = tabs.firstIndex(where: { $0.id == old.id }) else { return nil }
+        let wasActive = (old.id == activeTabID)
+        let new = Tab(configuration: configuration, isPrivate: old.isPrivate)
+        new.isPinned = old.isPinned
+        new.groupID = old.groupID
+        // Carry the placeholder's seeded title + thumbnail across so the grid card doesn't blank during the
+        // swap, and so the next persistSession saves the real tab's snapshot (keyed by the NEW id) instead of
+        // dropping the restored preview.
+        new.restoreForDisplay(url: nil, title: old.state.title, snapshot: old.snapshot)
+        tabs[index] = new
+        old.onClose?()
+        old.stopLoading()
+        delegate?.tabManager(self, didUpdate: tabs)
+        if wasActive {
+            activeTabID = new.id
+            delegate?.tabManager(self, didActivate: new, previous: old)
+        }
+        return new
+    }
+
     /// Make `tab` the active tab, notifying the delegate of the transition.
     func setActiveTab(_ tab: Tab) {
         guard tab.id != activeTabID else { return }
@@ -275,7 +303,7 @@ final class TabManager {
     func persistSession() {
         let normals = normalTabs
         let records = normals.map { tab in
-            TabSessionStore.Record(url: (tab.pendingURL ?? tab.state.url)?.absoluteString,
+            TabSessionStore.Record(url: (tab.pendingURL ?? tab.state.url ?? tab.restoreURL)?.absoluteString,
                                    title: tab.state.displayTitle,
                                    id: tab.id.uuidString,
                                    isPinned: tab.isPinned,

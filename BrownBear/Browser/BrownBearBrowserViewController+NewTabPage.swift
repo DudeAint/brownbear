@@ -19,7 +19,11 @@ extension BrownBearBrowserViewController {
     // MARK: - Load
 
     // Not `private`: also used by the WebExtensionBridgeHost conformance for chrome.tabs.create({}).
-    func loadNewTabPage(in tab: Tab) {
+    /// `allowExtensionOverride` is true for normal new tabs (a `chrome_url_overrides.newtab` extension may
+    /// replace the page). Session restore passes false for the throwaway placeholder it shows while it
+    /// rebuilds a persisted extension tab in place — the override swap would CLOSE that placeholder and
+    /// break the restore's in-place upgrade, so the placeholder always gets the plain built-in page.
+    func loadNewTabPage(in tab: Tab, allowExtensionOverride: Bool = true) {
         tab.delegate = self
         // Forget any URL this tab previously committed: it is now genuinely the New Tab page, so a later
         // renderer loss must not resurrect the old page (and isShowingNewTabPage must read true).
@@ -37,7 +41,7 @@ extension BrownBearBrowserViewController {
             // create the replacement BEFORE closing the placeholder so there's never a no-active-tab gap.
             // Skipped for private tabs (Chrome doesn't apply newtab overrides in incognito) and the common
             // no-override case, so the built-in NTP is unaffected for everyone without such an extension.
-            if let (ext, path) = await firstNewTabOverride() {
+            if allowExtensionOverride, let (ext, path) = await firstNewTabOverride() {
                 let session = WebExtensionPageSession(ext: ext, kind: .newtab, path: path)
                 if session.pageURL != nil {
                     let configuration = await session.makeConfiguration()
