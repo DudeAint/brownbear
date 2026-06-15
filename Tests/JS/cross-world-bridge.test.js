@@ -284,5 +284,34 @@ test("GM round-trip also works over the performance bus (older ScriptCat)", () =
     assert.ok(got.every((r) => JSON.stringify(r) === JSON.stringify(BIG_REPLY)));
 });
 
+// ScriptCat's inject.js (MAIN) gets its document-start script list from the SW's `pageLoad` reply, which
+// must cross ISOLATED→MAIN through this relay. On a real device that reply is large (a multi-script
+// manager produces ~90 KB+ — observed `[bb-perfbridge] iso->page 93759b`). If a payload that size were
+// truncated, clobbered, or re-entrantly corrupted by the single shared DATA attribute, inject.js would
+// fail to parse the list, never set up the trigger for a userscript's flag, and the injected body would
+// sit in window[flag] unrun — the exact "injected but never executes" symptom. Prove the RELAY LOGIC
+// carries a 90 KB+ structured payload intact (a real-DOM attribute size limit, if any, is separate and
+// device-checked; this rules the logic in or out).
+const HUGE_PAGELOAD = { scripts: Array.from({ length: 44 }, (_, i) => ({
+    flag: "scFlag_" + i, uuid: "uuid-" + i, name: "Script " + i,
+    code: "x".repeat(2100), metadata: { match: ["*://*/*"], grant: ["GM_xmlhttpRequest", "GM_setValue"] }
+})), envInfo: { sandboxMode: "raw", isIncognito: false } };
+
+test("large pageLoad-sized payload (90 KB+) crosses ISOLATED→MAIN intact through the relay", () => {
+    const serialized = JSON.stringify(HUGE_PAGELOAD);
+    assert.ok(serialized.length > 90000, "fixture is the realistic >90 KB pageLoad size (got " + serialized.length + ")");
+    const got = roundTrip(WIN, HUGE_PAGELOAD, 1);
+    assert.strictEqual(got.length, 1, "the MAIN world received the pageLoad reply");
+    assert.strictEqual(JSON.stringify(got[0]), serialized,
+        "the 90 KB+ pageLoad list crossed isolated→MAIN byte-for-byte intact (relay logic is not the dropper)");
+});
+
+test("rapid large payloads don't clobber the shared relay attribute (re-entrancy under size)", () => {
+    const got = roundTrip(WIN, HUGE_PAGELOAD, 8);
+    assert.strictEqual(got.length, 8, "all 8 large replies crossed (no drops)");
+    assert.ok(got.every((r) => JSON.stringify(r) === JSON.stringify(HUGE_PAGELOAD)),
+        "every large reply intact — no cross-message attribute clobbering at size");
+});
+
 console.log("\n" + passed + " passed, " + failed + " failed");
 process.exit(failed === 0 ? 0 : 1);
