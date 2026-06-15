@@ -251,6 +251,14 @@
                   }
                   reject(new Error("importKey: ECDSA supports 'jwk' and 'raw' (spki/pkcs8 pending)")); return;
                 }
+                if (iname === 'RSASSA-PKCS1-V1_5' || iname === 'RSA-PSS' || iname === 'RSA-OAEP') {
+                  if (format !== 'jwk') { reject(new Error("importKey: RSA supports 'jwk' (spki/pkcs8 pending)")); return; }
+                  var rr = __subCall('rsaImportJwk', { n: keyData.n || '', e: keyData.e || '', d: keyData.d || '',
+                    p: keyData.p || '', q: keyData.q || '', dp: keyData.dp || '', dq: keyData.dq || '', qi: keyData.qi || '' });
+                  resolve({ type: rr.type, extractable: extractable !== false,
+                    algorithm: { name: ia.name, hash: { name: __subHash(ia, null) } }, usages: usages || [], __pkcs1: rr.pkcs1 });
+                  return;
+                }
                 if (format !== 'raw') { reject(new Error("importKey: only 'raw' format is supported for symmetric keys")); return; }
                 resolve(__subKey(__subB64(keyData), __subAlgo(algorithm), extractable, usages));
               } catch (e) { reject(e); }
@@ -268,6 +276,11 @@
                   }
                   if (format === 'raw' && key.type === 'public') { resolve(__subFromB64(key.__raw).buffer); return; }
                   reject(new Error("exportKey: ECDSA supports 'jwk' and public 'raw' (spki/pkcs8 pending)")); return;
+                }
+                if (ename === 'RSASSA-PKCS1-V1_5' || ename === 'RSA-PSS' || ename === 'RSA-OAEP') {
+                  if (format !== 'jwk') { reject(new Error("exportKey: RSA supports 'jwk' (spki/pkcs8 pending)")); return; }
+                  var rjr = __subCall('rsaExportJwk', { pkcs1: key.__pkcs1, type: key.type });
+                  resolve(rjr.jwk); return;
                 }
                 if (format !== 'raw') { reject(new Error("exportKey: only 'raw' format is supported for symmetric keys")); return; }
                 resolve(__subFromB64(key.__raw).buffer);
@@ -295,7 +308,15 @@
                     privateKey: { type: 'private', extractable: extractable !== false, algorithm: ealg, usages: usages || [], __raw: ek.privateRaw },
                     publicKey: { type: 'public', extractable: true, algorithm: ealg, usages: usages || [], __raw: ek.publicRaw }
                   });
-                } else { reject(new Error('generateKey: unsupported algorithm ' + name + ' (RSA is not yet supported)')); }
+                } else if (name === 'RSASSA-PKCS1-V1_5' || name === 'RSA-PSS' || name === 'RSA-OAEP') {
+                  var rk = __subCall('rsaGenerate', { modulusLength: a.modulusLength || 2048 });
+                  var ralg = { name: a.name, modulusLength: a.modulusLength || 2048,
+                    publicExponent: a.publicExponent, hash: { name: __subHash(a, null) } };
+                  resolve({
+                    privateKey: { type: 'private', extractable: extractable !== false, algorithm: ralg, usages: usages || [], __pkcs1: rk.privatePkcs1 },
+                    publicKey: { type: 'public', extractable: true, algorithm: ralg, usages: usages || [], __pkcs1: rk.publicPkcs1 }
+                  });
+                } else { reject(new Error('generateKey: unsupported algorithm ' + name)); }
               } catch (e) { reject(e); }
             });
           },
@@ -307,7 +328,11 @@
                   var er = __subCall('ecdsaSign', { curve: (key.algorithm.namedCurve || 'P-256'), privateRaw: key.__raw, hash: __subHash(algorithm, key), data: __subB64(data) });
                   resolve(__subFromB64(er.data).buffer); return;
                 }
-                if (name !== 'HMAC') { reject(new Error('sign: unsupported algorithm ' + name + ' (RSA pending)')); return; }
+                if (name === 'RSASSA-PKCS1-V1_5' || name === 'RSA-PSS') {
+                  var rsr = __subCall('rsaSign', { privatePkcs1: key.__pkcs1, data: __subB64(data), hash: __subHash(algorithm, key), scheme: name });
+                  resolve(__subFromB64(rsr.data).buffer); return;
+                }
+                if (name !== 'HMAC') { reject(new Error('sign: unsupported algorithm ' + name)); return; }
                 var r = __subCall('hmacSign', { key: key.__raw, data: __subB64(data), hash: __subHash(algorithm, key) });
                 resolve(__subFromB64(r.data).buffer);
               } catch (e) { reject(e); }
@@ -321,7 +346,11 @@
                   var ev = __subCall('ecdsaVerify', { curve: (key.algorithm.namedCurve || 'P-256'), publicRaw: key.__raw, hash: __subHash(algorithm, key), data: __subB64(data), signature: __subB64(signature) });
                   resolve(!!ev.valid); return;
                 }
-                if (name !== 'HMAC') { reject(new Error('verify: unsupported algorithm ' + name + ' (RSA pending)')); return; }
+                if (name === 'RSASSA-PKCS1-V1_5' || name === 'RSA-PSS') {
+                  var rvr = __subCall('rsaVerify', { publicPkcs1: key.__pkcs1, data: __subB64(data), signature: __subB64(signature), hash: __subHash(algorithm, key), scheme: name });
+                  resolve(!!rvr.valid); return;
+                }
+                if (name !== 'HMAC') { reject(new Error('verify: unsupported algorithm ' + name)); return; }
                 var r = __subCall('hmacVerify', { key: key.__raw, data: __subB64(data), signature: __subB64(signature), hash: __subHash(algorithm, key) });
                 resolve(!!r.valid);
               } catch (e) { reject(e); }
@@ -335,6 +364,8 @@
                   r = __subCall('aesGcmEncrypt', { key: key.__raw, data: __subB64(data), iv: __subB64(a.iv), additionalData: a.additionalData ? __subB64(a.additionalData) : '' });
                 } else if (name === 'AES-CBC') {
                   r = __subCall('aesCbcEncrypt', { key: key.__raw, data: __subB64(data), iv: __subB64(a.iv) });
+                } else if (name === 'RSA-OAEP') {
+                  r = __subCall('rsaEncrypt', { publicPkcs1: key.__pkcs1, data: __subB64(data), hash: __subHash(a, key) });
                 } else { reject(new Error('encrypt: unsupported algorithm ' + name)); return; }
                 resolve(__subFromB64(r.data).buffer);
               } catch (e) { reject(e); }
@@ -348,6 +379,8 @@
                   r = __subCall('aesGcmDecrypt', { key: key.__raw, data: __subB64(data), iv: __subB64(a.iv), additionalData: a.additionalData ? __subB64(a.additionalData) : '' });
                 } else if (name === 'AES-CBC') {
                   r = __subCall('aesCbcDecrypt', { key: key.__raw, data: __subB64(data), iv: __subB64(a.iv) });
+                } else if (name === 'RSA-OAEP') {
+                  r = __subCall('rsaDecrypt', { privatePkcs1: key.__pkcs1, data: __subB64(data), hash: __subHash(a, key) });
                 } else { reject(new Error('decrypt: unsupported algorithm ' + name)); return; }
                 resolve(__subFromB64(r.data).buffer);
               } catch (e) { reject(e); }
