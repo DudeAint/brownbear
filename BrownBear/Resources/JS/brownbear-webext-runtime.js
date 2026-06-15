@@ -1039,8 +1039,10 @@
   // element only when the native bridge is unavailable (e.g. a headless context with no message handler).
   function injectPageWorldCode(code) {
     if (handler) {
-      bridge("page.injectMainWorld", { code: code }, null).catch(function () {});
-      return true;
+      // Returns the bridge promise (native resolves it AFTER the MAIN-world eval completes), so a caller —
+      // the WAR-script bridge — can sequence a synthetic load event on the helper's real execution. The
+      // world:"MAIN" content-script caller ignores the return, so this is a no-op for it.
+      return bridge("page.injectMainWorld", { code: code }, null).catch(function () {});
     }
     try {
       var s = document.createElement("script");
@@ -1085,6 +1087,95 @@
     }
   }
 
+
+  // ---- web_accessible_resources <script> CSP bridge ------------------------------------------------
+  // A content script commonly injects a PAGE-WORLD helper by creating `<script src=chrome.runtime.getURL(
+  // 'x.js')>` and appending it (OldYTPlayer's inpage.js, countless YouTube/ad-block/page tweaks). On a
+  // strict-CSP site (YouTube, GitHub, X, Google) the page's `script-src` lists no chrome-/moz-extension:
+  // source, so WebKit refuses to load that subresource and the helper SILENTLY never runs — "the extension's
+  // features don't work". Chrome exempts web_accessible_resources from the page CSP; WKWebView can't. We
+  // bridge it from the (CSP-IMMUNE) isolated content world: intercept insertion of an extension-origin
+  // `<script src>`, fetch the resource over the content world's own fetch (not page-CSP-gated), and run it in
+  // the page MAIN world via the native CSP-immune eval — the same path world:"MAIN" scripts already use. The
+  // element is still inserted (inert, src removed) so the page DOM is unchanged. Installed once per page.
+  (function installWarScriptBridge() {
+    var NodeCtor = W.Node, ElementCtor = W.Element, _fetch = W.fetch, EventCtor = W.Event,
+        AbortCtor = W.AbortController, _setTimeout = W.setTimeout || setTimeout, _clearTimeout = W.clearTimeout || clearTimeout;
+    if (!NodeCtor || !NodeCtor.prototype || typeof _fetch !== "function" || typeof EventCtor !== "function") {
+      return;   // headless / no real DOM → nothing to bridge
+    }
+    function extSrcOf(node) {
+      try {
+        if (!node || node.nodeType !== 1 || node.tagName !== "SCRIPT") { return null; }
+        var abs = node.src;   // resolved absolute URL of the src attribute ("" when unset)
+        return (abs && /^(?:chrome|moz)-extension:\/\//i.test(abs)) ? abs : null;
+      } catch (e) { return null; }
+    }
+    function extIdOf(absSrc) {
+      try { var m = /^(?:chrome|moz)-extension:\/\/([^/]+)/i.exec(absSrc); return m ? m[1] : null; }
+      catch (e) { return null; }
+    }
+    // BOUNDED fetch: a hung WAR resource must never wedge the (page-global) injection chain, which is shared
+    // across every co-enabled extension. 10s ceiling, aborted if AbortController exists.
+    function fetchText(absSrc) {
+      var ctrl = AbortCtor ? new AbortCtor() : null;
+      var timer = _setTimeout(function () { try { if (ctrl) { ctrl.abort(); } } catch (e) {} }, 10000);
+      return _fetch(absSrc, ctrl ? { signal: ctrl.signal } : undefined).then(
+        function (r) { _clearTimeout(timer); return r.text(); },
+        function (e) { _clearTimeout(timer); throw e; });
+    }
+    var chain = _Promise.resolve();   // serialize only the INJECT step so helpers run in insertion order
+    function divert(node, absSrc) {
+      if (node.__bbWarHandled) { return; }
+      node.__bbWarHandled = true;
+      try { node.removeAttribute("src"); } catch (e) {}   // no src → the page makes no CSP-gated subresource load
+      var textP = fetchText(absSrc);   // start the fetch NOW (concurrent — a slow one can't block other fetches)
+      chain = chain.then(function () {
+        return textP.then(function (text) {
+          // injectIntoPage resolves AFTER the MAIN-world eval completes (native awaits it), so the synthetic
+          // load event below fires only once the helper has actually run — matching a real external script.
+          return _Promise.resolve(injectIntoPage(text, extIdOf(absSrc))).then(function () {
+            try { node.dispatchEvent(new EventCtor("load")); } catch (e) {}
+          });
+        });
+      }).catch(function (e) {
+        try { node.dispatchEvent(new EventCtor("error")); } catch (e2) {}
+        reportContentError(e, null);
+      });
+    }
+    function maybeDivert(parent, node) {
+      // Only when the insertion target is CONNECTED: a real browser runs an external script on CONNECTION,
+      // not when it's staged in a detached DocumentFragment — diverting there would execute it prematurely.
+      try {
+        var abs = extSrcOf(node);
+        if (abs && parent && parent.isConnected !== false) { divert(node, abs); }
+      } catch (e) {}
+    }
+    function wrapSingle(proto, name) {   // appendChild(node) / insertBefore(node, ref): the node is arg 0
+      var orig = proto && proto[name];
+      if (typeof orig !== "function") { return; }
+      proto[name] = function (node) { maybeDivert(this, node); return orig.apply(this, arguments); };
+    }
+    function wrapVariadic(proto, name) {   // append(...nodes) / prepend(...nodes): scan every node argument
+      var orig = proto && proto[name];
+      if (typeof orig !== "function") { return; }
+      proto[name] = function () {
+        for (var i = 0; i < arguments.length; i += 1) { maybeDivert(this, arguments[i]); }
+        return orig.apply(this, arguments);
+      };
+    }
+    // Covers the dominant insertion verbs. KNOWN GAPS (left to the page CSP, i.e. unchanged from today):
+    // a src set AFTER insertion, replaceChild / insertAdjacentElement, and config read via
+    // document.currentScript.dataset (the diverted code runs via native eval with no associated <script>).
+    try {
+      wrapSingle(NodeCtor.prototype, "appendChild");
+      wrapSingle(NodeCtor.prototype, "insertBefore");
+      if (ElementCtor && ElementCtor.prototype) {
+        wrapVariadic(ElementCtor.prototype, "append");
+        wrapVariadic(ElementCtor.prototype, "prepend");
+      }
+    } catch (e) {}
+  })();
 
   // ScriptCat exec-trigger probe (diagnostic for the "ScriptCat says running but the userscript never
   // injects" bug). ScriptCat compiles each userscript body to `window['<flag>'] = function(){…}` and runs
