@@ -948,16 +948,26 @@
     function GM_getResourceURL(n) { return res[n] ? res[n].url : undefined; }
 
     function GM_addStyle(css) {
+      // Primary: a real <style> (TM/VM semantics — the script can remove the returned element to toggle
+      // the style off). Append the constructed adoptedStyleSheets sheet ONLY as a CSP fallback when the
+      // <style> didn't take (its sheet has no rules), never alongside a working one — otherwise the CSS is
+      // applied twice and the adopted sheet cascades AFTER the page's stylesheets, overriding harder than a
+      // plain <style> and visibly mis-styling the page. Mirrors the isolated-world GM_addStyle (iOS 16.4+).
       var style = D.createElement("style");
       style.textContent = css;
       (D.head || D.documentElement).appendChild(style);
-      try {
-        if (typeof W.CSSStyleSheet === "function" && "adoptedStyleSheets" in D) {
-          var sheet = new W.CSSStyleSheet();
-          sheet.replaceSync(String(css));
-          D.adoptedStyleSheets = D.adoptedStyleSheets.concat([sheet]);
-        }
-      } catch (e) { /* constructed-sheet fallback is best-effort */ }
+      var styleApplied = false;
+      try { styleApplied = !!(style.sheet && style.sheet.cssRules && style.sheet.cssRules.length > 0); }
+      catch (e) { styleApplied = false; }
+      if (!styleApplied) {
+        try {
+          if (typeof W.CSSStyleSheet === "function" && "adoptedStyleSheets" in D) {
+            var sheet = new W.CSSStyleSheet();
+            sheet.replaceSync(String(css));
+            D.adoptedStyleSheets = D.adoptedStyleSheets.concat([sheet]);
+          }
+        } catch (e) { /* constructed-sheet fallback is best-effort */ }
+      }
       return style;
     }
     function GM_addElement(parent, tag, attrs) {
