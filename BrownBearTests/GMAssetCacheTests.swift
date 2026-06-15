@@ -120,6 +120,20 @@ final class GMAssetCacheTests: XCTestCase {
         XCTAssertGreaterThan(total, 0, "eviction trims to the target, it doesn't wipe the cache")
     }
 
+    func testLoneOversizedEntryIsKeptNotWiped() async {
+        // A single @require bigger than the whole cap must survive — eviction must never empty the cache,
+        // or the heavy library the cache exists to protect would be wiped by the store that wrote it.
+        let cache = GMAssetCache(directory: directory, maxBytes: 30_000)            // cap below one entry's size
+        let huge = GMAssetCache.Entry(data: Data(repeating: 0x7E, count: 50_000),   // ~67 KB on disk, > the 30 KB cap
+                                      etag: nil, lastModified: nil, mimeType: "application/javascript")
+        let u = url("https://cdn.example.com/huge-lib.js")
+        await cache.store(huge, for: u)
+        let loaded = await cache.entry(for: u)
+        XCTAssertEqual(loaded, huge, "the lone oversized entry is kept (cache never evicts to empty)")
+        let total = await cache.totalBytes()
+        XCTAssertGreaterThan(total, 30_000, "the cache may exceed the cap by one large survivor")
+    }
+
     func testEvictionIsLRU_recentlyReadEntrySurvives() async {
         let cache = GMAssetCache(directory: directory, maxBytes: 75_000)
         let a = url("https://example.com/a.js")
