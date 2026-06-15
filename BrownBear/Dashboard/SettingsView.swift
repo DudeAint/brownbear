@@ -25,6 +25,7 @@ struct SettingsView: View {
     @AppStorage("bbWebInspector") private var webInspector = false
     @AppStorage("bbVerboseExtLogs") private var verboseExtLogs = false
     @AppStorage("bbPersistExtPageIDB") private var persistExtPageIDB = false
+    @ObservedObject private var proxyManager = ProxyManager.shared
     @State private var isClearing = false
     @State private var didClear = false
     @State private var confirmingClear = false
@@ -91,6 +92,27 @@ struct SettingsView: View {
                 Text("Stops a site or player from forcing a video fullscreen, so it stays in the page — handy "
                     + "for automation that needs the page visible while a video plays. You can still go "
                     + "fullscreen yourself with the video's button. Reopen BrownBear to apply.")
+                    .font(.caption)
+                    .foregroundStyle(BBTheme.Color.textSecondary)
+            }
+
+            Section("Network") {
+                NavigationLink {
+                    ProxyView()
+                } label: {
+                    HStack {
+                        Label("Proxy", systemImage: "network")
+                        Spacer()
+                        if proxyManager.enabled, let active = proxyManager.active {
+                            Text(active.displayName)
+                                .font(.caption)
+                                .foregroundStyle(BBTheme.Color.textSecondary)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+                Text("Route all browsing through an HTTP/HTTPS/SOCKS5 proxy — one active at a time. "
+                    + "Requires iOS 17 or later.")
                     .font(.caption)
                     .foregroundStyle(BBTheme.Color.textSecondary)
             }

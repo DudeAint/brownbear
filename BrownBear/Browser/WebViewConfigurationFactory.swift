@@ -28,8 +28,28 @@ final class WebViewConfigurationFactory {
     /// pending wipe. nil until the first private tab is created.
     private var privateDataStore: WKWebsiteDataStore?
 
+    /// Observer that re-applies the proxy to live stores whenever the user changes it in Settings.
+    private var proxyObserver: NSObjectProtocol?
+
     init(injection: InjectionOrchestrator) {
         self.injection = injection
+        // Route browsing through the user's proxy (iOS 17+), and re-apply whenever it changes so toggling
+        // it on/off in Settings takes effect on the next request without recreating the data store.
+        ProxyManager.shared.apply(to: websiteDataStore)
+        proxyObserver = NotificationCenter.default.addObserver(
+            forName: .brownBearProxyDidChange, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.applyProxyToLiveStores() }
+        }
+    }
+
+    deinit {
+        if let proxyObserver { NotificationCenter.default.removeObserver(proxyObserver) }
+    }
+
+    /// Re-apply the current proxy to every live data store (the persistent one and the current private one).
+    private func applyProxyToLiveStores() {
+        ProxyManager.shared.apply(to: websiteDataStore)
+        if let privateDataStore { ProxyManager.shared.apply(to: privateDataStore) }
     }
 
     /// Produce a fresh configuration for a new web view, wired into the shared content controller and
@@ -41,6 +61,7 @@ final class WebViewConfigurationFactory {
         if isPrivate {
             let store = privateDataStore ?? WKWebsiteDataStore.nonPersistent()
             privateDataStore = store
+            ProxyManager.shared.apply(to: store)   // a fresh private store needs the active proxy too
             config.websiteDataStore = store
         } else {
             config.websiteDataStore = websiteDataStore
