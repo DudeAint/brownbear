@@ -9,6 +9,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct ProxyView: View {
 
@@ -272,5 +273,30 @@ struct ProxyView: View {
             checkOK = false
             checkMessage = message
         }
+    }
+}
+
+extension ProxyView {
+    /// Present the proxy config standalone (e.g. from the browser ••• menu's quick-access row) in its own
+    /// navigation stack with a Done button — wrapping in a NavigationStack keeps the "Browse free proxies"
+    /// NavigationLink pushable here just as it is inside the dashboard's stack.
+    static func makeHostingController() -> UIViewController {
+        var hosting: UIViewController?
+        let root = NavigationStack {
+            ProxyView().toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Done") { hosting?.dismiss(animated: true) }.fontWeight(.semibold)
+                }
+            }
+        }
+        let controller = UIHostingController(rootView: AnyView(root))
+        controller.modalPresentationStyle = .pageSheet
+        if let sheet = controller.sheetPresentationController {
+            sheet.detents = [.large()]
+            sheet.prefersGrabberVisible = true
+            sheet.preferredCornerRadius = 24
+        }
+        hosting = controller
+        return controller
     }
 }

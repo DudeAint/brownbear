@@ -589,7 +589,11 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
                 zoomPercent: Int(((tab?.webView.pageZoom ?? 1.0) * 100).rounded()),
                 matchedScripts: matchedScripts,
                 extensionActions: extensionActions,
-                scriptCommands: scriptCommands)
+                scriptCommands: scriptCommands,
+                proxySupported: ProxyManager.isSupported,
+                proxyEnabled: ProxyManager.shared.enabled,
+                proxyHasActive: ProxyManager.shared.active != nil,
+                proxyName: ProxyManager.shared.active?.displayName)
             // The actor hop above defers this present to a later turn; don't stack a second menu if
             // a rapid double-tap already presented one.
             guard presentedViewController == nil else { return }
@@ -629,6 +633,12 @@ extension BrownBearBrowserViewController: BrowserToolbarDelegate {
     // Not `private`: the extensions toolbar button's long-press "Manage" opens this (+ExtensionsToolbar).
     func presentDashboard(initialTab: BrownBearDashboardView.DashboardTab = .scripts) {
         present(BrownBearDashboardView.makeHostingController(initialTab: initialTab), animated: true)
+    }
+
+    /// Open the proxy config directly (the ••• menu "Proxy" row) in its own sheet, so it's a 2-tap door
+    /// from the browser instead of menu → Settings → scroll → Proxy.
+    private func presentProxy() {
+        present(ProxyView.makeHostingController(), animated: true)
     }
 
     private func toggleBookmarkForActiveTab() {
@@ -832,6 +842,8 @@ extension BrownBearBrowserViewController: BrowserMenuDelegate {
             presentDownloads()
         case .settings:
             presentDashboard(initialTab: .settings)
+        case .proxy:
+            presentProxy()
         case .reader:
             presentReader()
         case .zoom:
@@ -843,6 +855,13 @@ extension BrownBearBrowserViewController: BrowserMenuDelegate {
         // Persist the toggle; re-injection happens on the next navigation (no hot re-inject), which
         // matches the engine's existing behavior.
         Task { await BrownBearServices.shared.scriptStore.setEnabled(id: id, enabled) }
+    }
+
+    func browserMenu(_ menu: BrowserMenuViewController, didToggleProxy enabled: Bool) {
+        // The inline switch flips the active proxy on/off without closing the menu; ProxyManager re-applies
+        // it to the live data stores. Reload the active tab so the current page picks up the change.
+        ProxyManager.shared.setEnabled(enabled)
+        tabManager.activeTab?.reload()
     }
 
     func browserMenu(_ menu: BrowserMenuViewController, didTapExtensionAction extensionID: String) {
