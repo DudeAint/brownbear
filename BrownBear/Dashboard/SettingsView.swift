@@ -24,6 +24,7 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Key.verticalTabsSide) private var verticalTabsSideRaw = VerticalTabsSide.right.rawValue
     @AppStorage("bbWebInspector") private var webInspector = false
     @AppStorage("bbVerboseExtLogs") private var verboseExtLogs = false
+    @AppStorage("bbPersistExtPageIDB") private var persistExtPageIDB = false
     @State private var isClearing = false
     @State private var didClear = false
     @State private var confirmingClear = false
@@ -108,6 +109,14 @@ struct SettingsView: View {
                 Text("Adds the full extension-runtime trace — message ports, the cross-world relay, and "
                     + "storage traffic — to the Logs tab. Off by default so the Logs show real signal "
                     + "(script injection, errors) instead of being buried by a busy manager's debug chatter.")
+                    .font(.caption)
+                    .foregroundStyle(BBTheme.Color.textSecondary)
+
+                Toggle("Persist extension-page data", isOn: $persistExtPageIDB)
+                    .tint(BBTheme.Color.toggleOn)
+                Text("Keeps an extension popup/options page's IndexedDB data across reloads (otherwise it's "
+                    + "in-memory and resets each open). Experimental and off by default — verify your "
+                    + "extensions behave before relying on it. Reopen the extension page to apply.")
                     .font(.caption)
                     .foregroundStyle(BBTheme.Color.textSecondary)
             }
