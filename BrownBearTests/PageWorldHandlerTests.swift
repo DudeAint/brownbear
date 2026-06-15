@@ -19,14 +19,16 @@ import XCTest
 final class PageWorldHandlerTests: XCTestCase {
 
     func testAllowlistIsExactlyTheOwnDataWriteAPIs() {
-        // Own-data writes + console `log` + GM_xmlhttpRequest/GM_abortRequest (response native→page via
-        // __bbPageXHR) + the request→reply APIs GM_cookie/getTab/saveTab/listTabs (result returned through
-        // the reply promise, settled via the vault's pristine `.then` into the caller's closure — never DOM).
+        // Own-data writes + console `log` + GM_xmlhttpRequest/GM_abortRequest and GM_download/GM_downloadAbort
+        // (lifecycle native→page via __bbPageXHR) + the request→reply APIs GM_cookie/getTab/saveTab/listTabs
+        // (result returned through the reply promise, settled via the vault's pristine `.then` into the
+        // caller's closure — never DOM).
         XCTAssertEqual(ScriptMessageRouter.pageWorldWriteAPIs,
                        ["GM_setValue", "GM_deleteValue", "GM_setValues", "GM_deleteValues",
                         "GM_setClipboard", "GM_log", "log", "GM_xmlhttpRequest", "GM_abortRequest",
+                        "GM_download", "GM_downloadAbort",
                         "GM_cookie", "GM_getTab", "GM_saveTab", "GM_listTabs"],
-                       "the page-world allowlist is the own-data writes + log + xhr + cookie/tab request-reply")
+                       "the page-world allowlist is own-data writes + log + xhr + download + cookie/tab request-reply")
     }
 
     func testAllowlistExcludesPrivilegedAndStreamingCallbackAPIs() {
@@ -34,9 +36,9 @@ final class PageWorldHandlerTests: XCTestCase {
         // STREAMING-callback ones not yet routed to the page world. NONE may be reachable.
         let forbidden = [
             "getScripts", "injectPageWorld", "revalidateSessions",
-            "GM_download", "GM_notification", "GM_notificationClear",
+            "GM_notification", "GM_notificationClear",
             "GM_openInTab", "GM_registerMenuCommand", "GM_unregisterMenuCommand",
-            "fetchResource", "GM_downloadAbort", "GM_closeTab"
+            "fetchResource", "GM_closeTab"
         ]
         for api in forbidden {
             XCTAssertFalse(ScriptMessageRouter.pageWorldWriteAPIs.contains(api),

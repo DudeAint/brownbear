@@ -349,7 +349,7 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
 
         case "GM_download":
             try await handleDownload(payload: payload, session: session.privileged,
-                                     frameURL: frameURL, webView: webView)
+                                     frameURL: frameURL, webView: webView, fromPageWorld: fromPageWorld)
             return NSNull()
 
         case "fetchResource":
