@@ -318,7 +318,9 @@ final class BrownBearBrowserViewController: UIViewController {
         }
 
         tab.delegate = self
-        tab.loadPendingURLIfNeeded()
+        // Start any deferred load; or, if this tab's renderer was reclaimed while it was off-screen,
+        // reload its last URL so a re-shown tab renders its page instead of a blank web view.
+        tab.loadPendingOrRecover()
     }
 
     // MARK: - Chrome sync

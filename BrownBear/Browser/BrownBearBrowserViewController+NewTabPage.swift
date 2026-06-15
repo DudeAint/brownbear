@@ -21,6 +21,9 @@ extension BrownBearBrowserViewController {
     // Not `private`: also used by the WebExtensionBridgeHost conformance for chrome.tabs.create({}).
     func loadNewTabPage(in tab: Tab) {
         tab.delegate = self
+        // Forget any URL this tab previously committed: it is now genuinely the New Tab page, so a later
+        // renderer loss must not resurrect the old page (and isShowingNewTabPage must read true).
+        tab.prepareForNewTabPage()
         // Private tabs get a distinct incognito page (no shortcut tiles, explicit "not saved" copy);
         // normal tabs build from the user's bookmarks (a fast actor read).
         if tab.isPrivate {
