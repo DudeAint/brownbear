@@ -2182,6 +2182,16 @@
       TRUSTED_AND_UNTRUSTED_CONTEXTS: 'TRUSTED_AND_UNTRUSTED_CONTEXTS'
     }
   };
+  // chrome.storage.<area> documented quota constants — Chrome exposes them on each area, and scripts size
+  // their writes against them (e.g. Stylus chunks sync writes against QUOTA_BYTES_PER_ITEM, so their absence
+  // mis-sizes a batch). `managed` is read-only (no quota). Standard Chrome values.
+  storage.sync.QUOTA_BYTES = 102400;
+  storage.sync.QUOTA_BYTES_PER_ITEM = 8192;
+  storage.sync.MAX_ITEMS = 512;
+  storage.sync.MAX_WRITE_OPERATIONS_PER_HOUR = 1800;
+  storage.sync.MAX_WRITE_OPERATIONS_PER_MINUTE = 120;
+  storage.local.QUOTA_BYTES = 10485760;
+  storage.session.QUOTA_BYTES = 10485760;
 
   // ---------------------------------------------------------------- chrome.alarms
 
