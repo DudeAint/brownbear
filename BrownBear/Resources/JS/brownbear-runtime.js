@@ -864,7 +864,12 @@
     // GM_openInTab opens a tab and returns a handle; when that tab later closes native streams back via the
     // vault's minted-id channel (__bbPageXHR(openId, "close")) to fire the handle's onclose. The minted id IS
     // the openId. See pageWorldGMClient.GM_openInTab + the native dispatchTabClosed page branch.
-    GM_openInTab: 1
+    GM_openInTab: 1,
+    // GM_notification posts a banner; click/close stream back native→page via the vault's minted-id channel
+    // (__bbPageXHR(streamId, "click"|"close")) to the script's onclick/ondone/onclose; the native id is
+    // returned via the reply for .remove(). See pageWorldGMClient.GM_notification + the native dispatch page
+    // branch. GM_notificationClear is its paired clear API.
+    GM_notification: 1, GM_notificationClear: 1
   };
   // DECLARATION grants that aren't relayed APIs — they're page-world-native capabilities a script asks for.
   // `@grant unsafeWindow` is the canonical "I want the REAL page window" request (the page-world client
@@ -1235,6 +1240,47 @@
       return handle;
     }
 
+    // --- GM_notification (page world) -----------------------------------------------------------
+    // Posts a banner and returns a control with .remove(). It's BOTH a reply (the native id, for clear) AND
+    // a stream (click/close): we register a vault handler (minted streamId) for the click/close events, then
+    // post GM_notification via the vault's request→REPLY channel to get the native id back. native streams
+    // window.__bbPageXHR(streamId, "click"|"close") on tap/dismiss → the script's onclick/ondone/onclose.
+    function pwNormalizeNotification(arg1, arg2, arg3, arg4) {
+      if (arg1 && typeof arg1 === "object") {
+        var d = arg1;
+        return { title: d.title, text: (d.text != null ? d.text : d.message), image: d.image,
+          silent: !!d.silent, timeout: d.timeout, id: d.id,
+          onclick: d.onclick, ondone: d.ondone, onclose: d.onclose, oncreate: d.oncreate };
+      }
+      return { text: arg1, title: arg2, image: arg3, onclick: arg4 };
+    }
+    function GM_notification(arg1, arg2, arg3, arg4) {
+      var n = pwNormalizeNotification(arg1, arg2, arg3, arg4);
+      var control = { remove: function () { return _Promise.resolve(); } };
+      var vault = W.__bbPageGM;
+      if (!vault || typeof vault.xhr !== "function" || typeof vault.reply !== "function") { return control; }
+      var wantClick = (typeof n.onclick === "function") || (typeof n.ondone === "function")
+        || (typeof n.onclose === "function");
+      var streamId = vault.xhr(function (type) {
+        if (type === "click") { xhrSafeCall(n.onclick); }
+        else if (type === "close") { xhrSafeCall(n.ondone); xhrSafeCall(n.onclose); if (typeof vault.xhrDone === "function") { vault.xhrDone(streamId); } }
+      });
+      var details = { title: n.title, text: n.text, silent: n.silent };
+      vault.reply(cfg.token, "GM_notification", { details: details, id: n.id || null, wantClick: wantClick, streamId: streamId },
+        function (res) {
+          var id = res && res.id;
+          if (!id) { if (typeof vault.xhrDone === "function") { vault.xhrDone(streamId); } return; }
+          control.remove = function () {
+            if (typeof vault.xhrDone === "function") { vault.xhrDone(streamId); }
+            pageGM("GM_notificationClear", { id: id });
+            return _Promise.resolve();
+          };
+          xhrSafeCall(n.oncreate, id);
+        },
+        function () { if (typeof vault.xhrDone === "function") { vault.xhrDone(streamId); } });
+      return control;
+    }
+
     // --- GM_cookie / GM_getTab / GM_saveTab / GM_listTabs (request → REPLY) ----------------------
     // One-shot APIs that return data (cookies are sensitive cross-origin data; tab objects the script's
     // own). The request goes out via the vault; native runs it (@connect-gated for cookies) and RETURNS
@@ -1334,7 +1380,8 @@
       download: function () { return GM_download.apply(null, arguments); },
       registerMenuCommand: function () { return GM_registerMenuCommand.apply(null, arguments); },
       unregisterMenuCommand: function () { return GM_unregisterMenuCommand.apply(null, arguments); },
-      openInTab: function () { return GM_openInTab.apply(null, arguments); }
+      openInTab: function () { return GM_openInTab.apply(null, arguments); },
+      notification: function () { return GM_notification.apply(null, arguments); }
     };
 
     var registry = {
@@ -1348,7 +1395,7 @@
       GM_xmlhttpRequest: GM_xmlhttpRequest, GM_cookie: GM_cookie, GM_getTab: GM_getTab,
       GM_saveTab: GM_saveTab, GM_listTabs: GM_listTabs, GM_download: GM_download,
       GM_registerMenuCommand: GM_registerMenuCommand, GM_unregisterMenuCommand: GM_unregisterMenuCommand,
-      GM_openInTab: GM_openInTab, GM_info: GM_info
+      GM_openInTab: GM_openInTab, GM_notification: GM_notification, GM_info: GM_info
     };
 
     // A console that writes to the page's real console AND forwards to the dashboard Logs via the vault,

@@ -28,16 +28,17 @@ final class PageWorldHandlerTests: XCTestCase {
                         "GM_setClipboard", "GM_log", "log", "GM_xmlhttpRequest", "GM_abortRequest",
                         "GM_download", "GM_downloadAbort",
                         "GM_registerMenuCommand", "GM_unregisterMenuCommand", "GM_openInTab", "GM_closeTab",
+                        "GM_notification", "GM_notificationClear",
                         "GM_cookie", "GM_getTab", "GM_saveTab", "GM_listTabs"],
-                       "the page-world allowlist is own-data writes + log + xhr + download + menu + tab + cookie/tab")
+                       "the page-world allowlist is writes + log + xhr + download + menu + tab + notification + cookie/tab")
     }
 
     func testAllowlistExcludesPrivilegedAndStreamingCallbackAPIs() {
-        // The escalation-sensitive APIs: token minting, code injection, session revival, and the
-        // STREAMING-callback ones not yet routed to the page world. NONE may be reachable.
+        // The escalation-sensitive APIs: token minting, code injection, session revival — NONE reachable.
+        // (Every GM streaming-callback API is now page-world-routed; the only isolation lever is
+        // @inject-into content. getScripts/injectPageWorld/revalidateSessions stay privileged.)
         let forbidden = [
-            "getScripts", "injectPageWorld", "revalidateSessions",
-            "GM_notification", "GM_notificationClear", "fetchResource"
+            "getScripts", "injectPageWorld", "revalidateSessions", "fetchResource"
         ]
         for api in forbidden {
             XCTAssertFalse(ScriptMessageRouter.pageWorldWriteAPIs.contains(api),
