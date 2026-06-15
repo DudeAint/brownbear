@@ -51,6 +51,10 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
 
     // Pending content→background message replies, keyed by a per-context response id.
     private var pendingResponses: [String: CheckedContinuation<[String: Any]?, Never>] = [:]
+    // The intent label (e.g. "(gmApi)") of each pending reply, so resolveResponse can report WHAT the
+    // worker answered and with how much payload — turning a silent "deferred" into a diagnosable result
+    // (a ScriptCat GM_xmlhttpRequest whose 200 reply comes back empty/null vs full is invisible otherwise).
+    private var pendingResponseLabels: [String: String] = [:]
     private var responseCounter = 0
     // Parked SW fetch-event results by request id; resolved by __bb_sw_fetch_response (+ServiceWorkerFetch).
     var pendingServiceWorkerFetch: [String: CheckedContinuation<ServiceWorkerFetchResponse?, Never>] = [:]
@@ -217,6 +221,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
             // Resolve anything still waiting so callers never hang.
             for (_, continuation) in pendingResponses { continuation.resume(returning: nil) }
             pendingResponses.removeAll()
+            pendingResponseLabels.removeAll()
             context = nil
         }
     }
@@ -244,6 +249,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
                 responseCounter += 1
                 let responseId = "r\(responseCounter)"
                 pendingResponses[responseId] = continuation
+                pendingResponseLabels[responseId] = Self.messageLabel(message)
 
                 let messageJSON = jsonString(message)
                 let senderJSON = jsonString(sender)
@@ -638,6 +644,21 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
     // can resolve a parked continuation when the worker answers a content/popup message.
     func resolveResponse(_ responseId: String, payload: [String: Any]?) {
         guard let continuation = pendingResponses.removeValue(forKey: responseId) else { return }
+        // Diagnostic: report WHAT the worker answered. A ScriptCat GM_xmlhttpRequest 200 whose reply comes
+        // back to the content side null/empty (so the userscript's onload never fires and it refetches) is
+        // otherwise invisible — the "deferred — awaiting reply" line only proves the request was dispatched.
+        if let label = pendingResponseLabels.removeValue(forKey: responseId), !label.isEmpty {
+            let value = payload?["value"]
+            let size: Int
+            if let value, !(value is NSNull),
+               let data = try? JSONSerialization.data(withJSONObject: ["v": value]) {
+                size = data.count - 8   // minus the {"v":} wrapper
+            } else {
+                size = 0
+            }
+            logSink(makeLog(.debug, "[bb-bg] reply\(label): \(size > 0 ? "value \(size)b" : "EMPTY/null") "
+                + "(worker sendResponse → content)"))
+        }
         continuation.resume(returning: payload)
     }
 

@@ -222,5 +222,67 @@ test("the performance and window relays use independent channels (no cross-talk)
     assert.ok(winState.pageFlag && perfState.pageFlag, "each bus must complete on its own channel");
 });
 
+// A GM message ROUND-TRIP over the bus, after the rendezvous: a MAIN-world inject.js sends a request to the
+// ISOLATED broker (scripting.js), which "fetches" and dispatches the response back. This is the path a
+// page-world (MAIN) ScriptCat userscript's GM_xmlhttpRequest takes for its 200 reply once #400 moved the
+// userscript into MAIN. Proves the response — including a large auto-validate-sized payload and rapid
+// repeated round-trips — crosses isolated→MAIN intact (so a "GM_xhr response never reaches the userscript"
+// symptom is NOT this relay dropping it).
+function roundTrip(pick, payload, times) {
+    const dom = makeSharedDom();
+    const iso = makeWorld("iso", dom);
+    const page = makeWorld("page", dom);
+    installInWorld(iso, "iso");
+    installInWorld(page, "page");
+    const FLAG = "BBGMBUS";
+    // scripting.js (iso): answer every request with the payload on the same bus.
+    (function broker() {
+        const prev = CURRENT_WORLD; CURRENT_WORLD = "iso";
+        const t = pick(iso), CE = iso.sandbox.CustomEvent;
+        t.addEventListener(FLAG, (ev) => {
+            if (!(ev instanceof CE) || !ev.detail || ev.detail.type !== "request") { return; }
+            t.dispatchEvent(new CE(FLAG, { detail: { type: "response", id: ev.detail.id, data: payload } }));
+        });
+        CURRENT_WORLD = prev;
+    })();
+    // inject.js (page MAIN): send N requests, collect the responses.
+    const received = [];
+    const prev = CURRENT_WORLD; CURRENT_WORLD = "page";
+    const t = pick(page), CE = page.sandbox.CustomEvent;
+    t.addEventListener(FLAG, (ev) => {
+        if (!(ev instanceof CE) || !ev.detail || ev.detail.type !== "response") { return; }
+        received.push(ev.detail.data);
+    });
+    for (let i = 0; i < times; i++) {
+        t.dispatchEvent(new CE(FLAG, { detail: { type: "request", id: "r" + i, action: "gmApi" } }));
+    }
+    CURRENT_WORLD = prev;
+    return received;
+}
+
+const BIG_REPLY = { success: true, data: {
+    accessToken: "a".repeat(820), refreshToken: "r".repeat(820), expiresAt: 1781878488522,
+    featurePolicy: { version: 1, trial: { denyAll: ["x", "y", "z"] } }, key: "D5N5CZDJ"
+} };
+
+test("GM message round-trip: a MAIN-world request gets the ISOLATED broker's response back (window bus)", () => {
+    const got = roundTrip(WIN, BIG_REPLY, 1);
+    assert.strictEqual(got.length, 1, "the MAIN world received exactly one response");
+    assert.strictEqual(JSON.stringify(got[0]), JSON.stringify(BIG_REPLY),
+        "the large auto-validate-sized response crossed isolated→MAIN intact");
+});
+
+test("GM round-trip survives rapid repeats (the retry pattern) with every response intact", () => {
+    const got = roundTrip(WIN, BIG_REPLY, 25);
+    assert.strictEqual(got.length, 25, "all 25 responses crossed back to MAIN (no drops under rapid fire)");
+    assert.ok(got.every((r) => JSON.stringify(r) === JSON.stringify(BIG_REPLY)), "every response intact");
+});
+
+test("GM round-trip also works over the performance bus (older ScriptCat)", () => {
+    const got = roundTrip(PERF, BIG_REPLY, 3);
+    assert.strictEqual(got.length, 3);
+    assert.ok(got.every((r) => JSON.stringify(r) === JSON.stringify(BIG_REPLY)));
+});
+
 console.log("\n" + passed + " passed, " + failed + " failed");
 process.exit(failed === 0 ? 0 : 1);
