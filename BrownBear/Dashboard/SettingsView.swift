@@ -23,6 +23,7 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Key.tabSwitcherStyle) private var tabSwitcherStyleRaw = TabSwitcherStyle.grid.rawValue
     @AppStorage(AppSettings.Key.verticalTabsSide) private var verticalTabsSideRaw = VerticalTabsSide.right.rawValue
     @AppStorage("bbWebInspector") private var webInspector = false
+    @AppStorage("bbVerboseExtLogs") private var verboseExtLogs = false
     @State private var isClearing = false
     @State private var didClear = false
     @State private var confirmingClear = false
@@ -99,6 +100,14 @@ struct SettingsView: View {
                 Text("Lets you attach Safari's Web Inspector (on a Mac: Develop → your device) to inspect "
                     + "page, userscript, and extension execution — full console, breakpoints, network. Off by "
                     + "default because inspectable web content is a privacy surface. Open new tabs to apply.")
+                    .font(.caption)
+                    .foregroundStyle(BBTheme.Color.textSecondary)
+
+                Toggle("Verbose extension logs", isOn: $verboseExtLogs)
+                    .tint(BBTheme.Color.toggleOn)
+                Text("Adds the full extension-runtime trace — message ports, the cross-world relay, and "
+                    + "storage traffic — to the Logs tab. Off by default so the Logs show real signal "
+                    + "(script injection, errors) instead of being buried by a busy manager's debug chatter.")
                     .font(.caption)
                     .foregroundStyle(BBTheme.Color.textSecondary)
             }

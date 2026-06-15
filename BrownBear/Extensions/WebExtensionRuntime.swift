@@ -186,12 +186,24 @@ class WebExtensionRuntime {
     /// Append a popup/options PAGE's forwarded console line / uncaught error to this extension's log,
     /// so an otherwise-invisible blank-page failure is diagnosable in the dashboard. `source: .page`.
     func logFromPage(extensionID: String, level: String, message: String) async {
+        let resolved = LogEntry.Level(rawValue: level) ?? .info
+        // Verbose extension-runtime diagnostics (port-relay/perf-bridge/storage traffic) are emitted at
+        // `.debug` and, on a busy manager like ScriptCat, flood the Logs tab hundreds of lines deep —
+        // burying the signal (the `.info` injection summary, real `.error` failures). Drop `.debug` unless
+        // the user opts into verbose logging (Settings → Developer). info/warn/error always pass.
+        guard Self.verboseExtLogs || resolved != .debug else { return }
         let name = await store.ext(for: extensionID)?.displayName
         let entry = LogEntry(scriptID: nil, scriptName: name,
-                             level: LogEntry.Level(rawValue: level) ?? .info,
+                             level: resolved,
                              message: message, context: .foreground, source: .page)
         await logStore.append(entry)
     }
+
+    /// Whether `.debug`-level extension diagnostics reach the Logs tab. Default OFF so the dashboard shows
+    /// real signal; the "Verbose extension logs" Developer toggle turns the full port/relay trace back on.
+    /// `nonisolated` so the background context's `@Sendable` logSink closure can read it off the main actor —
+    /// it only reads thread-safe `UserDefaults`, holding no main-actor state.
+    nonisolated static var verboseExtLogs: Bool { UserDefaults.standard.bool(forKey: "bbVerboseExtLogs") }
 
     /// Give an extension's background worker the chance to serve an unpackaged extension-scheme request
     /// from its `fetch` event handler (e.g. Stylus's `chrome-extension://<id>/data?…`). Called by the
@@ -553,7 +565,12 @@ class WebExtensionRuntime {
             extensionID: ext.id,
             extensionName: ext.displayName,
             storage: storage,
-            logSink: { entry in Task { await logStore.append(entry) } })
+            logSink: { entry in
+                // Same gate as logFromPage: the background worker's `[bb-bg]` port/dispatch/storage trace is
+                // `.debug` and floods the Logs tab; suppress it unless verbose logging is opted in.
+                guard WebExtensionRuntime.verboseExtLogs || entry.level != .debug else { return }
+                Task { await logStore.append(entry) }
+            })
 
         // Defense in depth against reentrancy: we released the MainActor at the awaits above, so a
         // concurrent pass may already have booted this extension. Re-check with NO await before the
