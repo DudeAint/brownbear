@@ -860,7 +860,11 @@
     // GM_registerMenuCommand registers in the native "•••" menu; a tap streams back native→page via the
     // vault's minted-id channel (__bbPageXHR(commandId, "menu")) to the script's callback. The minted id IS
     // the command id. See pageWorldGMClient.GM_registerMenuCommand + the native fireMenuCommand page branch.
-    GM_registerMenuCommand: 1, GM_unregisterMenuCommand: 1
+    GM_registerMenuCommand: 1, GM_unregisterMenuCommand: 1,
+    // GM_openInTab opens a tab and returns a handle; when that tab later closes native streams back via the
+    // vault's minted-id channel (__bbPageXHR(openId, "close")) to fire the handle's onclose. The minted id IS
+    // the openId. See pageWorldGMClient.GM_openInTab + the native dispatchTabClosed page branch.
+    GM_openInTab: 1
   };
   // DECLARATION grants that aren't relayed APIs — they're page-world-native capabilities a script asks for.
   // `@grant unsafeWindow` is the canonical "I want the REAL page window" request (the page-world client
@@ -1208,6 +1212,29 @@
       if (typeof W.__bbPageGM.xhrDone === "function") { W.__bbPageGM.xhrDone(id); }
     }
 
+    // --- GM_openInTab (page world) --------------------------------------------------------------
+    // Opens a tab and returns a REAL handle (TM/VM parity): close() dismisses it, and native fires the
+    // handle's onclose + flips .closed when the tab later goes away (any path). The vault mints the openId
+    // (which IS the streaming id); native streams the close back via window.__bbPageXHR(openId, "close").
+    function GM_openInTab(url, options) {
+      var active;
+      if (typeof options === "boolean") { active = !options; }
+      else if (options && typeof options === "object") { active = options.active !== false; }
+      else { active = true; }
+      var handle = { closed: false, onclose: null, close: function () {} };
+      var vault = W.__bbPageGM;
+      if (!vault || typeof vault.xhr !== "function") { handle.closed = true; return handle; }
+      var openId = vault.xhr(function (type) {
+        if (type !== "close") { return; }
+        handle.closed = true;
+        if (typeof vault.xhrDone === "function") { vault.xhrDone(openId); }
+        if (typeof handle.onclose === "function") { try { handle.onclose(); } catch (e) { /* ignore */ } }
+      });
+      handle.close = function () { pageGM("GM_closeTab", { openId: openId }); };
+      pageGM("GM_openInTab", { url: typeof url === "string" ? url : String(url), active: active, openId: openId });
+      return handle;
+    }
+
     // --- GM_cookie / GM_getTab / GM_saveTab / GM_listTabs (request → REPLY) ----------------------
     // One-shot APIs that return data (cookies are sensitive cross-origin data; tab objects the script's
     // own). The request goes out via the vault; native runs it (@connect-gated for cookies) and RETURNS
@@ -1306,7 +1333,8 @@
       listTabs: function () { return new _Promise(function (resolve) { GM_listTabs(resolve); }); },
       download: function () { return GM_download.apply(null, arguments); },
       registerMenuCommand: function () { return GM_registerMenuCommand.apply(null, arguments); },
-      unregisterMenuCommand: function () { return GM_unregisterMenuCommand.apply(null, arguments); }
+      unregisterMenuCommand: function () { return GM_unregisterMenuCommand.apply(null, arguments); },
+      openInTab: function () { return GM_openInTab.apply(null, arguments); }
     };
 
     var registry = {
@@ -1320,7 +1348,7 @@
       GM_xmlhttpRequest: GM_xmlhttpRequest, GM_cookie: GM_cookie, GM_getTab: GM_getTab,
       GM_saveTab: GM_saveTab, GM_listTabs: GM_listTabs, GM_download: GM_download,
       GM_registerMenuCommand: GM_registerMenuCommand, GM_unregisterMenuCommand: GM_unregisterMenuCommand,
-      GM_info: GM_info
+      GM_openInTab: GM_openInTab, GM_info: GM_info
     };
 
     // A console that writes to the page's real console AND forwards to the dashboard Logs via the vault,
