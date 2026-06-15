@@ -100,6 +100,16 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
         }
     }
 
+    /// WebKit reclaimed this tab's web-content process under memory pressure. The web view is now blank
+    /// (and `webView.url` may have gone nil); reload the tab's URL so the user isn't stranded on a white
+    /// page. We are the navigation delegate of the active tab only, so this fires for the foreground tab;
+    /// off-screen tabs whose renderers are reclaimed recover on activation via `loadPendingOrRecover()`.
+    /// `Tab.reload()` drives the load from the retained last-committed URL when `webView.url` is nil.
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        guard let tab = tabManager.tabs.first(where: { $0.webView === webView }) else { return }
+        tab.reload()
+    }
+
     func webView(_ webView: WKWebView,
                  decidePolicyFor navigationAction: WKNavigationAction,
                  preferences: WKWebpagePreferences,

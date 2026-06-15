@@ -96,6 +96,15 @@ final class Tab {
     /// used so a freshly created tab can defer its first load until it is on screen.
     private(set) var pendingURL: URL?
 
+    /// The last real (committed) URL this tab displayed, retained across renderer loss. WebKit reclaims
+    /// an off-screen tab's web-content process under memory pressure, after which `webView.url` reports
+    /// nil; without this anchor the published state — and therefore the persisted session record — would
+    /// collapse to "no URL", so the tab would restore as a blank New Tab even though it had a page (the
+    /// retained thumbnail still showing the old site). It is only ever advanced to a fresher real URL,
+    /// never nil'd by a transient renderer loss; it is cleared only when the tab is deliberately shown
+    /// the New Tab page (`prepareForNewTabPage()`), so a genuine New Tab never resurrects an old URL.
+    private(set) var lastCommittedURL: URL?
+
     /// Invoked once when this tab is closed (any close path), before its web view is freed. Lets an
     /// owner tear down state bound to the tab — e.g. a hosted extension page's chrome.runtime ports —
     /// while the runtime is still reachable. Generic so the Models layer stays free of feature knowledge.
@@ -158,10 +167,35 @@ final class Tab {
         load(pendingURL)
     }
 
+    /// Activation entry point: start this tab's deferred load if one is queued; otherwise, if WebKit
+    /// reclaimed the renderer while the tab was off-screen (web view blank, nothing pending) but the tab
+    /// has a last-committed URL, reload that URL so a re-shown tab renders its page rather than a blank
+    /// view. A normally-loaded tab (`webView.url` non-nil) and the New Tab page (`lastCommittedURL` nil)
+    /// are both left untouched. Pending-first ordering guarantees we never kick off two loads at once.
+    func loadPendingOrRecover() {
+        if let pendingURL {
+            load(pendingURL)
+            return
+        }
+        if webView.url == nil, let lastCommittedURL {
+            load(lastCommittedURL)
+        }
+    }
+
+    /// Mark this tab as being shown the in-app New Tab page, forgetting any retained committed URL so the
+    /// blank page is never mistaken for a renderer-reclaimed real page (and so `isShowingNewTabPage` reads
+    /// true). Called by the browser when it loads the New Tab document into the tab.
+    func prepareForNewTabPage() {
+        lastCommittedURL = nil
+    }
+
     /// True when this tab is showing the in-app New Tab page: it's loaded via `loadHTMLString(baseURL:
-    /// nil)` so `webView.url` reports about:blank, and there's no real navigation pending.
+    /// nil)` so `webView.url` reports about:blank, there's no real navigation pending, AND there's no
+    /// last-committed URL to recover — a real page whose renderer WebKit reclaimed (`webView.url` nil,
+    /// `lastCommittedURL` set) is NOT the New Tab page, it's a tab awaiting a reload.
     var isShowingNewTabPage: Bool {
-        pendingURL == nil && (webView.url == nil || webView.url?.absoluteString == "about:blank")
+        pendingURL == nil && lastCommittedURL == nil &&
+            (webView.url == nil || webView.url?.absoluteString == "about:blank")
     }
 
     func reload() {
@@ -169,8 +203,17 @@ final class Tab {
             // Nothing to reload in an about:blank data document — ask the browser to rebuild the page,
             // otherwise reloading blanks the screen.
             delegate?.tabNeedsNewTabPage(self)
-        } else if webView.url == nil, let pendingURL {
-            load(pendingURL)
+        } else if webView.url == nil {
+            // The renderer hasn't loaded (a deferred first load) or was reclaimed by WebKit (process
+            // terminated). Drive the load from whatever URL we still hold, newest intent first; fall back
+            // to rebuilding the New Tab page only if the tab genuinely has no URL.
+            if let pendingURL {
+                load(pendingURL)
+            } else if let lastCommittedURL {
+                load(lastCommittedURL)
+            } else {
+                delegate?.tabNeedsNewTabPage(self)
+            }
         } else {
             webView.reload()
         }
@@ -221,16 +264,30 @@ final class Tab {
         recomputeState()
     }
 
+    /// Resolve the URL the tab should publish, given the renderer's current URL, any queued pending load,
+    /// and the last real URL the tab committed. Pure (no WebKit) so the renderer-loss fallback is unit-
+    /// testable. Rules:
+    /// - a real renderer URL is authoritative (the caller also records it as the new last-committed URL);
+    /// - about:blank — the `loadHTMLString(baseURL: nil)` New Tab page — is not a real destination, so it
+    ///   resolves to nil (the omnibox shows its placeholder) and does NOT resurrect a retained URL;
+    /// - a nil renderer URL (deferred first load, or a renderer WebKit reclaimed) falls back to the
+    ///   pending URL, then the last-committed URL, so the published state survives a transient renderer loss.
+    nonisolated static func resolvedURL(webViewURL: URL?, pendingURL: URL?, lastCommittedURL: URL?) -> URL? {
+        if let webViewURL {
+            return webViewURL.absoluteString == "about:blank" ? nil : webViewURL
+        }
+        return pendingURL ?? lastCommittedURL
+    }
+
     private func recomputeState() {
         var next = NavigationState()
-        // `loadHTMLString(baseURL: nil)` (the New Tab page) makes webView.url report "about:blank";
-        // that's not a real destination, so surface it as no-URL — the omnibox then shows its
-        // placeholder instead of the literal text "about:blank".
+        // Advance the retained anchor whenever the renderer reports a real (non-about:blank) URL, so a
+        // later renderer loss can fall back to it. Never cleared here — only by prepareForNewTabPage().
         if let current = webView.url, current.absoluteString != "about:blank" {
-            next.url = current
-        } else {
-            next.url = pendingURL
+            lastCommittedURL = current
         }
+        next.url = Tab.resolvedURL(webViewURL: webView.url, pendingURL: pendingURL,
+                                   lastCommittedURL: lastCommittedURL)
         next.title = webView.title
         next.estimatedProgress = webView.estimatedProgress
         next.isLoading = webView.isLoading
