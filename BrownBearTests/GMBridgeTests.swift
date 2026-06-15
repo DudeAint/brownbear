@@ -56,6 +56,48 @@ final class GMValueStoreTests: XCTestCase {
         XCTAssertEqual(snapshot["a"], "1")
         XCTAssertEqual(snapshot["b"], "\"two\"")
     }
+
+    // MARK: - clearReturningOld (powers the dashboard "Clear all values" → page live-sync broadcast)
+
+    func testClearReturningOldReturnsWipedPairsAndEmpties() async {
+        let store = makeStore()
+        let id = UUID()
+        await store.setValue(scriptID: id, key: "a", jsonValue: "1")
+        await store.setValue(scriptID: id, key: "b", jsonValue: "\"two\"")
+
+        let removed = await store.clearReturningOld(scriptID: id)
+        let asDict = Dictionary(uniqueKeysWithValues: removed.map { ($0.key, $0.old ?? "") })
+        XCTAssertEqual(removed.count, 2, "every wiped key is reported")
+        XCTAssertEqual(asDict["a"], "1", "with its old value, for broadcasting")
+        XCTAssertEqual(asDict["b"], "\"two\"")
+
+        let snapshot = await store.snapshot(scriptID: id)
+        XCTAssertTrue(snapshot.isEmpty, "the namespace is wiped")
+    }
+
+    func testClearReturningOldOnEmptyNamespaceIsNoOp() async {
+        let store = makeStore()
+        let removed = await store.clearReturningOld(scriptID: UUID())
+        XCTAssertTrue(removed.isEmpty, "nothing to wipe → nothing to broadcast")
+    }
+
+    func testClearReturningOldIsNamespaceIsolated() async {
+        let store = makeStore()
+        let scriptA = UUID(), scriptB = UUID()
+        await store.setValue(scriptID: scriptA, key: "k", jsonValue: "1")
+        await store.setValue(scriptID: scriptB, key: "k", jsonValue: "2")
+
+        _ = await store.clearReturningOld(scriptID: scriptA)
+
+        let bValue = await store.value(scriptID: scriptB, key: "k")
+        XCTAssertEqual(bValue, "2", "clearing script A must never touch script B (CLAUDE.md §5.3)")
+    }
+
+    func testDeleteValueReturningOldIsNilForMissingKey() async {
+        let store = makeStore()
+        let old = await store.deleteValueReturningOld(scriptID: UUID(), key: "absent")
+        XCTAssertNil(old, "deleting an unset key returns nil → the dashboard delete path skips a no-op broadcast")
+    }
 }
 
 final class ConnectAllowlistTests: XCTestCase {
