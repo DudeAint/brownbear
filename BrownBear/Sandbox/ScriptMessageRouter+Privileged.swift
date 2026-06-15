@@ -30,14 +30,16 @@ extension ScriptMessageRouter {
     static let pageHandlerName = "brownbearPage"
 
     /// The exhaustive allowlist a page-world caller may invoke: a script's OWN-DATA writes, `log`, the
-    /// network `GM_xmlhttpRequest`/`GM_abortRequest` (response native→page via window.__bbPageXHR), and the
-    /// request→reply APIs `GM_cookie`/`GM_getTab`/`GM_saveTab`/`GM_listTabs` (their result is RETURNED through
-    /// the WKScriptMessageHandlerWithReply reply promise — never on the DOM — and `GM_cookie` is @connect-
-    /// gated per the token). Anything not here (getScripts, injectPageWorld, downloads, notifications, menus,
-    /// and reads — served page-local) is rejected for page-world callers.
+    /// network `GM_xmlhttpRequest`/`GM_abortRequest` and `GM_download`/`GM_downloadAbort` (lifecycle streamed
+    /// native→page via window.__bbPageXHR; both @connect-gated per the token), and the request→reply APIs
+    /// `GM_cookie`/`GM_getTab`/`GM_saveTab`/`GM_listTabs` (their result is RETURNED through the
+    /// WKScriptMessageHandlerWithReply reply promise — never on the DOM). Anything not here (getScripts,
+    /// injectPageWorld, notifications, menus, openInTab, and reads — served page-local) is rejected for
+    /// page-world callers.
     static let pageWorldWriteAPIs: Set<String> = [
         "GM_setValue", "GM_deleteValue", "GM_setValues", "GM_deleteValues", "GM_setClipboard", "GM_log", "log",
-        "GM_xmlhttpRequest", "GM_abortRequest", "GM_cookie", "GM_getTab", "GM_saveTab", "GM_listTabs"
+        "GM_xmlhttpRequest", "GM_abortRequest", "GM_download", "GM_downloadAbort",
+        "GM_cookie", "GM_getTab", "GM_saveTab", "GM_listTabs"
     ]
 
     // MARK: - GM_openInTab close notification
@@ -190,7 +192,7 @@ extension ScriptMessageRouter {
     /// Documents/Downloads (so it shows in the Downloads list), and optionally presents a share/save
     /// sheet via the host. `requestId` correlates the events.
     func handleDownload(payload: [String: Any], session: PrivilegedSession,
-                        frameURL: URL?, webView: WKWebView?) async throws {
+                        frameURL: URL?, webView: WKWebView?, fromPageWorld: Bool = false) async throws {
         guard let requestID = payload["requestId"] as? String,
               let urlString = payload["url"] as? String,
               let url = URL(string: urlString) else {
@@ -205,13 +207,18 @@ extension ScriptMessageRouter {
 
         try await ensurePrivilegedConnect(host: host, session: session, frameURL: frameURL)
 
-        let world = privilegedContentWorld
+        // A page-world download streams to .page via the non-configurable window.__bbPageXHR (native→page
+        // eval, NOT a DOM channel), routed to the vault-registered handler for this minted requestID —
+        // exactly like a page-world GM_xmlhttpRequest. The isolated world uses __brownbear.dispatchDownload.
+        let world = fromPageWorld ? WKContentWorld.page : privilegedContentWorld
         weak var weakWebView = webView
         let emit: (String, [String: Any]) -> Void = { eventType, eventPayload in
             let args: [Any] = [requestID, eventType, eventPayload]
             guard let data = try? JSONSerialization.data(withJSONObject: args),
                   let json = String(data: data, encoding: .utf8) else { return }
-            let js = "window.__brownbear && window.__brownbear.dispatchDownload && window.__brownbear.dispatchDownload.apply(null, \(json));"
+            let js = fromPageWorld
+                ? "window.__bbPageXHR && window.__bbPageXHR.apply(null, \(json));"
+                : "window.__brownbear && window.__brownbear.dispatchDownload && window.__brownbear.dispatchDownload.apply(null, \(json));"
             DispatchQueue.main.async {
                 if let webView = weakWebView { BBEvaluateJavaScript(webView, js, world) }
             }

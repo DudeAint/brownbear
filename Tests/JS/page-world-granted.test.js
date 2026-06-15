@@ -166,8 +166,17 @@ async function bootAndInject(overrides) {
         });
     }
     {
+        // GM_download now streams its lifecycle native→page via the vault (like GM_xmlhttpRequest), so a
+        // GM_download-granted script runs in the PAGE world too. See pageworld-download.test.js.
         const calls = await bootAndInject({ injectInto: "auto", grants: ["GM_download"] });
-        test("a still-callback-streaming grant (GM_download) keeps the script ISOLATED", () => {
+        test("GM_download now routes to the page world (lifecycle native→page via the vault)", () => {
+            assert.strictEqual(injectCalls(calls).length, 1);
+        });
+    }
+    {
+        // A grant whose callback streaming is NOT yet page-routed (GM_notification) keeps the script ISOLATED.
+        const calls = await bootAndInject({ injectInto: "auto", grants: ["GM_notification"] });
+        test("a still-callback-streaming grant (GM_notification) keeps the script ISOLATED", () => {
             assert.strictEqual(injectCalls(calls).length, 0);
         });
     }

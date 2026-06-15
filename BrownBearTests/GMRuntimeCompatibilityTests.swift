@@ -319,7 +319,10 @@ final class GMRuntimeCompatibilityTests: XCTestCase {
         var abortRequestId: String?
         let scriptData: [String: Any] = [
             "token": "tok", "runAt": "document-start", "name": "dltest",
-            "grants": ["GM_download"], "grantNone": false, "noFrames": false, "injectInto": "auto",
+            // @inject-into content: GM_download is page-world-safe now, so `auto` would route to the page
+            // world (injectPageWorld), which this JSContext harness can't eval — pin to the isolated bridge
+            // this test exercises.
+            "grants": ["GM_download"], "grantNone": false, "noFrames": false, "injectInto": "content",
             "requires": [String](), "resources": [String: String](),
             "source": "var h = GM_download({ url: 'https://x.test/f.bin', name: 'f' }); h.abort();",
             "values": [String: String](), "info": ["scriptHandler": "BrownBear"]
@@ -361,7 +364,10 @@ final class GMRuntimeCompatibilityTests: XCTestCase {
         var abortRequestId: String?
         let scriptData: [String: Any] = [
             "token": "tok", "runAt": "document-start", "name": "dlpromise",
-            "grants": ["GM_download", "GM_setValue"], "grantNone": false, "noFrames": false, "injectInto": "auto",
+            // @inject-into content: GM_download + GM_setValue are both page-world-safe now, so `auto` would
+            // route to the page world (injectPageWorld) which this JSContext harness can't eval — pin to the
+            // isolated bridge this test exercises.
+            "grants": ["GM_download", "GM_setValue"], "grantNone": false, "noFrames": false, "injectInto": "content",
             "requires": [String](), "resources": [String: String](),
             "source": "var p = GM.download({ url: 'https://x.test/f.bin', name: 'f' });"
                 + " GM_setValue('abortType', typeof p.abort); p.abort();",

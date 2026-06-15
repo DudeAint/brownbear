@@ -820,8 +820,7 @@
   //                                         window and the page's own globals are visible (Violentmonkey
   //                                         parity — VM defaults granted scripts to the page world too).
   //                                         Path: buildGrantedPageWorldSource.
-  //   • @inject-into page / auto, GRANTED with any NON-page-safe grant (cookies, downloads,
-  //     notifications, menu/tab, value-change listeners)
+  //   • @inject-into page / auto, GRANTED with any NON-page-safe grant (notifications, menu, openInTab)
   //                                       → the ISOLATED world (those still need native→world callback
   //                                         streaming that this PR doesn't yet route to the page world).
   //
@@ -853,7 +852,11 @@
     // Request→reply APIs: native runs them (GM_cookie is @connect-gated) and returns the result through the
     // WKScriptMessageHandlerWithReply reply promise, which the vault settles via a pristine `.then` into the
     // caller's closure — never on the DOM. See pageWorldGMClient's GM_cookie/GM_getTab/etc + vault call.reply.
-    GM_cookie: 1, GM_getTab: 1, GM_saveTab: 1, GM_listTabs: 1
+    GM_cookie: 1, GM_getTab: 1, GM_saveTab: 1, GM_listTabs: 1,
+    // GM_download streams its lifecycle (progress/load/error/abort) native→page via the vault's minted-id
+    // channel (__bbPageXHR), exactly like GM_xmlhttpRequest; the @connect host is enforced natively. See
+    // pageWorldGMClient.GM_download + the native handleDownload fromPageWorld branch.
+    GM_download: 1
   };
   // DECLARATION grants that aren't relayed APIs — they're page-world-native capabilities a script asks for.
   // `@grant unsafeWindow` is the canonical "I want the REAL page window" request (the page-world client
@@ -1132,6 +1135,44 @@
       return { _entry: entry, abort: function () { pageGM("GM_abortRequest", { requestId: requestId }); } };
     }
 
+    // --- GM_download (page world) ---------------------------------------------------------------
+    // Same model as the page-world GM_xmlhttpRequest: register a streaming handler on the vault (which mints
+    // an unguessable id the page can't predict), post the request through the vault with that id, and native
+    // streams the download's lifecycle (progress/load/error/abort/timeout) back via window.__bbPageXHR — a
+    // native→page eval, NOT a DOM channel. native @connect-gates the URL host. TM/VM: details OR (url, name).
+    function GM_download(arg1, arg2) {
+      var d = (arg1 && typeof arg1 === "object") ? arg1 : { url: arg1, name: arg2 };
+      var vault = W.__bbPageGM;
+      if (!vault || typeof vault.xhr !== "function") {
+        xhrSafeCall(d.onerror, { error: "BrownBear page-world download unavailable" });
+        return { abort: function () {} };
+      }
+      var done = false;
+      var requestId = vault.xhr(function (type, payload) {
+        var p = payload || {};
+        switch (type) {
+          case "progress": xhrSafeCall(d.onprogress, p); break;
+          case "timeout": xhrSafeCall(d.ontimeout, p); finish(); break;
+          case "error": xhrSafeCall(d.onerror, p); finish(); break;
+          case "abort": xhrSafeCall(d.onabort || d.onerror, p); finish(); break;
+          case "load": xhrSafeCall(d.onload, p); finish(); break;
+          default: break;
+        }
+      });
+      function finish() {
+        if (done) { return; }
+        done = true;
+        if (typeof vault.xhrDone === "function") { vault.xhrDone(requestId); }
+      }
+      var payload = {
+        requestId: requestId, url: typeof d.url === "string" ? d.url : String(d.url),
+        name: d.name || "", headers: d.headers || {}, saveAs: !!d.saveAs
+      };
+      if (d.timeout) { payload.timeout = d.timeout; }
+      pageGM("GM_download", payload);
+      return { abort: function () { pageGM("GM_downloadAbort", { requestId: requestId }); } };
+    }
+
     // --- GM_cookie / GM_getTab / GM_saveTab / GM_listTabs (request → REPLY) ----------------------
     // One-shot APIs that return data (cookies are sensitive cross-origin data; tab objects the script's
     // own). The request goes out via the vault; native runs it (@connect-gated for cookies) and RETURNS
@@ -1227,7 +1268,8 @@
       cookie: GM_cookie,
       getTab: function () { return new _Promise(function (resolve) { GM_getTab(resolve); }); },
       saveTab: function (obj) { return new _Promise(function (resolve) { GM_saveTab(obj, function () { resolve(); }); }); },
-      listTabs: function () { return new _Promise(function (resolve) { GM_listTabs(resolve); }); }
+      listTabs: function () { return new _Promise(function (resolve) { GM_listTabs(resolve); }); },
+      download: function () { return GM_download.apply(null, arguments); }
     };
 
     var registry = {
@@ -1239,7 +1281,7 @@
       GM_getResourceText: GM_getResourceText, GM_getResourceURL: GM_getResourceURL,
       GM_getResourceUrl: GM_getResourceURL, GM_addStyle: GM_addStyle, GM_addElement: GM_addElement,
       GM_xmlhttpRequest: GM_xmlhttpRequest, GM_cookie: GM_cookie, GM_getTab: GM_getTab,
-      GM_saveTab: GM_saveTab, GM_listTabs: GM_listTabs, GM_info: GM_info
+      GM_saveTab: GM_saveTab, GM_listTabs: GM_listTabs, GM_download: GM_download, GM_info: GM_info
     };
 
     // A console that writes to the page's real console AND forwards to the dashboard Logs via the vault,
