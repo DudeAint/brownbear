@@ -509,28 +509,13 @@
     }
     function GM_addStyle(css) {
       // Primary: a real <style> works on most sites and keeps the TM/VM return semantics (the element a
-      // script can remove to toggle the style off).
+      // script can remove to toggle the style off). CSP-resilient fallback (applyStyleElementCSPFallback)
+      // kicks in ONLY when a strict style-src refused the <style> — never alongside a working one, so the
+      // CSS isn't applied twice and removing the returned element still removes the style. iOS 16.4+.
       var style = document.createElement("style");
       style.textContent = css;
       (document.head || document.documentElement).appendChild(style);
-      // CSP-resilient fallback — ONLY when the <style> didn't take. A strict style-src can refuse the
-      // <style> (its sheet then has no rules); only then apply the CSS via a CONSTRUCTED stylesheet (CSSOM,
-      // not gated by style-src). Applying it ONLY as a fallback — never alongside a working <style> — means
-      // the CSS isn't applied twice (the adopted sheet cascades AFTER the page's stylesheets and would
-      // otherwise override the page harder than a plain <style>) and removing the returned element still
-      // removes the style. iOS 16.4+.
-      var styleApplied = false;
-      try { styleApplied = !!(style.sheet && style.sheet.cssRules && style.sheet.cssRules.length > 0); }
-      catch (e) { styleApplied = false; }
-      if (!styleApplied) {
-        try {
-          if (typeof _CSSStyleSheet === "function" && "adoptedStyleSheets" in document) {
-            var sheet = new _CSSStyleSheet();
-            sheet.replaceSync(String(css));
-            document.adoptedStyleSheets = document.adoptedStyleSheets.concat([sheet]);
-          }
-        } catch (e) { /* constructed-sheet fallback is best-effort */ }
-      }
+      applyStyleElementCSPFallback(style);
       return style;
     }
     function GM_addElement(parent, tag, attrs) {
@@ -543,7 +528,27 @@
         });
       }
       (parent || document.head || document.documentElement).appendChild(el);
+      // A GM_addElement('style', {textContent}) is subject to style-src exactly like GM_addStyle's <style>;
+      // if a strict CSP refused it (its sheet has no rules), apply the CSS via a CONSTRUCTED stylesheet
+      // (CSSOM, not style-src-gated) as the same fallback GM_addStyle uses. ONLY for <style> — <script>/
+      // <link> stay governed by the page CSP (bypassing those would be a security regression). iOS 16.4+.
+      if (("" + tag).toLowerCase() === "style" && el.textContent) { applyStyleElementCSPFallback(el); }
       return el;
+    }
+    // Shared by GM_addStyle and GM_addElement('style'): apply `el`'s CSS via a constructed stylesheet when
+    // the <style> element itself didn't take (style-src refused it). No-op when the <style> applied.
+    function applyStyleElementCSPFallback(el) {
+      var applied = false;
+      try { applied = !!(el.sheet && el.sheet.cssRules && el.sheet.cssRules.length > 0); }
+      catch (e) { applied = false; }
+      if (applied) { return; }
+      try {
+        if (typeof _CSSStyleSheet === "function" && "adoptedStyleSheets" in document) {
+          var sheet = new _CSSStyleSheet();
+          sheet.replaceSync(String(el.textContent));
+          document.adoptedStyleSheets = document.adoptedStyleSheets.concat([sheet]);
+        }
+      } catch (e) { /* constructed-sheet fallback is best-effort */ }
     }
     function GM_setClipboard(data2, info) {
       var mimetype = typeof info === "string" ? info : (info && info.mimetype) || "text/plain";
@@ -1091,25 +1096,13 @@
 
     function GM_addStyle(css) {
       // Primary: a real <style> (TM/VM semantics — the script can remove the returned element to toggle
-      // the style off). Append the constructed adoptedStyleSheets sheet ONLY as a CSP fallback when the
-      // <style> didn't take (its sheet has no rules), never alongside a working one — otherwise the CSS is
-      // applied twice and the adopted sheet cascades AFTER the page's stylesheets, overriding harder than a
-      // plain <style> and visibly mis-styling the page. Mirrors the isolated-world GM_addStyle (iOS 16.4+).
+      // the style off). The constructed-stylesheet fallback (pwApplyStyleElementCSPFallback) applies ONLY
+      // when a strict style-src refused the <style>, never alongside a working one. Mirrors the isolated
+      // world (iOS 16.4+).
       var style = D.createElement("style");
       style.textContent = css;
       (D.head || D.documentElement).appendChild(style);
-      var styleApplied = false;
-      try { styleApplied = !!(style.sheet && style.sheet.cssRules && style.sheet.cssRules.length > 0); }
-      catch (e) { styleApplied = false; }
-      if (!styleApplied) {
-        try {
-          if (typeof W.CSSStyleSheet === "function" && "adoptedStyleSheets" in D) {
-            var sheet = new W.CSSStyleSheet();
-            sheet.replaceSync(String(css));
-            D.adoptedStyleSheets = D.adoptedStyleSheets.concat([sheet]);
-          }
-        } catch (e) { /* constructed-sheet fallback is best-effort */ }
-      }
+      pwApplyStyleElementCSPFallback(style);
       return style;
     }
     function GM_addElement(parent, tag, attrs) {
@@ -1122,7 +1115,26 @@
         });
       }
       (parent || D.head || D.documentElement).appendChild(el);
+      // A GM_addElement('style', {textContent}) is style-src-gated like GM_addStyle's <style>; apply the
+      // CSP-resilient constructed-stylesheet fallback when it was refused. ONLY for <style> — <script>/
+      // <link> stay governed by the page CSP. Mirrors the isolated world.
+      if (("" + tag).toLowerCase() === "style" && el.textContent) { pwApplyStyleElementCSPFallback(el); }
       return el;
+    }
+    // Apply `el`'s CSS via a constructed stylesheet when the <style> element itself didn't take (style-src
+    // refused it); no-op when it applied. Shared by the page-world GM_addStyle and GM_addElement('style').
+    function pwApplyStyleElementCSPFallback(el) {
+      var applied = false;
+      try { applied = !!(el.sheet && el.sheet.cssRules && el.sheet.cssRules.length > 0); }
+      catch (e) { applied = false; }
+      if (applied) { return; }
+      try {
+        if (typeof W.CSSStyleSheet === "function" && "adoptedStyleSheets" in D) {
+          var sheet = new W.CSSStyleSheet();
+          sheet.replaceSync(String(el.textContent));
+          D.adoptedStyleSheets = D.adoptedStyleSheets.concat([sheet]);
+        }
+      } catch (e) { /* constructed-sheet fallback is best-effort */ }
     }
 
     // --- GM_xmlhttpRequest (page world) ---------------------------------------------------------
