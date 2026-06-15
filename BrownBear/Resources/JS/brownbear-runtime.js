@@ -797,7 +797,9 @@
       unregisterMenuCommand: function (id) { GM_unregisterMenuCommand(id); },
       getTab: function () { return new _Promise(function (resolve) { GM_getTab(resolve); }); },
       saveTab: function (obj) { return new _Promise(function (resolve) { GM_saveTab(obj, function () { resolve(); }); }); },
-      listTabs: function () { return new _Promise(function (resolve) { GM_listTabs(resolve); }); }
+      listTabs: function () { return new _Promise(function (resolve) { GM_listTabs(resolve); }); },
+      // Tampermonkey names the all-tabs accessor GM.getTabs (ScriptCat/VM use listTabs) — same {tabId: obj}.
+      getTabs: function () { return new _Promise(function (resolve) { GM_listTabs(resolve); }); }
     };
 
     return {
@@ -813,7 +815,8 @@
         GM_notification: GM_notification, GM_cookie: GM_cookie, GM_download: GM_download,
         GM_registerMenuCommand: GM_registerMenuCommand,
         GM_unregisterMenuCommand: GM_unregisterMenuCommand,
-        GM_getTab: GM_getTab, GM_saveTab: GM_saveTab, GM_listTabs: GM_listTabs
+        // GM_getTab (this tab) + GM_listTabs (all tabs); GM_getTabs is Tampermonkey's name for all-tabs.
+        GM_getTab: GM_getTab, GM_saveTab: GM_saveTab, GM_listTabs: GM_listTabs, GM_getTabs: GM_listTabs
       },
       GM: GM,
       GM_info: GM_info
@@ -865,7 +868,7 @@
     // Request→reply APIs: native runs them (GM_cookie is @connect-gated) and returns the result through the
     // WKScriptMessageHandlerWithReply reply promise, which the vault settles via a pristine `.then` into the
     // caller's closure — never on the DOM. See pageWorldGMClient's GM_cookie/GM_getTab/etc + vault call.reply.
-    GM_cookie: 1, GM_getTab: 1, GM_saveTab: 1, GM_listTabs: 1,
+    GM_cookie: 1, GM_getTab: 1, GM_saveTab: 1, GM_listTabs: 1, GM_getTabs: 1,
     // GM_download streams its lifecycle (progress/load/error/abort) native→page via the vault's minted-id
     // channel (__bbPageXHR), exactly like GM_xmlhttpRequest; the @connect host is enforced natively. See
     // pageWorldGMClient.GM_download + the native handleDownload fromPageWorld branch.
@@ -1423,6 +1426,7 @@
       getTab: function () { return new _Promise(function (resolve) { GM_getTab(resolve); }); },
       saveTab: function (obj) { return new _Promise(function (resolve) { GM_saveTab(obj, function () { resolve(); }); }); },
       listTabs: function () { return new _Promise(function (resolve) { GM_listTabs(resolve); }); },
+      getTabs: function () { return new _Promise(function (resolve) { GM_listTabs(resolve); }); },   // TM name for all-tabs
       download: function () { return GM_download.apply(null, arguments); },
       registerMenuCommand: function () { return GM_registerMenuCommand.apply(null, arguments); },
       unregisterMenuCommand: function () { return GM_unregisterMenuCommand.apply(null, arguments); },
@@ -1439,7 +1443,7 @@
       GM_getResourceText: GM_getResourceText, GM_getResourceURL: GM_getResourceURL,
       GM_getResourceUrl: GM_getResourceURL, GM_addStyle: GM_addStyle, GM_addElement: GM_addElement,
       GM_xmlhttpRequest: GM_xmlhttpRequest, GM_cookie: GM_cookie, GM_getTab: GM_getTab,
-      GM_saveTab: GM_saveTab, GM_listTabs: GM_listTabs, GM_download: GM_download,
+      GM_saveTab: GM_saveTab, GM_listTabs: GM_listTabs, GM_getTabs: GM_listTabs, GM_download: GM_download,
       GM_registerMenuCommand: GM_registerMenuCommand, GM_unregisterMenuCommand: GM_unregisterMenuCommand,
       GM_openInTab: GM_openInTab, GM_notification: GM_notification, GM_info: GM_info
     };
