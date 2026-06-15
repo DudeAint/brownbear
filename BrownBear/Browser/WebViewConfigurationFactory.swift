@@ -31,6 +31,10 @@ final class WebViewConfigurationFactory {
     /// Observer that re-applies the proxy to live stores whenever the user changes it in Settings.
     private var proxyObserver: NSObjectProtocol?
 
+    /// Serves extensions' web_accessible_resources to normal pages (a content script's getURL() loaded by
+    /// the page). One instance, reused across tabs/schemes — it's stateless except per-task lifecycle.
+    private let warSchemeHandler = WebExtensionWARSchemeHandler()
+
     init(injection: InjectionOrchestrator) {
         self.injection = injection
         // Route browsing through the user's proxy (iOS 17+), and re-apply whenever it changes so toggling
@@ -66,6 +70,11 @@ final class WebViewConfigurationFactory {
         } else {
             config.websiteDataStore = websiteDataStore
         }
+        // Let a page load an extension's web_accessible_resources (a content script's getURL() referenced in
+        // the DOM). Fail-closed inside the handler — only declared WAR resources to matching origins; the
+        // scheme is otherwise unhandled here and the load just fails (no regression).
+        config.setURLSchemeHandler(warSchemeHandler, forURLScheme: WebExtensionSchemeHandler.scheme)
+        config.setURLSchemeHandler(warSchemeHandler, forURLScheme: WebExtensionSchemeHandler.firefoxScheme)
         config.allowsInlineMediaPlayback = true
         config.allowsPictureInPictureMediaPlayback = true   // floating-window video (paired with the
         // `audio` background mode + the .playback audio session set in AppDelegate)
