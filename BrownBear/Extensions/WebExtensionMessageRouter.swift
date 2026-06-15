@@ -198,10 +198,17 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
         // sending web view/frame is the trust anchor. Targets the requesting frame's page world.
         if api == "page.injectMainWorld" {
             if let webView, let code = payload["code"] as? String, !code.isEmpty {
-                if let frameInfo {
-                    BBEvaluateJavaScriptInFrame(webView, code, frameInfo, .page)
-                } else {
-                    BBEvaluateJavaScript(webView, code, .page)
+                // Reply only AFTER the MAIN-world eval completes, so the JS-side promise resolves
+                // post-execution. The WAR-script bridge sequences a diverted script's synthetic
+                // `script.onload` on this reply — it must not fire before the helper has actually run (a
+                // common onload→use-the-just-injected-helper handshake would otherwise call into nothing).
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    let done: (Any?, Error?) -> Void = { _, _ in continuation.resume() }
+                    if let frameInfo {
+                        BBEvaluateJavaScriptInFrameForResult(webView, code, frameInfo, .page, done)
+                    } else {
+                        BBEvaluateJavaScriptForResult(webView, code, .page, done)
+                    }
                 }
             }
             return NSNull()
