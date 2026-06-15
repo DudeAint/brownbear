@@ -849,12 +849,20 @@
       // real device. The transport SW->scripting.js is already proven (port logs); this is the one
       // unmeasured hop. A ScriptCat auth response is ~2-3KB, so logging sizeable cross-world relays makes
       // it unmistakable whether the body in MAIN is receiving it. Gated to >=512b so it never floods.
+      // MUST surface in the Logs tab: the ISOLATED-world console is NOT forwarded (only the `bridge`
+      // frameLog channel is — that's what the `[content] port recv` lines use), so prefer it. The iso
+      // copy of installPerfBridge (the direct call below) has `bridge` in scope; the page copy is
+      // toString-injected with no `bridge`, so it falls back to console.log (the PAGE console IS forwarded).
       var __pbLogN = 0;
-      function __pbLog(dir, n) {
+      function __pbEmit(msg) {
         try {
-          if (n < 512 || ++__pbLogN > 50) { return; }
-          if (typeof console !== "undefined" && console.log) { console.log("[bb-perfbridge] " + dir + " " + n + "b"); }
+          if (typeof bridge === "function") { bridge("runtime.frameLog", { level: "debug", message: msg }, null).catch(function () {}); }
+          else if (typeof console !== "undefined" && console.log) { console.log(msg); }
         } catch (e) {}
+      }
+      function __pbLog(dir, n) {
+        if (n < 512 || ++__pbLogN > 50) { return; }
+        __pbEmit("[bb-perfbridge] " + dir + " " + n + "b");
       }
 
       // One shared sentinel element, the same DOM node in every world (find-or-create).
@@ -948,6 +956,10 @@
       // Bridge BOTH so the eventFlag rendezvous crosses page<->isolated regardless of which the manager uses.
       if (typeof performance !== "undefined") { bridgeTarget(performance, "P"); }
       bridgeTarget((typeof window !== "undefined") ? window : ((typeof self !== "undefined") ? self : null), "W");
+      // Confirm BOTH halves install on device. If `installed page` never appears, the page-world half
+      // never ran (so iso->page relays can't be delivered) — that alone explains a MAIN-world manager's
+      // GM_xhr responses never reaching the body. Ungated (one line per world).
+      __pbEmit("[bb-perfbridge] installed " + role);
     } catch (e) {}
   }
 
