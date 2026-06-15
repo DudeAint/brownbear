@@ -1496,11 +1496,33 @@
   // (left to resolve to the page global — already captured for the Logs "Page" filter). The body runs
   // inside its own function so its var/const/let declarations don't leak onto the page, mirroring the
   // isolated world's `new Function` wrapper. Native eval (not an inline <script>) keeps this CSP-immune.
+  // SPA URL tracking (window.onurlchange + a 'urlchange' event) as a self-contained source string for the
+  // grant-none page-world path (which is built as a string, not the pageWorldGMClient function). Mirrors
+  // installUrlChangeTracking (isolated) / installPageUrlChange (granted page world): wrap history.pushState/
+  // replaceState + listen for popstate/hashchange, fire ONCE per page (guarded by window.__bbPageUrlChangeOn
+  // so a page with several BrownBear page-world scripts installs it once). Tampermonkey parity.
+  var PAGE_URLCHANGE_SRC =
+    "(function(){if(window.__bbPageUrlChangeOn){return;}window.__bbPageUrlChangeOn=true;" +
+    "var hist=window.history,loc=window.location,_CE=window.CustomEvent,_P=window.Promise,last='';" +
+    "try{last=(loc&&loc.href)||'';}catch(e){last='';}" +
+    "function defer(fn){if(_P){_P.resolve().then(fn);}else{setTimeout(fn,0);}}" +
+    "function emit(){var href='';try{href=(loc&&loc.href)||'';}catch(e){href='';}if(href===last){return;}last=href;" +
+    "try{if(typeof _CE==='function'){window.dispatchEvent(new _CE('urlchange',{detail:{url:href}}));}}catch(e){}" +
+    "try{var h=window.onurlchange;if(typeof h==='function'){h.call(window,{url:href});}}catch(e){}}" +
+    "if(hist){['pushState','replaceState'].forEach(function(n){var o=hist[n];" +
+    "if(typeof o!=='function'||o.__bbWrapped){return;}" +
+    "var w=function(){var r=o.apply(this,arguments);defer(emit);return r;};w.__bbWrapped=true;" +
+    "try{hist[n]=w;}catch(e){}});}" +
+    "try{window.addEventListener('popstate',function(){defer(emit);},true);}catch(e){}" +
+    "try{window.addEventListener('hashchange',function(){defer(emit);},true);}catch(e){}" +
+    "})();\n";
+
   function buildPageWorldSource(data, body) {
     var infoJSON = "{}";
     try { infoJSON = _JSON.stringify(data.info || {}); } catch (e) { infoJSON = "{}"; }
     return "(function(){\n" +
       "\"use strict\";\n" +
+      PAGE_URLCHANGE_SRC +
       "var unsafeWindow = window;\n" +
       "var GM_info = " + infoJSON + ";\n" +
       "if (!GM_info.scriptHandler) { GM_info.scriptHandler = \"BrownBear\"; }\n" +
