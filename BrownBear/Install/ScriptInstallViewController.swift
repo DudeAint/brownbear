@@ -426,6 +426,7 @@ extension ScriptInstallViewController {
         let runAt: String
         switch preview.metadata.runAt {
         case .documentStart: runAt = "start"
+        case .documentBody: runAt = "body"
         case .documentEnd: runAt = "end"
         case .documentIdle: runAt = "idle"
         }

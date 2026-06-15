@@ -11,11 +11,14 @@
 import Foundation
 
 /// When a script's body should execute, mapped onto WebKit's injection timing.
-/// `documentStart` → `WKUserScriptInjectionTime.atDocumentStart`; `documentEnd` →
-/// `.atDocumentEnd`; `documentIdle` has no WebKit equivalent and is simulated by running at
-/// the `window` load event (see brownbear-core.js).
+/// All per-script run-at timing is driven by the injected runtime's loader (brownbear-runtime.js), which
+/// is itself injected at `atDocumentStart`; the runtime then runs each script at the right moment.
+/// `documentStart` runs immediately; `documentBody` when `<body>` first exists (Tampermonkey/Greasemonkey
+/// parity — earlier than DOMContentLoaded); `documentEnd` at DOMContentLoaded; `documentIdle` one macrotask
+/// after that (not the late `window` load event).
 enum RunAt: String, Codable, CaseIterable {
     case documentStart = "document-start"
+    case documentBody = "document-body"
     case documentEnd = "document-end"
     case documentIdle = "document-idle"
 
