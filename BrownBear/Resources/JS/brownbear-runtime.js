@@ -577,8 +577,34 @@
     function GM_getResourceText(name) {
       return data.resources && data.resources[name] ? data.resources[name].text : undefined;
     }
+    // Resources cross as data: URLs, but a blob: URL is what Violentmonkey/Tampermonkey hand back — and the
+    // very common `img-src 'self' blob:` CSP permits a blob: while blocking a data:, so `img.src =
+    // GM_getResourceURL(name)` renders under VM but is silently dropped with a data: URL. Convert lazily
+    // (once per name) to a blob: URL; fall back to the original URL whenever the bytes/Blob aren't usable,
+    // so this can never make a resource LESS usable than before.
+    var _resourceURLs = _Object.create(null);
+    function resourceObjectURL(name, entry) {
+      if (!entry) { return undefined; }
+      if (_resourceURLs[name] !== undefined) { return _resourceURLs[name]; }
+      var url = entry.url, result = url;
+      if (typeof url === "string" && url.indexOf("data:") === 0 && _atob &&
+          typeof W.Blob === "function" && W.URL && typeof W.URL.createObjectURL === "function") {
+        var comma = url.indexOf(",");
+        if (comma > 0) {
+          var meta = url.substring(5, comma), semi = meta.indexOf(";base64");
+          var mime = semi >= 0 ? meta.substring(0, semi) : meta;
+          try {
+            result = W.URL.createObjectURL(
+              new W.Blob([b64ToBytes(url.substring(comma + 1))], mime ? { type: mime } : undefined));
+          } catch (e) { result = url; }
+        }
+      }
+      _resourceURLs[name] = result;
+      return result;
+    }
     function GM_getResourceURL(name) {
-      return data.resources && data.resources[name] ? data.resources[name].url : undefined;
+      return data.resources && data.resources[name]
+        ? resourceObjectURL(name, data.resources[name]) : undefined;
     }
     function GM_xmlhttpRequest(details) { return startXHR(details, token); }
 
@@ -1037,8 +1063,31 @@
     }
 
     var res = cfg.resources || {};
+    // Hand back a blob: URL (Violentmonkey parity) instead of the data: URL the resource crossed as — a
+    // blob: satisfies the common `img-src 'self' blob:` CSP that a data: URL violates. Lazy + memoized;
+    // falls back to the original URL when the bytes/Blob aren't available.
+    var _pwResourceURLs = _Object.create(null);
+    function pwResourceURL(n, entry) {
+      if (!entry) { return undefined; }
+      if (_pwResourceURLs[n] !== undefined) { return _pwResourceURLs[n]; }
+      var url = entry.url, result = url;
+      if (typeof url === "string" && url.indexOf("data:") === 0 && W.atob &&
+          typeof W.Blob === "function" && W.URL && typeof W.URL.createObjectURL === "function") {
+        var comma = url.indexOf(",");
+        if (comma > 0) {
+          var meta = url.substring(5, comma), semi = meta.indexOf(";base64");
+          var mime = semi >= 0 ? meta.substring(0, semi) : meta;
+          try {
+            result = W.URL.createObjectURL(
+              new W.Blob([xhrB64ToBytes(url.substring(comma + 1))], mime ? { type: mime } : undefined));
+          } catch (e) { result = url; }
+        }
+      }
+      _pwResourceURLs[n] = result;
+      return result;
+    }
     function GM_getResourceText(n) { return res[n] ? res[n].text : undefined; }
-    function GM_getResourceURL(n) { return res[n] ? res[n].url : undefined; }
+    function GM_getResourceURL(n) { return res[n] ? pwResourceURL(n, res[n]) : undefined; }
 
     function GM_addStyle(css) {
       // Primary: a real <style> (TM/VM semantics — the script can remove the returned element to toggle
