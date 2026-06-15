@@ -139,7 +139,30 @@ final class ProxyManager: ObservableObject {
         return config
     }
 
-    // MARK: - Check
+    // MARK: - Check / rotate
+
+    /// Trigger a proxy's "change IP" rotation endpoint, then re-probe the exit IP so the UI shows the new
+    /// one. The rotation URL is the provider's own management link — hit DIRECTLY (not through the proxy),
+    /// http(s) only — after which we wait a beat for the provider to assign the new exit IP and re-check.
+    func rotateIP(_ proxy: BBProxy) async -> Result<ProxyCheckResult, String> {
+        let raw = proxy.changeIPURL.trimmingCharacters(in: .whitespaces)
+        guard let url = URL(string: raw), let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else {
+            return .failure("Add a valid http(s) IP-change URL first.")
+        }
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.timeoutIntervalForRequest = 20
+        cfg.waitsForConnectivity = false
+        let session = URLSession(configuration: cfg)
+        defer { session.invalidateAndCancel() }
+        do {
+            _ = try await session.data(from: url)
+        } catch {
+            return .failure("Couldn't reach the IP-change URL: \(error.localizedDescription)")
+        }
+        try? await Task.sleep(nanoseconds: 1_500_000_000)   // let the provider assign the new exit IP
+        return await check(proxy)
+    }
 
     /// Probe a proxy by fetching an IP-echo through it. Returns the exit IP (+ best-effort city/country and
     /// timezone) on success, or a human-readable error. Uses an ephemeral session scoped to ONLY this proxy

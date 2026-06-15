@@ -21,6 +21,7 @@ struct ProxyView: View {
     @State private var editingID: UUID?              // the saved proxy being edited, if any
 
     @State private var checking = false
+    @State private var rotating = false
     @State private var checkMessage: String?
     @State private var checkOK = false
 
@@ -62,11 +63,18 @@ struct ProxyView: View {
                 TextField("Label (optional)", text: $label)
 
                 HStack {
+                    if hasChangeIPURL {
+                        Button { rotate() } label: {
+                            HStack { Text("Change IP"); if rotating { ProgressView().padding(.leading, 4) } }
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(busy || !ProxyManager.isSupported || !formParses)
+                    }
                     Button { check() } label: {
                         HStack { Text("Check proxy"); if checking { ProgressView().padding(.leading, 4) } }
                     }
                     .buttonStyle(.bordered)
-                    .disabled(checking || !ProxyManager.isSupported || !formParses)
+                    .disabled(busy || !ProxyManager.isSupported || !formParses)
                     Spacer()
                     Button("Save") { save() }
                         .buttonStyle(.borderedProminent)
@@ -119,6 +127,12 @@ struct ProxyView: View {
     /// Whether the typed/pasted proxy string is well-formed enough to check or save.
     private var formParses: Bool { BBProxy.parse(proxyText, fallbackKind: kind) != nil }
 
+    /// A probe (check or rotate) is in flight — disable the action buttons.
+    private var busy: Bool { checking || rotating }
+
+    /// A rotation endpoint has been entered, so the "Change IP" action is meaningful.
+    private var hasChangeIPURL: Bool { !changeIPText.trimmingCharacters(in: .whitespaces).isEmpty }
+
     /// Load the currently-active proxy into the form, so the screen opens showing what's in effect.
     private func loadActiveIntoForm() {
         guard editingID == nil, let active = manager.active else { return }
@@ -166,17 +180,33 @@ struct ProxyView: View {
         Task {
             let result = await manager.check(proxy)
             checking = false
-            switch result {
-            case .success(let r):
-                checkOK = true
-                var parts = ["IP \(r.ip)"]
-                if let loc = r.location { parts.append(loc) }
-                if let tz = r.timezone { parts.append(tz) }
-                checkMessage = "Connected · " + parts.joined(separator: " · ")
-            case .failure(let message):
-                checkOK = false
-                checkMessage = message
-            }
+            apply(result, successPrefix: "Connected")
+        }
+    }
+
+    private func rotate() {
+        guard let proxy = formProxy() else { return }
+        rotating = true
+        checkMessage = nil
+        Task {
+            let result = await manager.rotateIP(proxy)
+            rotating = false
+            apply(result, successPrefix: "New IP")
+        }
+    }
+
+    /// Render a check/rotate result into the status label.
+    private func apply(_ result: Result<ProxyCheckResult, String>, successPrefix: String) {
+        switch result {
+        case .success(let r):
+            checkOK = true
+            var parts = ["IP \(r.ip)"]
+            if let loc = r.location { parts.append(loc) }
+            if let tz = r.timezone { parts.append(tz) }
+            checkMessage = successPrefix + " · " + parts.joined(separator: " · ")
+        case .failure(let message):
+            checkOK = false
+            checkMessage = message
         }
     }
 }
