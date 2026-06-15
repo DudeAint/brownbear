@@ -2065,6 +2065,17 @@
             var out = {};
             if (defaults) { for (var dk in defaults) { if (Object.prototype.hasOwnProperty.call(defaults, dk)) { out[dk] = deepClone(defaults[dk]); } } }
             for (var k in raw) { if (Object.prototype.hasOwnProperty.call(raw, k)) { out[k] = parseJSON(raw[k]); } }
+            // Diagnostic (complements the local.set log): name the GM-value keys a worker READS and how
+            // many came back, so a script that writes a value then reads STALE/EMPTY (and therefore loops —
+            // e.g. ScriptCat's value:<uuid> / valueUpdateDelivery) can be caught. Gated to value-ish keys to
+            // stay quiet for everything else.
+            if ((areaName === 'local' || areaName === 'sync') && typeof __bb_log === 'function') {
+              var _req = keyList === null ? 'ALL' : keyList.join(',');
+              if (keyList === null || _req.indexOf('value') !== -1) {
+                __bb_log('debug', '[bb-storage] ' + areaName + '.get [' + _req.slice(0, 140) + '] -> '
+                  + Object.keys(out).length + ' key(s)');
+              }
+            }
             if (typeof cb === 'function') { cb(out); }
             resolve(out);
           });
