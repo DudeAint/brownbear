@@ -34,6 +34,22 @@ final class UserScriptWorldTests: XCTestCase {
         XCTAssertEqual(s.effectiveWorld(registered: "USER_SCRIPT", scriptId: "scriptcat-inject"), "USER_SCRIPT")
     }
 
+    func testAllIsolatedPullsEvenTheBrokerIntoOneWorld() {
+        // Unlike `.userScript`, the "All Isolated" mode does NOT exempt the manager's infra broker: every
+        // MAIN registration — the broker included — is remapped to the isolated world, so the manager's whole
+        // runtime (inject + content + scripting + bodies) shares ONE WKContentWorld and its cross-context bus
+        // never crosses worlds. This is the single-world config some ScriptCat scripts need.
+        let s = UserScriptWorld.allIsolated
+        XCTAssertEqual(s.effectiveWorld(registered: "MAIN", scriptId: "scriptcat-inject"), "USER_SCRIPT",
+                       "the broker is pulled into the isolated world too (no carve-out)")
+        XCTAssertEqual(s.effectiveWorld(registered: "MAIN", scriptId: "user-uuid-123"), "USER_SCRIPT")
+        XCTAssertEqual(s.effectiveWorld(registered: "main"), "USER_SCRIPT", "case-insensitive")
+        // Already-isolated worlds pass through unchanged.
+        XCTAssertEqual(s.effectiveWorld(registered: "USER_SCRIPT", scriptId: "scriptcat-inject"), "USER_SCRIPT")
+        XCTAssertEqual(s.effectiveWorld(registered: "ISOLATED"), "ISOLATED")
+        XCTAssertEqual(s.effectiveWorld(registered: ""), "")
+    }
+
     func testMainForcesEverythingToMain() {
         let s = UserScriptWorld.main
         XCTAssertEqual(s.effectiveWorld(registered: "USER_SCRIPT"), "MAIN")

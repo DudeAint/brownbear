@@ -176,6 +176,15 @@ enum UserScriptWorld: String, CaseIterable, Identifiable {
     /// `unsafeWindow`/page globals like VM (a manager-registered MAIN script stays MAIN; `@inject-into
     /// content` stays isolated). The infra-broker carve-out below is now subsumed by this default.
     case managerChoice
+    /// Force EVERYTHING a manager registers — including its own MAIN-world infra broker (e.g. ScriptCat's
+    /// `scriptcat-inject`) — into the one isolated user-script world. Unlike `.userScript` (which keeps the
+    /// broker in MAIN via the carve-out below), this collapses the manager's whole runtime — inject + content
+    /// + scripting + every body — into a SINGLE WKContentWorld. That restores the pre-broker-carve-out
+    /// behavior where a manager's cross-context bus (ScriptCat's CustomEventMessage) runs entirely WITHIN one
+    /// world, with no MAIN↔isolated relay or its timing fragility — the config under which some ScriptCat
+    /// scripts that break in the multi-world layout are reported to work. Trade-off: `unsafeWindow` is the
+    /// isolated window, not the page's (scripts that need raw page globals should use `.main`/`.managerChoice`).
+    case allIsolated
 
     var id: String { rawValue }
 
@@ -184,6 +193,7 @@ enum UserScriptWorld: String, CaseIterable, Identifiable {
         case .userScript: return "User Script World (isolated)"
         case .main: return "Page (Main) World"
         case .managerChoice: return "Manager's choice"
+        case .allIsolated: return "All Isolated (single-world · legacy)"
         }
     }
 
@@ -205,6 +215,9 @@ enum UserScriptWorld: String, CaseIterable, Identifiable {
             return UserScriptWorld.managerBrokerIDs.contains(scriptId) ? "MAIN" : "USER_SCRIPT"
         case .main: return "MAIN"
         case .managerChoice: return registered
+        // No broker carve-out: a MAIN registration (incl. `scriptcat-inject`) is remapped to the isolated
+        // world too, so the manager's entire runtime shares ONE world. Non-MAIN worlds pass through.
+        case .allIsolated: return registered.uppercased() == "MAIN" ? "USER_SCRIPT" : registered
         }
     }
 }

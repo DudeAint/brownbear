@@ -135,12 +135,13 @@ struct SettingsView: View {
                         Text(world.title).tag(world.rawValue)
                     }
                 }
-                Text("Where a manager's userscripts run. User Script World (the default) is an isolated "
-                    + "sandbox — like Violentmonkey — so a userscript keeps working even when the page breaks "
-                    + "its own globals (e.g. a blocked tracker poisoning addEventListener), and GM_* APIs are "
-                    + "available. Page (Main) World gives raw page-variable access but no GM_* and is exposed to "
-                    + "that breakage. Manager's choice honors each script's @inject-into/@grant, like Chrome. "
-                    + "Reload pages after changing this.")
+                Text("Where a manager's userscripts run. Manager's choice (the default) honors each script's "
+                    + "@inject-into/@grant like Chrome, so most see unsafeWindow/page globals like Violentmonkey. "
+                    + "User Script World forces them into an isolated sandbox — immune to a page breaking its own "
+                    + "globals. Page (Main) World gives raw page access but no GM_*. All Isolated also collapses "
+                    + "the manager's OWN runtime (e.g. ScriptCat's inject/content/scripting) into that one "
+                    + "world, so its cross-context messaging never crosses worlds — try this if a ScriptCat "
+                    + "script runs but does nothing in the default mode. Reload pages after changing this.")
                     .font(.caption)
                     .foregroundStyle(BBTheme.Color.textSecondary)
             }
