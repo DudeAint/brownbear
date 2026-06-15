@@ -54,6 +54,8 @@ transparently, with every scheduled job visible and stoppable.
 - **Square tab grid** with live snapshots
 - Custom **rounded omnibox** — URL/search detection, TLS indicator
 - **Quick-search bangs** — `!yt cats`, `swift docs !gh` jump straight to YouTube, GitHub, Wikipedia, …
+- **Browser proxy** (iOS 17+) — one HTTP/HTTPS/SOCKS5 proxy for all tabs; paste any format, test the
+  exit IP, rotate it, or pick a **free proxy by country**
 - Full back / forward / refresh / stop
 - Precise lifecycle via `WKNavigationDelegate`
 

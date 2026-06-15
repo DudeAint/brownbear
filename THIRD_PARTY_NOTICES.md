@@ -74,3 +74,26 @@ THE SOFTWARE.
 ## Runestone
 
 - **License:** MIT — referenced/depended-on per `CLAUDE.md` for the code editor engine.
+
+---
+
+## Free-proxy data sources (runtime, not bundled)
+
+The optional **Free Proxy** browser (Settings → Proxy → Browse free proxies) fetches a public
+list of free proxies at runtime; no list is bundled in the app. Sources:
+
+- **ProxyScrape v4 free proxy list** (primary) — `https://api.proxyscrape.com/v4/free-proxy-list/get`.
+  A free, no-auth public endpoint operated by ProxyScrape. Read-only; BrownBear claims no affiliation.
+- **monosans/proxy-list** (fallback) — `https://github.com/monosans/proxy-list`, MIT-licensed,
+  consumed as `proxies.json`.
+
+The monosans `proxies.json` geolocation is derived from MaxMind's GeoLite2 data, which requires the
+following attribution:
+
+```
+This product includes GeoLite2 Data created by MaxMind, available from
+https://www.maxmind.com.
+```
+
+Free public proxies are run by unknown third parties; BrownBear surfaces a security warning and an
+explicit-confirm gate before activating one, and never sends data through them without the user's action.

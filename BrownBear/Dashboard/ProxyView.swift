@@ -67,6 +67,18 @@ struct ProxyView: View {
                     .foregroundStyle(BBTheme.Color.textSecondary)
             }
 
+            Section {
+                NavigationLink {
+                    FreeProxyView()
+                } label: {
+                    Label("Browse free proxies", systemImage: "globe")
+                }
+                Text("Pick from a public list of free proxies by country. Free proxies are run by strangers "
+                    + "— don't send anything sensitive through them. For real privacy use a trusted VPN.")
+                    .font(.caption)
+                    .foregroundStyle(BBTheme.Color.textSecondary)
+            }
+
             Section("Proxy details") {
                 Picker("Type", selection: $kind) {
                     ForEach(BBProxy.Kind.allCases) { Text($0.title).tag($0) }
