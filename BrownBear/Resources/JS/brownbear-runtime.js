@@ -516,7 +516,7 @@
       style.textContent = css;
       (document.head || document.documentElement).appendChild(style);
       applyStyleElementCSPFallback(style);
-      return style;
+      return thenableElement(style);
     }
     function GM_addElement(parent, tag, attrs) {
       if (typeof parent === "string") { attrs = tag; tag = parent; parent = null; }
@@ -533,6 +533,19 @@
       // (CSSOM, not style-src-gated) as the same fallback GM_addStyle uses. ONLY for <style> — <script>/
       // <link> stay governed by the page CSP (bypassing those would be a security regression). iOS 16.4+.
       if (("" + tag).toLowerCase() === "style" && el.textContent) { applyStyleElementCSPFallback(el); }
+      return thenableElement(el);
+    }
+    // Tampermonkey/Violentmonkey attach a SELF-DELETING `then` to the element GM_addStyle/GM_addElement
+    // return, so `GM_addStyle(css).then(el => …)` works; the first `then` (or an `await`) consumes it and the
+    // element is plain again (no lingering thenable). Non-enumerable; a host element that refuses
+    // defineProperty is returned plain.
+    function thenableElement(el) {
+      try {
+        _Object.defineProperty(el, "then", {
+          configurable: true, writable: true,
+          value: function (onFulfilled) { delete el.then; return typeof onFulfilled === "function" ? onFulfilled(el) : el; }
+        });
+      } catch (e) { /* host element rejected defineProperty — return it plain */ }
       return el;
     }
     // Shared by GM_addStyle and GM_addElement('style'): apply `el`'s CSS via a constructed stylesheet when
@@ -1103,7 +1116,7 @@
       style.textContent = css;
       (D.head || D.documentElement).appendChild(style);
       pwApplyStyleElementCSPFallback(style);
-      return style;
+      return pwThenableElement(style);
     }
     function GM_addElement(parent, tag, attrs) {
       if (typeof parent === "string") { attrs = tag; tag = parent; parent = null; }
@@ -1119,6 +1132,17 @@
       // CSP-resilient constructed-stylesheet fallback when it was refused. ONLY for <style> — <script>/
       // <link> stay governed by the page CSP. Mirrors the isolated world.
       if (("" + tag).toLowerCase() === "style" && el.textContent) { pwApplyStyleElementCSPFallback(el); }
+      return pwThenableElement(el);
+    }
+    // Page-world mirror of thenableElement: a self-deleting `then` so GM_addStyle/GM_addElement returns are
+    // VM-compatible thenables (the first then/await unwraps to the plain element).
+    function pwThenableElement(el) {
+      try {
+        _Object.defineProperty(el, "then", {
+          configurable: true, writable: true,
+          value: function (onFulfilled) { delete el.then; return typeof onFulfilled === "function" ? onFulfilled(el) : el; }
+        });
+      } catch (e) { /* host element rejected defineProperty — return it plain */ }
       return el;
     }
     // Apply `el`'s CSS via a constructed stylesheet when the <style> element itself didn't take (style-src
