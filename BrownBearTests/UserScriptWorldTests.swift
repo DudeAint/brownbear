@@ -50,6 +50,19 @@ final class UserScriptWorldTests: XCTestCase {
         XCTAssertEqual(s.effectiveWorld(registered: ""), "")
     }
 
+    func testManagerRuntimeAutoCollapsesToAllIsolatedUnderTheDefault() {
+        // A userscript manager (registers a broker) defaults to All-Isolated so its fragile multi-world
+        // runtime just works (no toggle); an explicit choice is honored; a non-manager keeps the setting.
+        XCTAssertEqual(UserScriptWorld.resolved(forManagerRuntime: true, configured: .managerChoice), .allIsolated,
+                       "a manager on the default auto-collapses to one isolated world")
+        XCTAssertEqual(UserScriptWorld.resolved(forManagerRuntime: false, configured: .managerChoice), .managerChoice,
+                       "a non-manager extension is untouched")
+        for explicit: UserScriptWorld in [.main, .userScript, .allIsolated] {
+            XCTAssertEqual(UserScriptWorld.resolved(forManagerRuntime: true, configured: explicit), explicit,
+                           "an explicit world choice always wins, even for a manager")
+        }
+    }
+
     func testMainForcesEverythingToMain() {
         let s = UserScriptWorld.main
         XCTAssertEqual(s.effectiveWorld(registered: "USER_SCRIPT"), "MAIN")

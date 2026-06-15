@@ -872,7 +872,18 @@ extension WebExtensionMessageRouter {
             let usStore = BrownBearServices.shared.webExtensionUserScriptStore
             let userScriptMessaging = await usStore.worldConfigs(extensionID: ext.id)
                 .contains { $0.worldId == nil && $0.messaging }
-            for userScript in await usStore.getScripts(extensionID: ext.id, ids: nil) {
+            let usScripts = await usStore.getScripts(extensionID: ext.id, ids: nil)
+            // A userscript MANAGER (ScriptCat, …) registers a MAIN-world infra broker, and its multi-world
+            // runtime (inject ↔ content ↔ scripting ↔ SW) is the fragile part — a body fires but its GM-value
+            // coordination can stall crossing the MAIN↔isolated boundary. When the user hasn't overridden the
+            // world (the default "Manager's choice"), run such a manager's WHOLE runtime in ONE isolated world
+            // automatically — the All-Isolated config proven on-device to fix that stall — so a coordination
+            // script (e.g. a ScriptCat value-polling bot) just works with no toggle. An explicit world choice
+            // (Page Main / User Script World / All Isolated) still wins; non-manager extensions are untouched.
+            let isManagerRuntime = usScripts.contains { UserScriptWorld.managerBrokerIDs.contains($0.id) }
+            let effectiveSetting = UserScriptWorld.resolved(forManagerRuntime: isManagerRuntime,
+                                                            configured: AppSettings.userScriptWorld)
+            for userScript in usScripts {
                 if isSubframe && !userScript.allFrames { continue }
                 let matcher = URLMatcher(matches: userScript.matches, includes: userScript.includeGlobs,
                                          excludes: userScript.excludeGlobs, excludeMatches: userScript.excludeMatches)
@@ -890,12 +901,11 @@ extension WebExtensionMessageRouter {
                     "js": userScript.js,
                     "css": "",
                     // `world` drives where the loader runs it: MAIN → the page's real main world (injected
-                    // as a <script> element); USER_SCRIPT/ISOLATED → our isolated bridge world. MV3
-                    // userScript managers (ScriptCat, Tampermonkey) register page-world scripts as MAIN.
-                    // The user's "Userscript world" setting can override this — default is the isolated
-                    // user-script world, so a userscript is immune to a page breaking its own globals.
-                    "world": AppSettings.userScriptWorld.effectiveWorld(registered: userScript.world,
-                                                                       scriptId: userScript.id),
+                    // as a <script> element); USER_SCRIPT/ISOLATED → our isolated bridge world. `effectiveSetting`
+                    // (above) auto-collapses a manager's runtime to one isolated world under the default; an
+                    // explicit "Userscript world" choice is honored as-is.
+                    "world": effectiveSetting.effectiveWorld(registered: userScript.world,
+                                                             scriptId: userScript.id),
                     "userScriptMessaging": userScriptMessaging,
                     "manifestJSON": ext.manifestJSON,
                     "baseURL": ext.baseURLString,
