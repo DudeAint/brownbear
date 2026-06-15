@@ -142,8 +142,14 @@ async function bootAndInject(overrides) {
         test("writes go through the vault (__bbPageGM), NOT a forgeable shared-DOM relay", () => {
             const code = injects[0].payload.code;
             assert.ok(code.indexOf("__bbPageGM") !== -1, "client uses the vault bridge");
-            assert.ok(code.indexOf("messageHandlers") === -1 && code.indexOf("dispatchEvent") === -1,
-                "client never touches native handlers or a DOM relay directly");
+            assert.ok(code.indexOf("messageHandlers") === -1, "client never touches native handlers directly");
+            // The ONLY dispatchEvent in the client is the SPA 'urlchange' notification fired OUT to the
+            // script (window.onurlchange parity) — never a write channel TO native. Assert every
+            // dispatchEvent is that urlchange event, so no forgeable custom-event DOM relay can sneak in.
+            const dispatches = (code.match(/dispatchEvent\s*\(/g) || []).length;
+            const urlchange = (code.match(/dispatchEvent\(\s*new _CE\(\s*"urlchange"/g) || []).length;
+            assert.strictEqual(dispatches, urlchange,
+                "the only dispatchEvent is the urlchange notification, not a DOM write relay");
         });
     }
     {

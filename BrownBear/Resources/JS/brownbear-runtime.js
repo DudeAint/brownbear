@@ -1196,6 +1196,36 @@
     scriptConsole.debug = fwd("debug", "debug");
     scriptConsole.trace = fwd("trace", "debug");
 
+    // SPA URL tracking (window.onurlchange + a 'urlchange' event), installed ONCE per page. In the page
+    // world `window` IS the page window, so patching its history.pushState/replaceState + listening to
+    // popstate/hashchange catches every navigation directly, and the script's window.onurlchange handler
+    // fires with { url } (Tampermonkey parity; a script @grants window.onurlchange to use it).
+    (function installPageUrlChange() {
+      if (W.__bbPageUrlChangeOn) { return; }
+      W.__bbPageUrlChangeOn = true;
+      var hist = W.history, loc = W.location, _CE = W.CustomEvent, last = "";
+      try { last = (loc && loc.href) || ""; } catch (e) { last = ""; }
+      function emit() {
+        var href = "";
+        try { href = (loc && loc.href) || ""; } catch (e) { href = ""; }
+        if (href === last) { return; }
+        last = href;
+        try { if (typeof _CE === "function") { W.dispatchEvent(new _CE("urlchange", { detail: { url: href } })); } } catch (e) { /* ignore */ }
+        try { var h = W.onurlchange; if (typeof h === "function") { h.call(W, { url: href }); } } catch (e) { /* ignore */ }
+      }
+      if (hist) {
+        ["pushState", "replaceState"].forEach(function (name) {
+          var orig = hist[name];
+          if (typeof orig !== "function" || orig.__bbWrapped) { return; }
+          var wrapped = function () { var r = orig.apply(this, arguments); _Promise.resolve().then(emit); return r; };
+          wrapped.__bbWrapped = true;
+          try { hist[name] = wrapped; } catch (e) { /* non-configurable — events still cover it */ }
+        });
+      }
+      try { W.addEventListener("popstate", function () { _Promise.resolve().then(emit); }, true); } catch (e) { /* ignore */ }
+      try { W.addEventListener("hashchange", function () { _Promise.resolve().then(emit); }, true); } catch (e) { /* ignore */ }
+    })();
+
     var unsafeWindow = W;
     var args = [unsafeWindow, GM, GM_info, scriptConsole, W];
     (cfg.grants || []).forEach(function (g) { args.push(registry[g]); });
