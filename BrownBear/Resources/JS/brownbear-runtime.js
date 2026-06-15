@@ -1672,6 +1672,24 @@
     if (document.readyState === "interactive" || document.readyState === "complete") { cb(); }
     else { document.addEventListener("DOMContentLoaded", cb, { once: true }); }
   }
+  // @run-at document-body (Tampermonkey/Greasemonkey): run as soon as <body> exists — earlier than
+  // DOMContentLoaded (the page is still parsing the rest of the DOM). Observe documentElement for the body
+  // being inserted; DOMContentLoaded is the guaranteed fallback (by then the body certainly exists). Fires
+  // at most once.
+  function whenBodyReady(cb) {
+    if (document.body) { cb(); return; }
+    var done = false;
+    function go() { if (done) { return; } done = true; cb(); }
+    try {
+      if (typeof MutationObserver === "function" && document.documentElement) {
+        var obs = new MutationObserver(function () {
+          if (document.body) { try { obs.disconnect(); } catch (e) { /* ignore */ } go(); }
+        });
+        obs.observe(document.documentElement, { childList: true });
+      }
+    } catch (e) { /* observer unavailable — the DOMContentLoaded fallback still fires */ }
+    whenDOMReady(go);
+  }
   // @run-at document-idle. Violentmonkey/Tampermonkey fire idle scripts right after DOMContentLoaded —
   // NOT at the window `load` event, which waits for every image and subresource and can land many
   // seconds later. We mirror VM exactly (inject.js: `await injectAll('end'); await injectAll('idle')`
@@ -1700,11 +1718,12 @@
     bridge("getScripts", { url: location.href, isSubframe: isSubframe }, null)
       .then(function (scripts) {
         if (!scripts || !scripts.length) { return; }
-        var starts = [], ends = [], idles = [], allTokens = [];
+        var starts = [], bodies = [], ends = [], idles = [], allTokens = [];
         for (var i = 0; i < scripts.length; i += 1) {
           var s = scripts[i];
           if (s.token) { allTokens.push(s.token); }
           if (s.runAt === "document-start") { starts.push(s); }
+          else if (s.runAt === "document-body") { bodies.push(s); }
           else if (s.runAt === "document-idle") { idles.push(s); }
           else { ends.push(s); }
         }
@@ -1720,6 +1739,7 @@
           });
         }
         if (starts.length) { runAll(starts); }
+        if (bodies.length) { whenBodyReady(function () { runAll(bodies); }); }
         if (ends.length) { whenDOMReady(function () { runAll(ends); }); }
         if (idles.length) { whenIdle(function () { runAll(idles); }); }
       })
