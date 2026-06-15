@@ -1077,6 +1077,29 @@
   }
 
 
+  // ScriptCat exec-trigger probe (diagnostic for the "ScriptCat says running but the userscript never
+  // injects" bug). ScriptCat compiles each userscript body to `window['<flag>'] = function(){…}` and runs
+  // it ONLY when its own runner (inject.js startScripts → definePropertyListener) later invokes
+  // window[flag]. If that runner never fires, the body is injected (we see it) but never executes — exactly
+  // the reported symptom, and SILENT (no error to surface). For a MAIN-world body that matches that
+  // signature, append a one-shot self-check: after a beat, if window[flag] is STILL the function, the runner
+  // never invoked it (report NOT-FIRED); if it's gone, the runner ran it (report fired). Logged via the page
+  // console (forwarded to the Logs tab, and not gated by the .debug filter) so it's the definitive
+  // inject-vs-run signal with no desktop debugger. ADDITIVE + fully guarded — a complete IIFE appended after
+  // the body, so it can never alter or break the userscript itself; a non-match returns the code unchanged.
+  function maybeAppendExecProbe(code) {
+    try {
+      var m = /window\[(['"])([^'"]+)\1\]\s*=\s*function/.exec(code);
+      if (!m) { return code; }
+      var flag = m[2];
+      return code + "\n;(function(f){try{setTimeout(function(){try{"
+        + "var fired=(typeof window[f]!=='function');"
+        + "console.info('[bb-scexec] '+f+' '+(fired?'fired (runner invoked the body)':"
+        + "'NOT-FIRED — body injected but ScriptCat runner never invoked window[flag]'));"
+        + "}catch(e){}},3000);}catch(e){}})(" + _JSON.stringify(flag) + ");";
+    } catch (e) { return code; }
+  }
+
   function runContentScript(data) {
     if (data.css) {
       try {
@@ -1087,7 +1110,7 @@
     }
     if (!data.js) { return; }
     if (data.world === "MAIN") {
-      injectIntoPage(data.js, data.extensionId);   // real page world, no chrome.* (userScripts contract)
+      injectIntoPage(maybeAppendExecProbe(data.js), data.extensionId);   // real page world, no chrome.* (userScripts contract)
       return;
     }
     var chrome = buildChrome(data);
