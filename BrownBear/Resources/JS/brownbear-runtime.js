@@ -1570,8 +1570,22 @@
   function buildPageWorldSource(data, body) {
     var infoJSON = "{}";
     try { infoJSON = _JSON.stringify(data.info || {}); } catch (e) { infoJSON = "{}"; }
+    // Run-once guard keyed by the script's stable UUID. A grant-none page-world script can be injected
+    // by TWO paths in the same document: the static document-start fast-path (brownbear-pageworld-static.js,
+    // when the "static document-start" setting is on) AND this dynamic getScripts path. Whichever fires
+    // first sets `window.__bbRanUS[uuid]`; the other returns immediately. So the script runs EXACTLY once,
+    // and the dynamic path is always the fallback if the static one didn't fire (matcher declined or a
+    // strict page CSP refused its eval). The guard is per-document (a fresh window each navigation) and a
+    // no-op when the static path is off (it just records the single run). MUST match the copy in
+    // brownbear-pageworld-static.js verbatim — pageworld-static-equivalence.test.js asserts that.
+    var uuid = "";
+    try { uuid = String(data.uuid || ""); } catch (e) { uuid = ""; }
+    var guard = uuid
+      ? ("var R=(window.__bbRanUS=window.__bbRanUS||{});if(R[" + _JSON.stringify(uuid) + "])return;R[" + _JSON.stringify(uuid) + "]=1;\n")
+      : "";
     return "(function(){\n" +
       "\"use strict\";\n" +
+      guard +
       PAGE_URLCHANGE_SRC +
       "var unsafeWindow = window;\n" +
       "var GM_info = " + infoJSON + ";\n" +
