@@ -275,10 +275,15 @@
         details = details || {};
         return settle(bridge("tabs.insertCSS", { tabId: tabId, code: details.code, file: details.file }, token).then(function () { return undefined; }), callback);
       }
+      function removeCSS(tabId, details, callback) {   // MV2 chrome.tabs.removeCSS — undo a prior insertCSS
+        if (tabId !== null && typeof tabId === "object") { callback = details; details = tabId; tabId = undefined; }
+        details = details || {};
+        return settle(bridge("tabs.removeCSS", { tabId: tabId, code: details.code, file: details.file }, token).then(function () { return undefined; }), callback);
+      }
       return {
         query: query, get: get, getCurrent: getCurrent, create: create, update: update,
         remove: remove, reload: reload, sendMessage: sendMessage,
-        executeScript: executeScript, insertCSS: insertCSS,
+        executeScript: executeScript, insertCSS: insertCSS, removeCSS: removeCSS,
         onUpdated: noopEvent, onActivated: noopEvent, onCreated: noopEvent,
         onRemoved: noopEvent, onReplaced: noopEvent
       };

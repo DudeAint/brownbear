@@ -811,6 +811,11 @@
       details = details || {};
       return settle(bridge("tabs.insertCSS", { tabId: tabId, code: details.code, file: details.file }).then(function () { return undefined; }), callback);
     }
+    function removeCSS(tabId, details, callback) {   // MV2 chrome.tabs.removeCSS — undo a prior insertCSS
+      if (tabId !== null && typeof tabId === "object") { callback = details; details = tabId; tabId = undefined; }
+      details = details || {};
+      return settle(bridge("tabs.removeCSS", { tabId: tabId, code: details.code, file: details.file }).then(function () { return undefined; }), callback);
+    }
     function sendMessage() {
       // chrome.tabs.sendMessage(tabId, message, options?, callback?) — a popup messaging a tab's
       // content scripts. Native delivers to that tab and resolves with the content listener's response.
@@ -857,7 +862,7 @@
     }
     return {
       query: query, get: get, getCurrent: getCurrent, create: create, update: update, remove: remove, reload: reload,
-      executeScript: executeScript, insertCSS: insertCSS, sendMessage: sendMessage,
+      executeScript: executeScript, insertCSS: insertCSS, removeCSS: removeCSS, sendMessage: sendMessage,
       captureVisibleTab: captureVisibleTab, move: move, duplicate: duplicate, getZoom: getZoom, setZoom: setZoom,
       // iOS has no tab groups — non-throwing no-ops so unguarded callers don't crash (see background).
       group: function (options, cb) { return settle(Promise.resolve(-1), cb); },
