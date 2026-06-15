@@ -28,6 +28,7 @@ enum BrowserMenuAction {
     case history
     case downloads
     case settings
+    case proxy
     case reader
     case zoom
 }
@@ -45,6 +46,10 @@ struct BrowserMenuState {
     var matchedScripts: [MenuScript] = []  // userscripts whose @match/@include matched this page
     var extensionActions: [MenuExtensionAction] = []  // enabled extensions' chrome.action entries
     var scriptCommands: [MenuScriptCommand] = []  // GM_registerMenuCommand entries for the active tab
+    var proxySupported: Bool = false   // the per-WebView proxy API exists (iOS 17+)
+    var proxyEnabled: Bool = false     // a proxy is currently applied to browsing
+    var proxyHasActive: Bool = false   // a proxy is selected (so the toggle can be turned on)
+    var proxyName: String?             // the active proxy's display name, for the row subtitle
 }
 
 /// A userscript matching the active page, rendered in the menu's "On this page" section.
@@ -86,6 +91,7 @@ struct MenuScriptCommand {
 protocol BrowserMenuDelegate: AnyObject {
     func browserMenu(_ menu: BrowserMenuViewController, didSelect action: BrowserMenuAction)
     func browserMenu(_ menu: BrowserMenuViewController, didToggleScript id: UUID, enabled: Bool)
+    func browserMenu(_ menu: BrowserMenuViewController, didToggleProxy enabled: Bool)
     func browserMenu(_ menu: BrowserMenuViewController, didTapExtensionAction extensionID: String)
     func browserMenu(_ menu: BrowserMenuViewController, didTapScriptCommand command: MenuScriptCommand)
     /// Long-press affordance on an extension row: open its options page (popup uses didTapExtensionAction).
@@ -248,6 +254,7 @@ final class BrowserMenuViewController: UIViewController {
             makeRow(icon: "eyeglasses", title: "Reading List", action: .readingList),
             makeRow(icon: "clock.arrow.circlepath", title: "History", action: .history),
             makeRow(icon: "arrow.down.circle", title: "Downloads", action: .downloads),
+            makeProxyRow(),
             makeRow(icon: "gearshape", title: "Settings", action: .settings)
         ])
         let section = UIStackView(arrangedSubviews: [header, card])
@@ -684,6 +691,54 @@ final class BrowserMenuViewController: UIViewController {
             guard let self else { return }
             self.delegate?.browserMenu(self, didSelect: action)
         }
+    }
+}
+
+private extension BrowserMenuViewController {
+    /// The Library "Proxy" row: tapping the body opens the proxy config (a quick door from the browser),
+    /// while the trailing switch flips the active proxy on/off in place. The switch is enabled only when a
+    /// proxy is selected on iOS 17+; the subtitle reflects the current state. (In an extension so the main
+    /// view-controller body stays under the type-body length limit.)
+    func makeProxyRow() -> UIView {
+        var config = UIButton.Configuration.plain()
+        config.image = UIImage(systemName: "network")
+        config.imagePadding = 16
+        config.title = "Proxy"
+        if !state.proxySupported {
+            config.subtitle = "Requires iOS 17 or later"
+        } else if state.proxyEnabled, let name = state.proxyName {
+            config.subtitle = "On · \(name)"
+        } else if state.proxyHasActive {
+            config.subtitle = "Off · tap to manage"
+        } else {
+            config.subtitle = "Off · tap to set up"
+        }
+        config.baseForegroundColor = BrownBearTheme.Palette.textPrimary
+        config.contentInsets = NSDirectionalEdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 8)
+        let button = UIButton(configuration: config,
+                              primaryAction: UIAction { [weak self] _ in self?.select(.proxy) })
+        button.contentHorizontalAlignment = .leading
+        button.tintColor = BrownBearTheme.Palette.accent
+        button.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        let toggle = UISwitch()
+        toggle.isOn = state.proxyEnabled
+        toggle.onTintColor = BrownBearTheme.Palette.accent
+        toggle.isEnabled = state.proxySupported && state.proxyHasActive
+        toggle.setContentHuggingPriority(.required, for: .horizontal)
+        toggle.setContentCompressionResistancePriority(.required, for: .horizontal)
+        toggle.addAction(UIAction { [weak self, weak toggle] _ in
+            guard let self, let toggle else { return }
+            self.delegate?.browserMenu(self, didToggleProxy: toggle.isOn)
+        }, for: .valueChanged)
+
+        let row = UIStackView(arrangedSubviews: [button, toggle])
+        row.axis = .horizontal
+        row.spacing = 8
+        row.alignment = .center
+        row.isLayoutMarginsRelativeArrangement = true
+        row.layoutMargins = UIEdgeInsets(top: 0, left: 0, bottom: 0, right: 16)
+        return row
     }
 }
 
