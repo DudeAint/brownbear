@@ -85,6 +85,15 @@
     // access throws `undefined.addListener` and the whole content script dies. Keyed by area name; the
     // native storage push (onStorageChanged) fans each change to the matching area's listeners.
     var storageAreaListeners = { local: [], sync: [], session: [], managed: [] };
+    // Chrome's documented per-area quota constants (some scripts size writes against QUOTA_BYTES_PER_ITEM).
+    // managed is read-only (no quota). Standard Chrome values.
+    function withStorageQuotas(area, name) {
+      if (name === "sync") {
+        area.QUOTA_BYTES = 102400; area.QUOTA_BYTES_PER_ITEM = 8192; area.MAX_ITEMS = 512;
+        area.MAX_WRITE_OPERATIONS_PER_HOUR = 1800; area.MAX_WRITE_OPERATIONS_PER_MINUTE = 120;
+      } else if (name !== "managed") { area.QUOTA_BYTES = 10485760; }
+      return area;
+    }
     function storageArea(area) {
       function get(keys, callback) {
         if (typeof keys === "function") { callback = keys; keys = null; }
@@ -560,9 +569,9 @@
 
     var chrome = {
       storage: {
-        local: storageArea("local"),
-        sync: storageArea("sync"),
-        session: storageArea("session"),
+        local: withStorageQuotas(storageArea("local"), "local"),
+        sync: withStorageQuotas(storageArea("sync"), "sync"),
+        session: withStorageQuotas(storageArea("session"), "session"),
         managed: storageArea("managed"),   // read-only policy store; resolves {} with no MDM policy
         onChanged: makeEvent(storageListeners)
       },
