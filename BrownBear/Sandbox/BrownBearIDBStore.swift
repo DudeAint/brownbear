@@ -27,16 +27,21 @@ final class BrownBearIDBStore: @unchecked Sendable {
     enum Namespace {
         case ext(String)
         case script(String)
+        /// An extension PAGE (popup / options / new-tab / side-panel) — kept in its OWN subdirectory,
+        /// distinct from `.ext` (the background worker), because the page and worker run SEPARATE in-memory
+        /// IndexedDB engines in BrownBear; sharing one snapshot file would let them clobber each other.
+        case extPage(String)
 
         var subdirectory: String {
             switch self {
             case .ext: return "ext"
             case .script: return "script"
+            case .extPage: return "extpage"
             }
         }
         var id: String {
             switch self {
-            case .ext(let value), .script(let value): return value
+            case .ext(let value), .script(let value), .extPage(let value): return value
             }
         }
     }

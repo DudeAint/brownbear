@@ -167,6 +167,14 @@ final class WebExtensionPageSession {
         // scripts see it. (In-memory per page load for now; native-backed persistence is a follow-up.)
         controller.addUserScript(WKUserScript(source: Self.idbPolyfillSource,
                                               injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        // Opt-in (default OFF): persist this page's in-memory IndexedDB across reloads, the way the background
+        // worker already does via BrownBearIDBStore. Gated because the rehydrate replays asynchronously in a
+        // WKWebView (unlike the JSContext's synchronous microtask drain), so it needs on-device verification
+        // that the snapshot lands before the page opens its DB. Default-off ⇒ a provable no-op for everyone
+        // who hasn't opted in. Page snapshots use the `.extPage` namespace — distinct from the worker's `.ext`.
+        if Self.persistPageIDBEnabled {
+            Self.installPageIDBPersistence(into: controller, extensionID: ext.id)
+        }
         controller.addUserScript(WKUserScript(source: "window.__bbExtPage = \(dataJSON);",
                                               injectionTime: .atDocumentStart, forMainFrameOnly: true))
         controller.addUserScript(WKUserScript(source: Self.pageRuntimeSource,
@@ -194,6 +202,12 @@ final class WebExtensionPageSession {
     /// Tear down: stop receiving browser-pushed events and disconnect any ports this page opened, so the
     /// worker's onDisconnect fires rather than stranding the channel against a closed/dismissed view.
     func invalidate() {
+        // Best-effort final IndexedDB snapshot before teardown — the persist layer's 300 ms debounce may not
+        // have fired for the very last write. No-op when persistence is off or the page never used IndexedDB.
+        if Self.persistPageIDBEnabled {
+            webView?.evaluateJavaScript("try{if(typeof __bbIDBFlush==='function'){__bbIDBFlush();}}catch(e){}",
+                                        completionHandler: nil)
+        }
         runtime.unregisterEventReceiver(self)
         if let pageToken {
             runtime.portHub.disconnectClientPorts(tokens: [pageToken])
@@ -311,6 +325,46 @@ final class WebExtensionPageSession {
             + source + "\n})();"
     }()
 
+    /// The snapshot/persist layer (brownbear-idb-persist.js) — wraps the in-memory engine's write methods to
+    /// hand native a debounced JSON snapshot via `__bb_idb_save`, and exposes `__bbIDBRestore`/`__bbIDBFlush`.
+    /// The same layer the headless worker gets through `BrownBearIDBStore`; here it's wired to the page.
+    private static let idbPersistSource: String = {
+        guard let url = Bundle.main.url(forResource: "brownbear-idb-persist", withExtension: "js", subdirectory: nil)
+                ?? Bundle.main.url(forResource: "brownbear-idb-persist", withExtension: "js", subdirectory: "JS"),
+              let source = try? String(contentsOf: url, encoding: .utf8) else {
+            return "/* brownbear-idb-persist.js missing */"
+        }
+        return source
+    }()
+
+    /// Opt-in flag: persist an extension page's IndexedDB across reloads. Default OFF (see makeConfiguration).
+    static var persistPageIDBEnabled: Bool { UserDefaults.standard.bool(forKey: "bbPersistExtPageIDB") }
+
+    /// Wire on-disk IndexedDB persistence for one extension page into its content controller, in the slot
+    /// AFTER the engine and BEFORE the page bootstrap: (1) a `__bb_idb_save` shim that posts the debounced
+    /// snapshot to a native message handler → `BrownBearIDBStore` under the `.extPage` namespace; (2) the
+    /// persist layer (it wraps the engine's writes + defines `__bbIDBRestore`); (3) a replay of the last
+    /// snapshot so the page sees its prior data before its own scripts open the DB. All `try`-guarded.
+    static func installPageIDBPersistence(into controller: WKUserContentController, extensionID: String) {
+        let handlerName = "bbExtPageIdbSave"
+        controller.add(PageIDBSaveHandler(extensionID: extensionID),
+                       contentWorld: WKContentWorld.page, name: handlerName)
+        let saveShim = "window.__bb_idb_save=function(j){"
+            + "try{window.webkit.messageHandlers.\(handlerName).postMessage(j);}catch(e){}};"
+        controller.addUserScript(WKUserScript(source: saveShim,
+                                              injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        controller.addUserScript(WKUserScript(source: idbPersistSource,
+                                              injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        // Replay the last snapshot, if any, embedded as a JS string literal (fragmentsAllowed escapes it).
+        if let snapshot = BrownBearIDBStore.shared.load(namespace: .extPage(extensionID)), !snapshot.isEmpty,
+           let literal = (try? JSONSerialization.data(withJSONObject: snapshot, options: .fragmentsAllowed))
+            .flatMap({ String(data: $0, encoding: .utf8) }) {
+            controller.addUserScript(WKUserScript(
+                source: "try{__bbIDBRestore(\(literal));}catch(e){}",
+                injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        }
+    }
+
     /// The requestIdleCallback/cancelIdleCallback polyfill. Extension pages (popup/options/dashboard) run
     /// in their own WKWebView config — NOT the shared content controller — so they need their own copy, or
     /// a page that calls requestIdleCallback during init (uBlock Origin Lite's dashboard does) throws a bare
@@ -380,4 +434,18 @@ extension WebExtensionPageSession: WebExtensionEventReceiver {
     /// The runtime uses this so a registered-but-dead page doesn't count as a receiver and wrongly
     /// suppress chrome.runtime.lastError's "no receiving end" signal.
     var isDeliverable: Bool { webView != nil }
+}
+
+/// Receives an extension page's debounced IndexedDB snapshot (`__bb_idb_save` → message handler) and
+/// persists it under its `.extPage` namespace. Holds only the extension id (no view/session reference), so
+/// the controller's strong retention of it can't form a cycle. The store write is thread-safe + off-queue.
+@MainActor
+final class PageIDBSaveHandler: NSObject, WKScriptMessageHandler {
+    private let extensionID: String
+    init(extensionID: String) { self.extensionID = extensionID }
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard let json = message.body as? String, !json.isEmpty else { return }
+        BrownBearIDBStore.shared.save(json, namespace: .extPage(extensionID))
+    }
 }
