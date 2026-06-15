@@ -197,28 +197,14 @@ enum UserScriptWorld: String, CaseIterable, Identifiable {
 
     /// Map a manager-registered world ("MAIN" / "USER_SCRIPT" / "ISOLATED" / "") to the world BrownBear
     /// should actually run the script in, per this setting. `scriptId` lets a manager's own MAIN-world
-    /// infra broker keep MAIN even under the isolated default (see `managerBrokerIDs`).
-    ///
-    /// `managerWantsEvalWorld` is true when the manager configured a userScript-world CSP with
-    /// `'unsafe-eval'` (chrome.userScripts.configureWorld({csp})). That CSP means the manager's userscripts
-    /// run under the MANAGER's permissive policy, not the page's — they decode + `eval`/`new Function`
-    /// obfuscated code. WebKit can't apply a custom CSP to the page (MAIN) world, where a strict page CSP
-    /// would BLOCK that runtime eval. So such a manager's userscripts run in our ISOLATED content world
-    /// instead — which is CSP-immune, so eval works — while `unsafeWindow` is still delivered by the
-    /// manager's MAIN broker (ScriptCat's own sandbox model). The broker itself always stays MAIN. Pure —
-    /// unit-tested.
-    func effectiveWorld(registered: String, scriptId: String = "", managerWantsEvalWorld: Bool = false) -> String {
-        let isBroker = UserScriptWorld.managerBrokerIDs.contains(scriptId)
+    /// infra broker keep MAIN even under the isolated default (see `managerBrokerIDs`). Pure — unit-tested.
+    func effectiveWorld(registered: String, scriptId: String = "") -> String {
         switch self {
         case .userScript:
             guard registered.uppercased() == "MAIN" else { return registered }
-            return isBroker ? "MAIN" : "USER_SCRIPT"
+            return UserScriptWorld.managerBrokerIDs.contains(scriptId) ? "MAIN" : "USER_SCRIPT"
         case .main: return "MAIN"
-        case .managerChoice:
-            // A non-broker userscript a manager put in MAIN, but whose manager declared an eval-permitting
-            // userScript-world CSP, runs in the CSP-immune isolated world so its obfuscated eval works.
-            if registered.uppercased() == "MAIN", managerWantsEvalWorld, !isBroker { return "USER_SCRIPT" }
-            return registered
+        case .managerChoice: return registered
         }
     }
 }
