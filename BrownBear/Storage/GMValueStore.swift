@@ -115,6 +115,16 @@ actor GMValueStore {
         defaults.removeObject(forKey: storageKey(scriptID))
     }
 
+    /// Clear a script's namespace, returning every wiped key with its old value, so the caller can
+    /// broadcast the deletions to open pages (live GM_getValue / value-change listeners). Order is
+    /// unspecified (it's a dict snapshot).
+    @discardableResult
+    func clearReturningOld(scriptID: UUID) -> [(key: String, old: String?)] {
+        let removed = map(for: scriptID).map { (key: $0.key, old: Optional($0.value)) }
+        clear(scriptID: scriptID)
+        return removed
+    }
+
     // MARK: - Backing
 
     private func storageKey(_ scriptID: UUID) -> String { "gm.\(scriptID.uuidString)" }

@@ -216,7 +216,11 @@ struct ScriptDetailView: View {
                         }
                     }
                     Button(role: .destructive) {
-                        Task { @MainActor in await valueStore.clear(scriptID: script.id); await reloadStoredValues() }
+                        Task { @MainActor in
+                            let removed = await valueStore.clearReturningOld(scriptID: script.id)
+                            broadcastValueChanges(removed.map { GMValueChange(key: $0.key, old: $0.old, new: nil) })
+                            await reloadStoredValues()
+                        }
                     } label: {
                         Label("Clear all values", systemImage: "trash").font(.caption.weight(.semibold))
                     }
@@ -239,7 +243,10 @@ struct ScriptDetailView: View {
                 Button { beginEditing(key: key, value: value) } label: { Label("Edit", systemImage: "pencil") }
                 Button(role: .destructive) {
                     Task { @MainActor in
-                        await valueStore.deleteValue(scriptID: script.id, key: key)
+                        let old = await valueStore.deleteValueReturningOld(scriptID: script.id, key: key)
+                        if old != nil {
+                            broadcastValueChanges([GMValueChange(key: key, old: old, new: nil)])
+                        }
                         await reloadStoredValues()
                     }
                 } label: { Label("Delete", systemImage: "trash") }
@@ -272,15 +279,20 @@ struct ScriptDetailView: View {
         }
         Task { @MainActor in
             let old = await valueStore.setValueReturningOld(scriptID: script.id, key: key, jsonValue: trimmed)
-            // Push the edit into any open page running this script (live GM_getValue / value-change
-            // listeners), so a dashboard edit doesn't require a reload — TM/VM cross-context parity. The
-            // foreground InjectionOrchestrator observes this and broadcasts; a no-op if no page is open.
-            NotificationCenter.default.post(
-                name: .brownBearGMValueChangedExternally,
-                object: GMValueChangeBroadcast(scriptID: script.id,
-                                               changes: [GMValueChange(key: key, old: old, new: trimmed)]))
+            broadcastValueChanges([GMValueChange(key: key, old: old, new: trimmed)])
             await reloadStoredValues()
         }
+    }
+
+    /// Push dashboard-side value edits into any open page running this script (live GM_getValue /
+    /// value-change listeners), so a change made here doesn't require a reload — TM/VM cross-context
+    /// parity. The foreground InjectionOrchestrator observes this and delivers it; a no-op if no page
+    /// is open or nothing actually changed.
+    private func broadcastValueChanges(_ changes: [GMValueChange]) {
+        guard !changes.isEmpty else { return }
+        NotificationCenter.default.post(
+            name: .brownBearGMValueChangedExternally,
+            object: GMValueChangeBroadcast(scriptID: script.id, changes: changes))
     }
 
     private func reloadStoredValues() async {
