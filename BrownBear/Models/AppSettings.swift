@@ -205,6 +205,16 @@ enum UserScriptWorld: String, CaseIterable, Identifiable {
     /// its page broker as "scriptcat-inject" (confirmed). Extend as other managers' broker ids are known.
     static let managerBrokerIDs: Set<String> = ["scriptcat-inject"]
 
+    /// The world setting to APPLY for a userscript-manager extension (one that registers a `managerBrokerIDs`
+    /// broker). Under the default "Manager's choice", a manager's fragile multi-world runtime
+    /// (inject↔content↔scripting↔SW) auto-collapses to All Isolated — the single-world config proven to fix
+    /// cross-world GM-value stalls (a ScriptCat coordination bot fires but stalls otherwise) — so it just works
+    /// with no toggle. An EXPLICIT choice (Page Main / User Script World / All Isolated) is always honored as
+    /// given; a non-manager extension passes `isManager: false` and keeps the configured setting. Pure.
+    static func resolved(forManagerRuntime isManager: Bool, configured: UserScriptWorld) -> UserScriptWorld {
+        (isManager && configured == .managerChoice) ? .allIsolated : configured
+    }
+
     /// Map a manager-registered world ("MAIN" / "USER_SCRIPT" / "ISOLATED" / "") to the world BrownBear
     /// should actually run the script in, per this setting. `scriptId` lets a manager's own MAIN-world
     /// infra broker keep MAIN even under the isolated default (see `managerBrokerIDs`). Pure — unit-tested.
