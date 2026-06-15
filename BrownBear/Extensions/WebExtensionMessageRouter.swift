@@ -870,8 +870,13 @@ extension WebExtensionMessageRouter {
             // (configureWorld({messaging:true}) on the default world) lets a USER_SCRIPT-world script
             // reach the worker's onUserScriptMessage.
             let usStore = BrownBearServices.shared.webExtensionUserScriptStore
-            let userScriptMessaging = await usStore.worldConfigs(extensionID: ext.id)
-                .contains { $0.worldId == nil && $0.messaging }
+            let worldConfigs = await usStore.worldConfigs(extensionID: ext.id)
+            let userScriptMessaging = worldConfigs.contains { $0.worldId == nil && $0.messaging }
+            // A manager that configured a userScript-world CSP with 'unsafe-eval' (ScriptCat does) wants its
+            // userscripts to run under that permissive policy — they decode + eval obfuscated code, which a
+            // strict PAGE CSP would block in the MAIN world. effectiveWorld routes such a manager's non-broker
+            // MAIN userscripts to the CSP-immune isolated world instead. See AppSettings.effectiveWorld.
+            let managerWantsEvalWorld = worldConfigs.contains { ($0.csp ?? "").contains("unsafe-eval") }
             for userScript in await usStore.getScripts(extensionID: ext.id, ids: nil) {
                 if isSubframe && !userScript.allFrames { continue }
                 let matcher = URLMatcher(matches: userScript.matches, includes: userScript.includeGlobs,
@@ -895,7 +900,8 @@ extension WebExtensionMessageRouter {
                     // The user's "Userscript world" setting can override this — default is the isolated
                     // user-script world, so a userscript is immune to a page breaking its own globals.
                     "world": AppSettings.userScriptWorld.effectiveWorld(registered: userScript.world,
-                                                                       scriptId: userScript.id),
+                                                                       scriptId: userScript.id,
+                                                                       managerWantsEvalWorld: managerWantsEvalWorld),
                     "userScriptMessaging": userScriptMessaging,
                     "manifestJSON": ext.manifestJSON,
                     "baseURL": ext.baseURLString,
