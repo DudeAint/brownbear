@@ -845,6 +845,17 @@
       if (!rootEl) { return; }
       var JSONlocal = JSON, CE = CustomEvent, EV = Event;
       var ME = (typeof MouseEvent !== "undefined") ? MouseEvent : null;
+      // Diagnostic (capped): confirm a manager's GM_xhr RESPONSE actually crosses isolated->MAIN on the
+      // real device. The transport SW->scripting.js is already proven (port logs); this is the one
+      // unmeasured hop. A ScriptCat auth response is ~2-3KB, so logging sizeable cross-world relays makes
+      // it unmistakable whether the body in MAIN is receiving it. Gated to >=512b so it never floods.
+      var __pbLogN = 0;
+      function __pbLog(dir, n) {
+        try {
+          if (n < 512 || ++__pbLogN > 50) { return; }
+          if (typeof console !== "undefined" && console.log) { console.log("[bb-perfbridge] " + dir + " " + n + "b"); }
+        } catch (e) {}
+      }
 
       // One shared sentinel element, the same DOM node in every world (find-or-create).
       var chan = rootEl.querySelector("bb-perf-bridge[data-bb-perf-bridge]");
@@ -913,7 +924,9 @@
               return localResult;   // only CustomEvent / MouseEvent traffic is relayed
             }
             chan.setAttribute(PREV, "0");
-            chan.setAttribute(DATA_OUT, JSONlocal.stringify(d));
+            var _ser = JSONlocal.stringify(d);
+            chan.setAttribute(DATA_OUT, _ser);
+            if (d.k === "c") { __pbLog((role === "page") ? "page->iso" : "iso->page", _ser.length); }
             chan.dispatchEvent(new EV(OUT));   // synchronous; fires the other world's listener
             if (d.rt) {
               var rel = rootEl.querySelector('[data-bb-perf-rt="' + d.rt + '"]');
