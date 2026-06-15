@@ -49,6 +49,30 @@ final class UserScriptWorldTests: XCTestCase {
         }
     }
 
+    func testManagerEvalCSPPullsMainUserscriptsIntoTheCSPImmuneWorld() {
+        // A manager that configured a userScript-world CSP with 'unsafe-eval' (ScriptCat) wants its
+        // userscripts to decode + eval obfuscated code under that permissive policy. A strict PAGE CSP
+        // would block that runtime eval in the MAIN world, so under managerChoice such a manager's
+        // non-broker MAIN userscripts run in the CSP-immune ISOLATED world instead (unsafeWindow still
+        // comes from the manager's MAIN broker). The broker itself, and non-MAIN scripts, are unchanged.
+        let s = UserScriptWorld.managerChoice
+        XCTAssertEqual(s.effectiveWorld(registered: "MAIN", scriptId: "user-uuid", managerWantsEvalWorld: true),
+                       "USER_SCRIPT", "an eval-needing manager's MAIN userscript runs CSP-immune (isolated)")
+        XCTAssertEqual(s.effectiveWorld(registered: "MAIN", scriptId: "scriptcat-inject", managerWantsEvalWorld: true),
+                       "MAIN", "the manager's MAIN infra broker still reaches the page world")
+        XCTAssertEqual(s.effectiveWorld(registered: "MAIN", scriptId: "user-uuid", managerWantsEvalWorld: false),
+                       "MAIN", "without an eval-CSP, a MAIN userscript stays in the page world (no change)")
+        XCTAssertEqual(s.effectiveWorld(registered: "USER_SCRIPT", scriptId: "user-uuid", managerWantsEvalWorld: true),
+                       "USER_SCRIPT", "an already-isolated userscript is untouched")
+    }
+
+    func testForcedMainIgnoresEvalCSPOverride() {
+        // If the user FORCES every userscript to MAIN, respect that explicit choice — the eval-CSP routing
+        // only applies under managerChoice (the default).
+        let s = UserScriptWorld.main
+        XCTAssertEqual(s.effectiveWorld(registered: "MAIN", scriptId: "user-uuid", managerWantsEvalWorld: true), "MAIN")
+    }
+
     func testDefaultIsManagerChoice() {
         // The setting accessor defaults to honoring the manager's registered world (Violentmonkey parity:
         // TM/ScriptCat normal userscripts register MAIN → run in the page world, like VM).
