@@ -116,6 +116,11 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
     /// script's handle.close() can dismiss it; the entry is dropped when the tab closes (any path).
     private var openTabClosers: [String: () -> Void] = [:]
 
+    /// Page-world value-change subscribers: token → the vault-minted stream id its client registered
+    /// (GM_subscribeValueChanges), so a cross-tab/dashboard change reaches its closure listeners via
+    /// __bbPageXHR into .page (not the isolated __brownbear). Reaped with the session.
+    private var pageWorldValueChannels: [String: String] = [:]
+
     /// Cap a single forwarded log line so a runaway script can't bloat the on-disk log.
     private static let maxLogMessageLength = 8192
 
@@ -261,6 +266,15 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
             return NSNull()
         }
 
+        // A page-world script registering its remote value-change channel (its vault stream id). Gated to
+        // page-world callers by the fromPageWorld allowlist; recorded by token for broadcastValueChanges.
+        if api == "GM_subscribeValueChanges" {
+            if let token, let streamID = payload["streamId"] as? String, !streamID.isEmpty {
+                pageWorldValueChannels[token] = streamID
+            }
+            return NSNull()
+        }
+
         if api == "GM_closeTab" {
             // GM_openInTab(...).close(): dismiss the tab this script opened. Ungated like the aborts —
             // openIds are random and script-local, and closing a tab the script itself opened is benign.
@@ -398,14 +412,13 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         guard !changes.isEmpty else { return }
         for (token, target) in sessions where target.id == scriptID && token != originToken {
             guard let webView = target.webView else { continue }
+            // Page-world subscriber → stream into .page via __bbPageXHR; isolated injection →
+            // __brownbear.applyValueChange. JS builders live in +Privileged. (iframe-aware frame.)
+            let pageStreamID = pageWorldValueChannels[token]
             for change in changes {
-                var payload: [String: Any] = ["token": token, "key": change.key]
-                payload["old"] = change.old ?? NSNull()
-                payload["new"] = change.new ?? NSNull()
-                let json = JSONSanitize.string(payload)   // NaN/Inf-safe (uncatchable Obj-C exception otherwise)
-                let js = "window.__brownbear&&window.__brownbear.applyValueChange('\(Self.escapeForJSStringLiteral(json))');"
-                // Via the ObjC shim, into the EXACT frame this injection runs in (iframe-aware).
-                BBEvaluateJavaScriptInFrame(webView, js, target.frameInfo, contentWorld)
+                let js = pageStreamID.map { Self.pageWorldValueChangeJS(streamID: $0, change: change) }
+                    ?? Self.isolatedValueChangeJS(token: token, change: change)
+                BBEvaluateJavaScriptInFrame(webView, js, target.frameInfo, pageStreamID != nil ? .page : contentWorld)
             }
         }
     }
@@ -417,26 +430,6 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
     func broadcastExternalValueChanges(scriptID: UUID,
                                        changes: [(key: String, old: String?, new: String?)]) {
         broadcastValueChanges(scriptID: scriptID, originToken: nil, changes: changes)
-    }
-
-    /// Escape a string for embedding inside a single-quoted JS string literal. JSON uses double
-    /// quotes, but a value may contain `'`, `\`, or the U+2028/U+2029 line terminators that are
-    /// legal in JSON yet break a JS literal.
-    static func escapeForJSStringLiteral(_ string: String) -> String {
-        var out = ""
-        out.reserveCapacity(string.count + 8)
-        for scalar in string.unicodeScalars {
-            switch scalar {
-            case "\\": out += "\\\\"
-            case "'": out += "\\'"
-            case "\n": out += "\\n"
-            case "\r": out += "\\r"
-            case "\u{2028}": out += "\\u2028"
-            case "\u{2029}": out += "\\u2029"
-            default: out.unicodeScalars.append(scalar)
-            }
-        }
-        return out
     }
 
     private func ensureGranted(api: String, session: ScriptSession) throws {
@@ -760,13 +753,10 @@ extension ScriptMessageRouter {
         sessions[token] = session
         tokenOrder.append(token)
         guard tokenOrder.count > Self.maxSessions else { return }
-        if let deadIndex = tokenOrder.firstIndex(where: { sessions[$0]?.webView == nil }) {
-            let evicted = tokenOrder.remove(at: deadIndex)
-            sessions.removeValue(forKey: evicted)
-        } else {
-            let evicted = tokenOrder.removeFirst()
-            sessions.removeValue(forKey: evicted)
-        }
+        let evicted = tokenOrder.firstIndex(where: { sessions[$0]?.webView == nil })
+            .map { tokenOrder.remove(at: $0) } ?? tokenOrder.removeFirst()
+        sessions.removeValue(forKey: evicted)
+        pageWorldValueChannels.removeValue(forKey: evicted)
     }
 
     /// Drop every session for a web view — called when its main frame (re)loads, so stale tokens
@@ -782,6 +772,7 @@ extension ScriptMessageRouter {
         let stale = Set(sessions.compactMap { $0.value.webView === webView ? $0.key : nil })
         guard !stale.isEmpty else { return }
         for token in stale {
+            pageWorldValueChannels.removeValue(forKey: token)   // the page-world script is gone
             guard var session = sessions.removeValue(forKey: token) else { continue }
             session.webView = nil
             session.frameInfo = nil

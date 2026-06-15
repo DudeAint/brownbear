@@ -982,7 +982,32 @@
       });
       pageGM("GM_deleteValues", { keys: keys });
     }
-    function GM_addValueChangeListener(k, fn) { vcSeq += 1; vcListeners[vcSeq] = { key: k, fn: fn }; return vcSeq; }
+    // Remote value-change sync: a change made by the SAME script in ANOTHER tab/frame or the dashboard is
+    // pushed back native→page via the vault's minted-id channel (window.__bbPageXHR(vcStreamId,
+    // "valueChange", {key, oldJSON, newJSON})) and fired to the local listeners with remote = true (TM/VM
+    // cross-context parity). We subscribe lazily on the first listener so a script that never listens never
+    // opens the channel. The page-local read cache (`vals`) is kept in sync so GM_getValue reflects it.
+    var vcSubscribed = false, vcStreamId = null;
+    function ensureVCSubscription() {
+      if (vcSubscribed) { return; }
+      var vault = W.__bbPageGM;
+      if (!vault || typeof vault.xhr !== "function") { return; }
+      vcSubscribed = true;
+      vcStreamId = vault.xhr(function (type, payload) {
+        if (type !== "valueChange" || !payload) { return; }
+        var key = payload.key;
+        var oldV = has(key) ? vparse(vals[key]) : undefined;
+        var newV;
+        if (payload.newJSON != null) { vals[key] = payload.newJSON; newV = vparse(payload.newJSON); }
+        else { delete vals[key]; newV = undefined; }
+        fireVC(key, oldV, newV, true);
+      });
+      pageGM("GM_subscribeValueChanges", { streamId: vcStreamId });
+    }
+    function GM_addValueChangeListener(k, fn) {
+      ensureVCSubscription();
+      vcSeq += 1; vcListeners[vcSeq] = { key: k, fn: fn }; return vcSeq;
+    }
     function GM_removeValueChangeListener(id) { delete vcListeners[id]; }
     function GM_setClipboard(d, info) {
       var mimetype = typeof info === "string" ? info : (info && info.mimetype) || "text/plain";

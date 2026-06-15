@@ -28,9 +28,9 @@ final class PageWorldHandlerTests: XCTestCase {
                         "GM_setClipboard", "GM_log", "log", "GM_xmlhttpRequest", "GM_abortRequest",
                         "GM_download", "GM_downloadAbort",
                         "GM_registerMenuCommand", "GM_unregisterMenuCommand", "GM_openInTab", "GM_closeTab",
-                        "GM_notification", "GM_notificationClear",
+                        "GM_notification", "GM_notificationClear", "GM_subscribeValueChanges",
                         "GM_cookie", "GM_getTab", "GM_saveTab", "GM_listTabs"],
-                       "the page-world allowlist is writes + log + xhr + download + menu + tab + notification + cookie/tab")
+                       "the page-world allowlist is writes + log + xhr + download + menu + tab + notification + value-sub + cookie/tab")
     }
 
     func testAllowlistExcludesPrivilegedAndStreamingCallbackAPIs() {
