@@ -132,6 +132,21 @@ extension WebExtensionBackgroundContext {
             }
         }
         context.setObject(proxy, forKeyedSubscript: "__bb_proxy" as NSString)
+
+        // chrome.identity.launchWebAuthFlow — wired as __bb_identity(method, argsJSON, cb). Presents a system
+        // auth session (iOS 17.4+) and calls back with {responseUrl} or {error}. See WebExtensionWebAuthFlow.
+        let identity: @convention(block) (String, String, JSValue) -> Void = {
+            [weak self] method, argsJSON, callback in
+            guard let self else { return }
+            let extID = self.extensionID
+            let args = ((try? JSONSerialization.jsonObject(with: Data(argsJSON.utf8))) as? [String: Any]) ?? [:]
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let result = await WebExtensionWebAuthFlow.dispatch(method: method, args: args, extensionID: extID)
+                self.callBack(callback, with: self.jsonString(result))
+            }
+        }
+        context.setObject(identity, forKeyedSubscript: "__bb_identity" as NSString)
     }
 
     /// Map a chrome.windows method + args to the bridge host, returning a JSON-serializable value.
