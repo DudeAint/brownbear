@@ -255,6 +255,22 @@ final class GMNetworkService: NSObject, @unchecked Sendable {
         return String(scalars)
     }
 
+    /// Cap on the accumulated bytes for which a `progress` event carries the growing `responseText`. Re-
+    /// sending the whole buffer per chunk is O(n²); past this the progress events carry counters only and
+    /// the complete text still arrives on `load`. 256 KB covers progressive SSE/NDJSON readers cheaply.
+    static let maxStreamingTextBytes = 256 * 1024
+
+    /// The accumulated `responseText` to attach to a `progress` event (Tampermonkey/Violentmonkey parity for
+    /// progressive readers), or nil when it shouldn't stream: a binary responseType (arraybuffer/blob carry
+    /// no text), or past the streaming cap. A text response uses a lenient UTF-8 decode so a chunk boundary
+    /// that splits a multi-byte character yields a preview (corrected as the next chunk arrives), never nil.
+    /// Pure, so it's unit-tested.
+    static func streamingProgressText(received: Data, wantsBinary: Bool,
+                                      overrideForcesBinaryText: Bool) -> String? {
+        guard !wantsBinary, received.count <= maxStreamingTextBytes else { return nil }
+        return overrideForcesBinaryText ? binaryString(received) : String(decoding: received, as: UTF8.self)
+    }
+
     private static func formatHeaders(_ response: HTTPURLResponse?) -> String {
         guard let response else { return "" }
         return response.allHeaderFields
@@ -307,9 +323,14 @@ extension GMNetworkService: URLSessionDataDelegate {
         let loaded = context.received.count
         let total = Int(max(context.expectedLength, Int64(loaded)))
         let computable = context.expectedLength >= 0
+        let streamingText = Self.streamingProgressText(
+            received: context.received, wantsBinary: context.request.wantsBinary,
+            overrideForcesBinaryText: context.request.overrideForcesBinaryText)
         lock.unlock()
-        context.emit("progress", ["readyState": 3, "loaded": loaded,
-                                   "total": total, "lengthComputable": computable])
+        var progress: [String: Any] = ["readyState": 3, "loaded": loaded,
+                                       "total": total, "lengthComputable": computable]
+        if let streamingText { progress["responseText"] = streamingText }   // growing text for stream readers
+        context.emit("progress", progress)
         context.emit("readystatechange", ["readyState": 3])
     }
 

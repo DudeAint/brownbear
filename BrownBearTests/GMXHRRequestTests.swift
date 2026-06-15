@@ -70,4 +70,48 @@ final class GMXHRRequestTests: XCTestCase {
         XCTAssertFalse(r?.overrideForcesBinaryText ?? true,
                        "an arraybuffer response uses the response path, not the binary-text path")
     }
+
+    // MARK: - Streaming progress responseText (TM/VM onprogress parity)
+
+    func testStreamingProgressTextDecodesAccumulatedTextResponse() {
+        let received = Data("hello world".utf8)
+        let text = GMNetworkService.streamingProgressText(
+            received: received, wantsBinary: false, overrideForcesBinaryText: false)
+        XCTAssertEqual(text, "hello world", "a text response streams its accumulated responseText on progress")
+    }
+
+    func testStreamingProgressTextIsNilForBinaryResponseType() {
+        let received = Data([0x00, 0x01, 0xFF])
+        XCTAssertNil(GMNetworkService.streamingProgressText(
+            received: received, wantsBinary: true, overrideForcesBinaryText: false),
+            "arraybuffer/blob carry no streaming text on progress")
+    }
+
+    func testStreamingProgressTextIsNilPastTheCap() {
+        let received = Data(repeating: 0x41, count: GMNetworkService.maxStreamingTextBytes + 1)
+        XCTAssertNil(GMNetworkService.streamingProgressText(
+            received: received, wantsBinary: false, overrideForcesBinaryText: false),
+            "past the cap, progress carries counters only (the full text still arrives on load)")
+        // Exactly at the cap still streams.
+        let atCap = Data(repeating: 0x41, count: GMNetworkService.maxStreamingTextBytes)
+        XCTAssertNotNil(GMNetworkService.streamingProgressText(
+            received: atCap, wantsBinary: false, overrideForcesBinaryText: false))
+    }
+
+    func testStreamingProgressTextOverrideForcesByteString() {
+        let received = Data([0x00, 0x41, 0xFF])   // 0x41 = "A"
+        let text = GMNetworkService.streamingProgressText(
+            received: received, wantsBinary: false, overrideForcesBinaryText: true)
+        XCTAssertEqual(text?.unicodeScalars.map { $0.value }, [0x00, 0x41, 0xFF],
+                       "x-user-defined override streams a byte-preserving string")
+    }
+
+    func testStreamingProgressTextLenientOnSplitMultibyteChar() {
+        // "€" is E2 82 AC; a chunk boundary that delivers only the first byte must NOT yield nil (lenient
+        // decode gives a replacement char, corrected as the rest arrives) — a stream reader never gets stuck.
+        let partial = Data([0xE2])
+        let text = GMNetworkService.streamingProgressText(
+            received: partial, wantsBinary: false, overrideForcesBinaryText: false)
+        XCTAssertNotNil(text, "a split multi-byte char yields a preview, never nil")
+    }
 }
