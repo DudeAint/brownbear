@@ -93,7 +93,9 @@ final class WebExtensionWARSchemeHandler: NSObject, WKURLSchemeHandler {
     /// CAVEAT: `pageURL` is the task's `mainDocumentURL` (the TOP document) — WKWebView doesn't expose the
     /// requesting subframe's origin on a scheme task, so a resource declared for the top origin can also be
     /// loaded from a cross-origin iframe embedded in it. A WKWebView hardening gap, not a fail-closed break.
-    static func isWebAccessible(path: String, pageURL: String?, manifest: WebExtensionManifest) -> Bool {
+    /// `nonisolated` (pure over its args + the nonisolated URLMatcher) so it's callable from tests/handler.
+    nonisolated static func isWebAccessible(path: String, pageURL: String?,
+                                            manifest: WebExtensionManifest) -> Bool {
         for entry in manifest.webAccessibleResources
         where entry.resources.contains(where: { pathMatchesGlob(path, $0) }) {
             if entry.matches.contains("<all_urls>") { return true }
@@ -108,13 +110,13 @@ final class WebExtensionWARSchemeHandler: NSObject, WKURLSchemeHandler {
 
     /// Whether `path` is free of `.`/`..` segments (i.e. already-resolved). A traversal segment must be
     /// rejected BEFORE the glob match, or a `*` could span it into a non-WAR file inside the dir. Pure.
-    static func isTraversalFree(_ path: String) -> Bool {
+    nonisolated static func isTraversalFree(_ path: String) -> Bool {
         !path.split(separator: "/").contains(where: { $0 == "." || $0 == ".." })
     }
 
     /// A Chrome `web_accessible_resources` glob: `*` matches any run of characters (including `/`); the whole
     /// path must match. Everything else is literal.
-    static func pathMatchesGlob(_ path: String, _ glob: String) -> Bool {
+    nonisolated static func pathMatchesGlob(_ path: String, _ glob: String) -> Bool {
         let regex = "^" + glob.components(separatedBy: "*")
             .map { NSRegularExpression.escapedPattern(for: $0) }
             .joined(separator: ".*") + "$"
