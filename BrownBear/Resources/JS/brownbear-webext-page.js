@@ -37,17 +37,59 @@
   // removeItem/clear/key/length) AND direct property access (`localStorage.foo = "x"`), exactly like a real
   // Storage object; values are coerced to strings per spec.
   //
-  // SCOPE: in-memory per page load for now — values do NOT yet persist across reloads (a native-backed
-  // snapshot is the follow-up). Unblocking the init-time crash is the immediate win; a page that re-reads
-  // its own writes within a session works fully. Installed at document-start, before any page script.
+  // PERSISTENCE: localStorage is native-backed across reloads/relaunches — native seeds the page's last
+  // snapshot at document-start as `window.__bb_ls_seed` (a flat string→string map), and the polyfill hands
+  // a debounced snapshot back via `window.__bb_ls_save` (a WKScriptMessageHandler → BrownBearPageLocalStorage
+  // Store, keyed per extension). So a popup/options page that stores its settings in localStorage reads its
+  // own writes back across reopen, exactly like a real browser — without this, every such page lost its
+  // state the moment it closed ("localStorage reads don't work"). sessionStorage stays in-memory per load
+  // (a fresh popup IS a new session — matching the spec). Both installed at document-start, before any page
+  // script. The seed/save wiring is absent → a missing snapshot or save hook degrades to in-memory cleanly.
   (function () {
-    function makeStorage() {
+    function makeStorage(persist) {
       var store = _Object.create(null);
+      if (persist) {
+        // Seed from native's last snapshot so the very first synchronous read already sees prior writes.
+        try {
+          var seed = W.__bb_ls_seed;
+          if (seed && typeof seed === "object") {
+            for (var sk in seed) {
+              if (_Object.prototype.hasOwnProperty.call(seed, sk)) { store[String(sk)] = String(seed[sk]); }
+            }
+          }
+        } catch (e) {}
+      }
+      var flushTimer = null;
+      function snapshot() { var plain = {}; for (var k in store) { plain[k] = store[k]; } return _JSON.stringify(plain); }
+      function persistNow() {
+        try { if (typeof W.__bb_ls_save === "function") { W.__bb_ls_save(snapshot()); } } catch (e) {}
+      }
+      function flush() {
+        if (!persist) { return; }
+        try {
+          if (flushTimer) { return; }   // debounce: coalesce a burst of writes into one native round-trip
+          flushTimer = (W.setTimeout || setTimeout)(function () { flushTimer = null; persistNow(); }, 250);
+        } catch (e) { persistNow(); }
+      }
+      if (persist) {
+        // The 250 ms debounce may not fire before a dismissed popup is torn down — force a final snapshot
+        // when the page is hidden/unloaded so the last write is never lost.
+        try {
+          var forceFlush = function () {
+            try { if (flushTimer) { (W.clearTimeout || clearTimeout)(flushTimer); flushTimer = null; } } catch (e) {}
+            persistNow();
+          };
+          W.addEventListener("pagehide", forceFlush, true);
+          W.addEventListener("visibilitychange", function () {
+            if (W.document && W.document.visibilityState === "hidden") { forceFlush(); }
+          }, true);
+        } catch (e) {}
+      }
       var api = {
         getItem: function (k) { k = String(k); return _Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null; },
-        setItem: function (k, v) { store[String(k)] = String(v); },
-        removeItem: function (k) { delete store[String(k)]; },
-        clear: function () { for (var k in store) { delete store[k]; } },
+        setItem: function (k, v) { store[String(k)] = String(v); flush(); },
+        removeItem: function (k) { delete store[String(k)]; flush(); },
+        clear: function () { for (var k in store) { delete store[k]; } flush(); },
         key: function (i) { var ks = _Object.keys(store); i = i >> 0; return (i >= 0 && i < ks.length) ? ks[i] : null; }
       };
       return new Proxy(api, {
@@ -60,10 +102,10 @@
         },
         set: function (t, prop, value) {
           if (prop === "length" || prop in t) { return true; }   // never let a page clobber the API surface
-          store[String(prop)] = String(value); return true;
+          store[String(prop)] = String(value); flush(); return true;
         },
         has: function (t, prop) { return prop === "length" || prop in t || _Object.prototype.hasOwnProperty.call(store, String(prop)); },
-        deleteProperty: function (t, prop) { if (prop in t) { return true; } delete store[String(prop)]; return true; },
+        deleteProperty: function (t, prop) { if (prop in t) { return true; } delete store[String(prop)]; flush(); return true; },
         ownKeys: function () { return _Object.keys(store); },
         getOwnPropertyDescriptor: function (t, prop) {
           var k = String(prop);
@@ -83,8 +125,8 @@
         return !ok;
       } catch (e) { return true; }
     }
-    try { if (needsPolyfill("localStorage")) { _Object.defineProperty(W, "localStorage", { value: makeStorage(), configurable: true }); } } catch (e) {}
-    try { if (needsPolyfill("sessionStorage")) { _Object.defineProperty(W, "sessionStorage", { value: makeStorage(), configurable: true }); } } catch (e) {}
+    try { if (needsPolyfill("localStorage")) { _Object.defineProperty(W, "localStorage", { value: makeStorage(true), configurable: true }); } } catch (e) {}
+    try { if (needsPolyfill("sessionStorage")) { _Object.defineProperty(W, "sessionStorage", { value: makeStorage(false), configurable: true }); } } catch (e) {}
   })();
 
   // navigator.serviceWorker BRIDGE. WKWebView exposes no Service Worker for the custom chrome-/moz-

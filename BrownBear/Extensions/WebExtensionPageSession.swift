@@ -177,6 +177,11 @@ final class WebExtensionPageSession {
         }
         controller.addUserScript(WKUserScript(source: "window.__bbExtPage = \(dataJSON);",
                                               injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        // Native-backed window.localStorage for this page: seed the last snapshot + wire the save sink BEFORE
+        // the page runtime installs its Storage polyfill, so the page reads its own writes back across reopen
+        // (the chrome-extension:// origin has no real DOM storage). Always on — localStorage is expected to
+        // persist; the seed is synchronous (a document-start literal) so the first read already sees prior data.
+        Self.installPageLocalStoragePersistence(into: controller, extensionID: ext.id)
         controller.addUserScript(WKUserScript(source: Self.pageRuntimeSource,
                                               injectionTime: .atDocumentStart, forMainFrameOnly: true))
 
@@ -361,6 +366,30 @@ final class WebExtensionPageSession {
             .flatMap({ String(data: $0, encoding: .utf8) }) {
             controller.addUserScript(WKUserScript(
                 source: "try{__bbIDBRestore(\(literal));}catch(e){}",
+                injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        }
+    }
+
+    /// Wire native-backed `window.localStorage` persistence for one extension page into its content
+    /// controller, in the slot BEFORE the page runtime (which installs the Storage polyfill): (1) a
+    /// `__bb_ls_save` shim posting the page's debounced snapshot to a native message handler →
+    /// `BrownBearPageLocalStorageStore` keyed by extension id; (2) a seed of the last snapshot as a
+    /// document-start literal (`window.__bb_ls_seed`), so the polyfill's first synchronous read already
+    /// sees prior writes. The seed is the saved JSON re-encoded as a string literal and JSON.parsed in the
+    /// page (never raw JS source — the value is page-controlled). All `try`-guarded → degrades to in-memory.
+    static func installPageLocalStoragePersistence(into controller: WKUserContentController, extensionID: String) {
+        let handlerName = "bbExtPageLocalStorageSave"
+        controller.add(PageLocalStorageSaveHandler(extensionID: extensionID),
+                       contentWorld: WKContentWorld.page, name: handlerName)
+        let saveShim = "window.__bb_ls_save=function(j){"
+            + "try{window.webkit.messageHandlers.\(handlerName).postMessage(j);}catch(e){}};"
+        controller.addUserScript(WKUserScript(source: saveShim,
+                                              injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        if let snapshot = BrownBearPageLocalStorageStore.shared.load(extensionID: extensionID), !snapshot.isEmpty,
+           let literal = (try? JSONSerialization.data(withJSONObject: snapshot, options: .fragmentsAllowed))
+            .flatMap({ String(data: $0, encoding: .utf8) }) {
+            controller.addUserScript(WKUserScript(
+                source: "try{window.__bb_ls_seed=JSON.parse(\(literal));}catch(e){}",
                 injectionTime: .atDocumentStart, forMainFrameOnly: true))
         }
     }
