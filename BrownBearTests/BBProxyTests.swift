@@ -80,4 +80,75 @@ final class BBProxyTests: XCTestCase {
         XCTAssertFalse(BBProxy(host: "", port: 8080).isComplete)
         XCTAssertFalse(BBProxy(host: "h", port: 0).isComplete)
     }
+
+    // MARK: - Paste-any-format support
+
+    func testHostPortUserPassSellerFormat() {
+        // The ubiquitous "IP:PORT:USER:PASS" a proxy seller hands you.
+        let p = BBProxy.parse("1.2.3.4:1080:alice:secret")
+        XCTAssertEqual(p?.host, "1.2.3.4")
+        XCTAssertEqual(p?.port, 1080)
+        XCTAssertEqual(p?.username, "alice")
+        XCTAssertEqual(p?.password, "secret")
+    }
+
+    func testUserPassHostPortInverted() {
+        // The inverted "USER:PASS:HOST:PORT" — disambiguated because the LAST field is the numeric port.
+        let p = BBProxy.parse("alice:secret:1.2.3.4:1080")
+        XCTAssertEqual(p?.host, "1.2.3.4")
+        XCTAssertEqual(p?.port, 1080)
+        XCTAssertEqual(p?.username, "alice")
+        XCTAssertEqual(p?.password, "secret")
+    }
+
+    func testHostPortAtUserPassInverted() {
+        // Some providers print "host:port@user:pass" — the side ending in a port is the host side.
+        let p = BBProxy.parse("1.2.3.4:1080@alice:secret")
+        XCTAssertEqual(p?.host, "1.2.3.4")
+        XCTAssertEqual(p?.port, 1080)
+        XCTAssertEqual(p?.username, "alice")
+        XCTAssertEqual(p?.password, "secret")
+    }
+
+    func testHostPortUserNoPassword() {
+        let p = BBProxy.parse("1.2.3.4:1080:alice")
+        XCTAssertEqual(p?.host, "1.2.3.4")
+        XCTAssertEqual(p?.port, 1080)
+        XCTAssertEqual(p?.username, "alice")
+        XCTAssertEqual(p?.password, "")
+    }
+
+    func testWhitespaceAndCommaDelimited() {
+        let space = BBProxy.parse("1.2.3.4 1080 alice secret")
+        XCTAssertEqual(space?.host, "1.2.3.4")
+        XCTAssertEqual(space?.port, 1080)
+        XCTAssertEqual(space?.username, "alice")
+        XCTAssertEqual(space?.password, "secret")
+        let comma = BBProxy.parse("host,1080,user,pass")
+        XCTAssertEqual(comma?.hostPort, "host:1080")
+        XCTAssertEqual(comma?.password, "pass")
+    }
+
+    func testNumericPasswordKeepsStandardOrder() {
+        // A numeric password must not be mistaken for the host side: creds stay on the left of '@'.
+        let p = BBProxy.parse("admin:8080@1.2.3.4:3128")
+        XCTAssertEqual(p?.username, "admin")
+        XCTAssertEqual(p?.password, "8080")
+        XCTAssertEqual(p?.host, "1.2.3.4")
+        XCTAssertEqual(p?.port, 3128)
+    }
+
+    func testIPv6WithTrailingCredentials() {
+        let p = BBProxy.parse("[2001:db8::1]:9050:user:pw")
+        XCTAssertEqual(p?.host, "2001:db8::1")
+        XCTAssertEqual(p?.port, 9050)
+        XCTAssertEqual(p?.username, "user")
+        XCTAssertEqual(p?.password, "pw")
+    }
+
+    func testQuotedAndPaddedInput() {
+        let p = BBProxy.parse("  \"5.6.7.8:3128\"  ")
+        XCTAssertEqual(p?.host, "5.6.7.8")
+        XCTAssertEqual(p?.port, 3128)
+    }
 }

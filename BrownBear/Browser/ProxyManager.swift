@@ -28,6 +28,13 @@ struct ProxyCheckResult: Equatable {
     let timezone: String?
 }
 
+/// The outcome of a check/rotate probe: the exit info, or a human-readable failure message. (A bespoke
+/// enum rather than `Result<_, String>` because `String` isn't an `Error`.)
+enum ProxyCheckOutcome {
+    case success(ProxyCheckResult)
+    case failure(String)
+}
+
 @MainActor
 final class ProxyManager: ObservableObject {
 
@@ -144,7 +151,7 @@ final class ProxyManager: ObservableObject {
     /// Trigger a proxy's "change IP" rotation endpoint, then re-probe the exit IP so the UI shows the new
     /// one. The rotation URL is the provider's own management link — hit DIRECTLY (not through the proxy),
     /// http(s) only — after which we wait a beat for the provider to assign the new exit IP and re-check.
-    func rotateIP(_ proxy: BBProxy) async -> Result<ProxyCheckResult, String> {
+    func rotateIP(_ proxy: BBProxy) async -> ProxyCheckOutcome {
         let raw = proxy.changeIPURL.trimmingCharacters(in: .whitespaces)
         guard let url = URL(string: raw), let scheme = url.scheme?.lowercased(),
               scheme == "http" || scheme == "https" else {
@@ -167,7 +174,7 @@ final class ProxyManager: ObservableObject {
     /// Probe a proxy by fetching an IP-echo through it. Returns the exit IP (+ best-effort city/country and
     /// timezone) on success, or a human-readable error. Uses an ephemeral session scoped to ONLY this proxy
     /// so the check is independent of the live browsing state.
-    func check(_ proxy: BBProxy) async -> Result<ProxyCheckResult, String> {
+    func check(_ proxy: BBProxy) async -> ProxyCheckOutcome {
         guard #available(iOS 17.0, *) else { return .failure("Proxy requires iOS 17 or later.") }
         guard let config = Self.makeConfiguration(proxy) else { return .failure("Enter a host and port first.") }
         let sessionConfig = URLSessionConfiguration.ephemeral
