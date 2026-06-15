@@ -106,6 +106,18 @@ final class FreeProxyServiceTests: XCTestCase {
         XCTAssertTrue(countries.contains { $0.code == "VN" && $0.count == 1 })
     }
 
+    func testCountryNameUpgradesRegardlessOfArrivalOrder() {
+        // First DE entry carries no name; a later DE entry does — the bucket must show "Germany", not "DE".
+        let list = [
+            FreeProxy(host: "1.1.1.1", port: 80, kind: .http, countryCode: "DE", countryName: nil),
+            FreeProxy(host: "2.2.2.2", port: 80, kind: .http, countryCode: "DE", countryName: "Germany")
+        ].compactMap { $0 }
+        let countries = FreeProxyService.countries(in: list)
+        XCTAssertEqual(countries.first?.code, "DE")
+        XCTAssertEqual(countries.first?.name, "Germany", "a later real name isn't locked out by an earlier nil")
+        XCTAssertEqual(countries.first?.count, 2)
+    }
+
     func testUnknownCountryBucket() {
         let noCountry = [FreeProxy(host: "7.7.7.7", port: 9090, kind: .http,
                                    countryCode: nil, countryName: nil)].compactMap { $0 }

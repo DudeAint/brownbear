@@ -116,7 +116,8 @@ struct FreeProxyView: View {
                     .font(.caption).foregroundStyle(BBTheme.Color.textSecondary)
             }
             Spacer()
-            if manager.enabled, manager.active?.hostPort == proxy.hostPort {
+            if manager.enabled, let active = manager.active,
+               active.host == proxy.host, active.port == proxy.port, active.kind == proxy.kind {
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(BBTheme.Color.secure)
             }
         }
@@ -147,7 +148,15 @@ struct FreeProxyView: View {
     private func activate(_ proxy: FreeProxy) {
         guard ProxyManager.isSupported else { return }
         let label = "Free · \(proxy.countryCode ?? proxy.host)"
-        let stored = manager.upsert(proxy.asBBProxy(label: label))
+        var bbProxy = proxy.asBBProxy(label: label)
+        // Re-activating the same free proxy must be idempotent: reuse an existing identical (host/port/kind,
+        // credential-free) saved entry's id so we update it in place instead of appending a duplicate.
+        if let existing = manager.saved.first(where: {
+            $0.host == proxy.host && $0.port == proxy.port && $0.kind == proxy.kind && !$0.hasCredentials
+        }) {
+            bbProxy.id = existing.id
+        }
+        let stored = manager.upsert(bbProxy)
         manager.setActive(stored.id, enabled: true)
         pendingActivation = nil
         didActivate = true

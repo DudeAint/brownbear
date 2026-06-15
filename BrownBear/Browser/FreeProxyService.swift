@@ -28,12 +28,14 @@ struct FreeProxyCountry: Equatable {
 enum FreeProxyError: LocalizedError {
     case badURL
     case httpStatus(Int)
+    case tooLarge
     case empty
 
     var errorDescription: String? {
         switch self {
         case .badURL: return "Internal error building the request."
         case .httpStatus(let code): return "The proxy list server returned HTTP \(code)."
+        case .tooLarge: return "The proxy list was unexpectedly large and was rejected."
         case .empty: return "No usable free proxies came back. Try again in a moment."
         }
     }
@@ -52,8 +54,22 @@ actor FreeProxyService {
 
     /// Upstream refreshes roughly every minute; a short cache keeps re-opens snappy without hammering it.
     static let cacheTTL: TimeInterval = 12 * 60
-    /// Hard cap so a hostile/huge response can't blow up the picker.
+    /// Hard cap on the number of entries shown so a hostile/huge response can't blow up the picker.
     static let maxEntries = 300
+    /// Hard cap on the fetched body — the list is untrusted, so we abort the download rather than buffer a
+    /// runaway response into memory. Generous enough for the full ProxyScrape / monosans lists.
+    static let maxBytes = 16 * 1024 * 1024
+
+    /// A dedicated cookieless, cacheless session so these untrusted third-party hosts can't read or set
+    /// cookies in the app-wide jar or persist cache entries (matches ScriptIconLoader / ProxyManager.check).
+    private let session: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.httpCookieStorage = nil
+        config.urlCache = nil
+        config.timeoutIntervalForRequest = 20
+        config.waitsForConnectivity = false
+        return URLSession(configuration: config)
+    }()
 
     private var cached: (fetchedAt: Date, proxies: [FreeProxy])?
 
@@ -84,10 +100,20 @@ actor FreeProxyService {
         guard let url = URL(string: urlString) else { throw FreeProxyError.badURL }
         var request = URLRequest(url: url)
         request.timeoutInterval = 20
+        request.httpShouldHandleCookies = false
         request.cachePolicy = .reloadIgnoringLocalCacheData
-        let (data, response) = try await URLSession.shared.data(for: request)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw FreeProxyError.httpStatus(http.statusCode)
+        // Stream the body with a hard byte cap so a hostile/compromised source can't OOM the app: bail on a
+        // declared length over the cap, and abort the moment the running total crosses it.
+        let (bytes, response) = try await session.bytes(for: request)
+        if let http = response as? HTTPURLResponse {
+            guard (200..<300).contains(http.statusCode) else { throw FreeProxyError.httpStatus(http.statusCode) }
+            if http.expectedContentLength > Int64(Self.maxBytes) { throw FreeProxyError.tooLarge }
+        }
+        var data = Data()
+        data.reserveCapacity(min(Self.maxBytes, 512 * 1024))
+        for try await byte in bytes {
+            data.append(byte)
+            if data.count > Self.maxBytes { throw FreeProxyError.tooLarge }
         }
         return try parse(data)
     }
@@ -131,20 +157,23 @@ actor FreeProxyService {
 
     /// The country buckets for the picker, sorted by proxy count (desc) then code (asc).
     static func countries(in list: [FreeProxy]) -> [FreeProxyCountry] {
-        var byCode: [String: (name: String, count: Int)] = [:]
+        var byCode: [String: (name: String?, count: Int)] = [:]
         for proxy in list {
             let code = proxy.groupingCode
-            var entry = byCode[code] ?? (name: "", count: 0)
+            var entry = byCode[code] ?? (name: nil, count: 0)
             entry.count += 1
-            if entry.name.isEmpty {                       // keep the first non-empty name we see for this code
-                entry.name = proxy.countryName ?? (code == FreeProxy.unknownCode ? "Unknown" : code)
+            // Prefer the first REAL country name regardless of arrival order; the bare code is only a
+            // last-resort fallback applied at finalize, so a later named entry isn't locked out.
+            if entry.name == nil, let name = proxy.countryName, !name.isEmpty {
+                entry.name = name
             }
             byCode[code] = entry
         }
         return byCode.map { code, value in
-            FreeProxyCountry(code: code, name: value.name,
-                             flag: FreeProxy.flagEmoji(code == FreeProxy.unknownCode ? nil : code),
-                             count: value.count)
+            let name = value.name ?? (code == FreeProxy.unknownCode ? "Unknown" : code)
+            return FreeProxyCountry(code: code, name: name,
+                                    flag: FreeProxy.flagEmoji(code == FreeProxy.unknownCode ? nil : code),
+                                    count: value.count)
         }
         .sorted { $0.count != $1.count ? $0.count > $1.count : $0.code < $1.code }
     }
