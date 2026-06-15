@@ -803,11 +803,14 @@
   // non-configurable, so a hostile page can neither read the token, MITM the call, nor forge a write.
   // Cross-origin/streaming APIs are NOT in this set — they keep the script isolated.
   function normGrant(g) { return (typeof g === "string") ? g.replace(/^GM\./, "GM_") : ""; }
+  // REGISTRY-backed page-world-safe grants: each maps to a function the page-world client provides, passed
+  // to the script body as an argument. Value-change listeners are page-local (they fire on the script's own
+  // writes; cross-frame remote delivery to the page world is a follow-up).
   var PAGE_WORLD_SAFE_GRANTS = {
     GM_getValue: 1, GM_listValues: 1, GM_getValues: 1, GM_getResourceText: 1,
     GM_getResourceURL: 1, GM_getResourceUrl: 1, GM_addStyle: 1, GM_addElement: 1,
     GM_setValue: 1, GM_deleteValue: 1, GM_setValues: 1, GM_deleteValues: 1,
-    GM_setClipboard: 1, GM_log: 1,
+    GM_setClipboard: 1, GM_log: 1, GM_addValueChangeListener: 1, GM_removeValueChangeListener: 1,
     // GM_xmlhttpRequest is page-world-safe HERE because its request goes through the pristine vault and
     // its response is delivered native→page (never via a page-readable DOM channel); native enforces the
     // token's @connect on every request. See pageWorldGMClient.GM_xmlhttpRequest + the vault's __bbPageXHR.
@@ -817,9 +820,21 @@
     // caller's closure — never on the DOM. See pageWorldGMClient's GM_cookie/GM_getTab/etc + vault call.reply.
     GM_cookie: 1, GM_getTab: 1, GM_saveTab: 1, GM_listTabs: 1
   };
+  // DECLARATION grants that aren't relayed APIs — they're page-world-native capabilities a script asks for.
+  // `@grant unsafeWindow` is the canonical "I want the REAL page window" request (the page-world client
+  // gives unsafeWindow === window natively); `window.*` are page-window event/method declarations. These
+  // count as page-world-safe for ROUTING but are NOT passed as body args (the body already gets unsafeWindow
+  // and window as fixed params) — so they must stay out of buildGrantedPageWorldSource's param list.
+  var PAGE_WORLD_SAFE_DECLARATIONS = {
+    unsafeWindow: 1, "window.onurlchange": 1, "window.close": 1, "window.focus": 1, "window.onbeforeunload": 1
+  };
+  function isGrantPageSafe(g) {
+    var n = normGrant(g);
+    return !!(PAGE_WORLD_SAFE_GRANTS[n] || PAGE_WORLD_SAFE_DECLARATIONS[g] || PAGE_WORLD_SAFE_DECLARATIONS[n]);
+  }
   function allGrantsPageSafe(grants) {
     for (var i = 0; i < grants.length; i += 1) {
-      if (!PAGE_WORLD_SAFE_GRANTS[normGrant(grants[i])]) { return false; }
+      if (!isGrantPageSafe(grants[i])) { return false; }
     }
     return true;
   }
