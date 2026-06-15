@@ -108,6 +108,10 @@ final class TabManager {
         let new = Tab(configuration: configuration, isPrivate: old.isPrivate)
         new.isPinned = old.isPinned
         new.groupID = old.groupID
+        // Carry the placeholder's seeded title + thumbnail across so the grid card doesn't blank during the
+        // swap, and so the next persistSession saves the real tab's snapshot (keyed by the NEW id) instead of
+        // dropping the restored preview.
+        new.restoreForDisplay(url: nil, title: old.state.title, snapshot: old.snapshot)
         tabs[index] = new
         old.onClose?()
         old.stopLoading()
@@ -299,7 +303,7 @@ final class TabManager {
     func persistSession() {
         let normals = normalTabs
         let records = normals.map { tab in
-            TabSessionStore.Record(url: (tab.pendingURL ?? tab.state.url)?.absoluteString,
+            TabSessionStore.Record(url: (tab.pendingURL ?? tab.state.url ?? tab.restoreURL)?.absoluteString,
                                    title: tab.state.displayTitle,
                                    id: tab.id.uuidString,
                                    isPinned: tab.isPinned,

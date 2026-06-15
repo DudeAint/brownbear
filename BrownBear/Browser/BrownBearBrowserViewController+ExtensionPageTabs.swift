@@ -53,6 +53,10 @@ extension BrownBearBrowserViewController {
     func upgradeExtensionPlaceholder(_ placeholder: Tab, to url: URL) async {
         guard let host = url.host, !host.isEmpty,
               let ext = await BrownBearServices.shared.webExtensionStore.ext(for: host), ext.enabled else {
+            // The extension was uninstalled/disabled since the session was saved — stop trying to restore it.
+            // Clearing restoreURL makes the next persist save url=nil so it's a clean New Tab next launch,
+            // rather than perpetually re-restoring a New Tab still wearing the gone extension's title/thumbnail.
+            placeholder.restoreURL = nil
             return
         }
         // The packaged resource + whether this restores as a newtab-override page (a Momentum/Tabliss
@@ -61,11 +65,15 @@ extension BrownBearBrowserViewController {
         let kind: WebExtensionPageSession.Kind = plan.isNewTabOverride ? .newtab : .options
         let session = WebExtensionPageSession(ext: ext, kind: kind,
                                               path: plan.resource.isEmpty ? nil : plan.resource)
-        guard session.pageURL != nil else { return }
+        guard session.pageURL != nil else { placeholder.restoreURL = nil; return }
         let configuration = await session.makeConfiguration()
         guard let pageURL = session.pageURL,
               let realTab = tabManager.replaceTab(placeholder, adopting: configuration) else { return }
         realTab.delegate = self
+        // Persistence-only fallback for the real tab's pre-commit window: until WebKit commits the
+        // chrome-extension navigation, realTab.state.url is nil, so a background in that gap would otherwise
+        // persist url=nil. Cleared implicitly once the page commits (persist prefers state.url/lastCommittedURL).
+        realTab.restoreURL = pageURL
         realTab.onClose = { session.invalidate() }   // retain the session for the tab's life; tears down on close
         session.bind(to: realTab.webView)            // wire ports + live storage/cookie/notification push before load
         realTab.load(pageURL)

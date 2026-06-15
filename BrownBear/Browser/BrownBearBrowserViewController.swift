@@ -255,6 +255,10 @@ final class BrownBearBrowserViewController: UIViewController {
                 tab.delegate = self
                 loadNewTabPage(in: tab, allowExtensionOverride: false)
                 tab.restoreForDisplay(url: nil, title: record.title, snapshot: snapshot)
+                // Persistence-only: if the app backgrounds during the async upgrade window below, persistSession
+                // re-emits this extension URL instead of saving the placeholder's nil state.url (which would
+                // drop the tab to a blank New Tab next launch). Never auto-loaded — the upgrade does the load.
+                tab.restoreURL = url
                 restored.append(tab)
                 extensionUpgrades.append((tab, url))
             } else {

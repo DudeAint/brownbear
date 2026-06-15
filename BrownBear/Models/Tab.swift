@@ -105,6 +105,15 @@ final class Tab {
     /// the New Tab page (`prepareForNewTabPage()`), so a genuine New Tab never resurrects an old URL.
     private(set) var lastCommittedURL: URL?
 
+    /// A URL retained ONLY so session persistence re-emits it; it is NEVER auto-loaded. Set on a
+    /// session-restore placeholder for a `chrome-extension://` page tab whose real page session must be
+    /// rebuilt asynchronously (a normal tab can't host that scheme), and on the rebuilt tab until its first
+    /// commit — so if the app backgrounds during that window, `persistSession` still records the extension
+    /// URL instead of collapsing the slot to a blank New Tab (the placeholder's own state.url is nil while
+    /// it shows the New Tab placeholder). Loading it directly would fail (chrome-extension:// into a
+    /// normal-config web view), which is why it is a persistence-only fallback distinct from `pendingURL`.
+    var restoreURL: URL?
+
     /// Invoked once when this tab is closed (any close path), before its web view is freed. Lets an
     /// owner tear down state bound to the tab — e.g. a hosted extension page's chrome.runtime ports —
     /// while the runtime is still reachable. Generic so the Models layer stays free of feature knowledge.
