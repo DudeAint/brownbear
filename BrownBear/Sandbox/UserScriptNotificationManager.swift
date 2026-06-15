@@ -33,6 +33,10 @@ struct UserScriptNotificationTarget {
     weak var webView: WKWebView?
     var frameInfo: WKFrameInfo?
     let contentWorld: WKContentWorld
+    /// Set when the creating script runs in the PAGE world (granted, VM-parity). A click/close then streams
+    /// back via window.__bbPageXHR(streamID, "click"|"close") into WKContentWorld.page (the vault's minted-id
+    /// channel) — never the isolated __brownbear.dispatchNotification broadcast. nil = isolated world.
+    var pageWorldStreamID: String?
 }
 
 @MainActor
@@ -140,11 +144,21 @@ final class UserScriptNotificationManager: NSObject {
 
     private func dispatchEvent(_ kind: String, composite: String, target: UserScriptNotificationTarget) {
         guard let (_, notificationID) = split(composite), let webView = target.webView else { return }
-        let payload: [String: Any] = ["id": notificationID, "kind": kind]
-        guard let data = try? JSONSerialization.data(withJSONObject: payload),
-              let json = String(data: data, encoding: .utf8) else { return }
-        let escaped = ScriptMessageRouter.escapeForJSStringLiteral(json)
-        let js = "window.__brownbear&&window.__brownbear.dispatchNotification&&window.__brownbear.dispatchNotification('\(escaped)');"
+        // A page-world creator gets the click/close streamed into .page via the vault's minted-id channel
+        // (window.__bbPageXHR), routed to the handler registered under this streamID — never the isolated
+        // __brownbear.dispatchNotification broadcast. target.contentWorld is already .page for that case.
+        let js: String
+        if let streamID = target.pageWorldStreamID {
+            let idLit = ScriptMessageRouter.escapeForJSStringLiteral(streamID)
+            let kindLit = ScriptMessageRouter.escapeForJSStringLiteral(kind)
+            js = "window.__bbPageXHR&&window.__bbPageXHR('\(idLit)','\(kindLit)',{});"
+        } else {
+            let payload: [String: Any] = ["id": notificationID, "kind": kind]
+            guard let data = try? JSONSerialization.data(withJSONObject: payload),
+                  let json = String(data: data, encoding: .utf8) else { return }
+            let escaped = ScriptMessageRouter.escapeForJSStringLiteral(json)
+            js = "window.__brownbear&&window.__brownbear.dispatchNotification&&window.__brownbear.dispatchNotification('\(escaped)');"
+        }
         BBEvaluateJavaScriptInFrame(webView, js, target.frameInfo, target.contentWorld)
     }
 

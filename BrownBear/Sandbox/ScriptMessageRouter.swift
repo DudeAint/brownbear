@@ -343,7 +343,8 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
             return NSNull()
 
         case "GM_notification":
-            return try await handleNotification(payload: payload, session: session.privileged)
+            return try await handleNotification(payload: payload, session: session.privileged,
+                                                fromPageWorld: fromPageWorld)
 
         case "GM_notificationClear":
             return handleNotificationClear(payload: payload, session: session.privileged)
