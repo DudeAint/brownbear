@@ -59,6 +59,13 @@ The app is built in five sequenced modules. Each is shippable and verifiable on 
   shared `WKUserContentController` so scripts inject consistently).
 - Navigation state captured through `WKNavigationDelegate`:
   `didStartProvisionalNavigation`, `didCommit`, `didFinish`, `didFail`.
+- **Proxy** (iOS 17+): `ProxyManager` (`@MainActor`, `Settings → Network → Proxy`) owns one active
+  `BBProxy` (HTTP/HTTPS/SOCKS5) and applies it to the shared + private `WKWebsiteDataStore` via
+  `proxyConfigurations`; `WebViewConfigurationFactory` re-applies it on change. `BBProxy.parse` accepts
+  any common pasted format (`host:port:user:pass`, `user:pass@host:port`, URLs, IPv6, …). The optional
+  **Free Proxy** browser (`FreeProxyService`, an `actor`) fetches a public free-proxy list — ProxyScrape
+  v4, falling back to monosans `proxies.json` — validates/dedupes/caps each entry, and groups by country;
+  free proxies are treated as hostile (warning + explicit-confirm gate before activation).
 
 **Reference:** Chromium `/ios` omnibox + tab grid controllers and WebState lifecycle.
 
