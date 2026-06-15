@@ -42,4 +42,48 @@ extension BrownBearBrowserViewController {
         }
         return true
     }
+
+    /// Rebuild a persisted extension page (`chrome-extension://` / `moz-extension://`) into a real tab,
+    /// swapping it in place of the New-Tab placeholder session restore stood up for it. A normal tab can't
+    /// host that scheme, so — exactly as `openExtensionPageTab` does for a fresh open — we build a bespoke
+    /// per-extension page session and adopt its configuration. The tab OWNS the session for its lifetime
+    /// (`onClose` tears it down). No-ops (leaving the placeholder as a New Tab) when the extension was
+    /// uninstalled or disabled since the session was saved, or the resource no longer exists.
+    @MainActor
+    func upgradeExtensionPlaceholder(_ placeholder: Tab, to url: URL) async {
+        guard let host = url.host, !host.isEmpty,
+              let ext = await BrownBearServices.shared.webExtensionStore.ext(for: host), ext.enabled else {
+            return
+        }
+        // The packaged resource + whether this restores as a newtab-override page (a Momentum/Tabliss
+        // override may branch on __bbExtPage.kind === "newtab"); any other page restores as an options tab.
+        let plan = Self.extensionRestorePlan(url: url, newTabOverride: ext.manifest?.newTabOverride)
+        let kind: WebExtensionPageSession.Kind = plan.isNewTabOverride ? .newtab : .options
+        let session = WebExtensionPageSession(ext: ext, kind: kind,
+                                              path: plan.resource.isEmpty ? nil : plan.resource)
+        guard session.pageURL != nil else { return }
+        let configuration = await session.makeConfiguration()
+        guard let pageURL = session.pageURL,
+              let realTab = tabManager.replaceTab(placeholder, adopting: configuration) else { return }
+        realTab.delegate = self
+        realTab.onClose = { session.invalidate() }   // retain the session for the tab's life; tears down on close
+        session.bind(to: realTab.webView)            // wire ports + live storage/cookie/notification push before load
+        realTab.load(pageURL)
+    }
+
+    /// The restore plan for a persisted extension page URL: the packaged `resource` — everything after
+    /// `scheme://host/`, i.e. path + any query/fragment, so the page lands on the exact resource it was on
+    /// — and `isNewTabOverride`, true iff its path equals the extension's `chrome_url_overrides.newtab`
+    /// path (so it restores as a newtab page rather than an options-style page). Pure (no extension lookup,
+    /// no web view) so the prefix-strip and newtab detection are unit-testable apart from the async build.
+    nonisolated static func extensionRestorePlan(url: URL, newTabOverride: String?)
+        -> (resource: String, isNewTabOverride: Bool) {
+        let prefix = "\(url.scheme ?? "")://\(url.host ?? "")/"
+        let resource = url.absoluteString.hasPrefix(prefix)
+            ? String(url.absoluteString.dropFirst(prefix.count)) : ""
+        let onlyPath = url.path.hasPrefix("/") ? String(url.path.dropFirst()) : url.path
+        let override = newTabOverride.map { $0.hasPrefix("/") ? String($0.dropFirst()) : $0 }
+        let isNewTabOverride = (override != nil && !onlyPath.isEmpty && override == onlyPath)
+        return (resource, isNewTabOverride)
+    }
 }
