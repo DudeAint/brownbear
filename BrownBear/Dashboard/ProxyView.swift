@@ -149,10 +149,9 @@ struct ProxyView: View {
 
     /// The Port field as a valid 1...65535 number, or nil.
     private var portValue: Int? {
-        guard let n = Int(portText.trimmingCharacters(in: .whitespaces)), (1...65_535).contains(n) else {
-            return nil
-        }
-        return n
+        let trimmed = portText.trimmingCharacters(in: .whitespaces)
+        guard let value = Int(trimmed), (1...65_535).contains(value) else { return nil }
+        return value
     }
 
     /// Whether the fields describe a complete-enough proxy to check or save.

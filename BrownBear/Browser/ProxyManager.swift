@@ -84,7 +84,7 @@ final class ProxyManager: ObservableObject {
     /// Insert or update a proxy in the saved list (matched by id), and return the stored copy.
     @discardableResult
     func upsert(_ proxy: BBProxy) -> BBProxy {
-        if let i = saved.firstIndex(where: { $0.id == proxy.id }) { saved[i] = proxy } else { saved.append(proxy) }
+        if let idx = saved.firstIndex(where: { $0.id == proxy.id }) { saved[idx] = proxy } else { saved.append(proxy) }
         persistAndApply()
         return proxy
     }

@@ -75,7 +75,7 @@ struct BBProxy: Codable, Identifiable, Equatable {
     static func parse(_ raw: String, fallbackKind: Kind = .socks5) -> BBProxy? {
         var rest = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         // Drop a pair of surrounding quotes a copy-paste sometimes carries.
-        if rest.count >= 2, let f = rest.first, f == rest.last, f == "\"" || f == "'" {
+        if rest.count >= 2, let edge = rest.first, edge == rest.last, edge == "\"" || edge == "'" {
             rest = String(rest.dropFirst().dropLast())
         }
         guard !rest.isEmpty else { return nil }
@@ -83,8 +83,8 @@ struct BBProxy: Codable, Identifiable, Equatable {
         var kind = fallbackKind
         if let schemeRange = rest.range(of: "://") {
             let scheme = rest[rest.startIndex..<schemeRange.lowerBound].lowercased()
-            if let k = Kind(rawValue: scheme) {
-                kind = k
+            if let matched = Kind(rawValue: scheme) {
+                kind = matched
             } else if scheme == "socks" || scheme == "socks5h" || scheme == "socks4" {
                 kind = .socks5
             }   // an unknown scheme: keep the fallback, still parse the authority
@@ -114,27 +114,27 @@ struct BBProxy: Codable, Identifiable, Equatable {
             var tail = rest[rest.index(after: close)...]
             guard tail.hasPrefix(":") else { return nil }
             tail = tail.dropFirst()
-            let f = tail.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
-            guard !host.isEmpty, let port = validPort(f.first ?? "") else { return nil }
+            let fields = tail.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+            guard !host.isEmpty, let port = validPort(fields.first ?? "") else { return nil }
             return BBProxy(kind: kind, host: host, port: port,
-                           username: f.count > 1 ? f[1] : "", password: f.count > 2 ? f[2] : "")
+                           username: fields.count > 1 ? fields[1] : "",
+                           password: fields.count > 2 ? fields[2] : "")
         }
 
         // Plain colon-delimited.
-        let p = rest.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
-        switch p.count {
+        let parts = rest.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+        switch parts.count {
         case 2:
-            guard !p[0].isEmpty, let port = validPort(p[1]) else { return nil }
-            return BBProxy(kind: kind, host: p[0], port: port)
+            guard !parts[0].isEmpty, let port = validPort(parts[1]) else { return nil }
+            return BBProxy(kind: kind, host: parts[0], port: port)
         case 3:   // host:port:user
-            guard !p[0].isEmpty, let port = validPort(p[1]) else { return nil }
-            return BBProxy(kind: kind, host: p[0], port: port, username: p[2], password: "")
+            guard !parts[0].isEmpty, let port = validPort(parts[1]) else { return nil }
+            return BBProxy(kind: kind, host: parts[0], port: port, username: parts[2], password: "")
         case 4:   // host:port:user:pass  or  user:pass:host:port
-            let p1 = validPort(p[1]), p3 = validPort(p[3])
-            if p3 != nil && p1 == nil {
-                return BBProxy(kind: kind, host: p[2], port: p3!, username: p[0], password: p[1])
-            } else if let port = p1 {   // host:port:user:pass (also the tie-breaker when both look like ports)
-                return BBProxy(kind: kind, host: p[0], port: port, username: p[2], password: p[3])
+            if validPort(parts[1]) == nil, let port = validPort(parts[3]) {
+                return BBProxy(kind: kind, host: parts[2], port: port, username: parts[0], password: parts[1])
+            } else if let port = validPort(parts[1]) {   // host:port:user:pass (also the both-look-like-ports tie)
+                return BBProxy(kind: kind, host: parts[0], port: port, username: parts[2], password: parts[3])
             }
             return nil
         default:
@@ -145,41 +145,41 @@ struct BBProxy: Codable, Identifiable, Equatable {
     /// Field separators accepted in lieu of ':' when a pasted string has no colons.
     private static let fieldSeparators: Set<Character> = [" ", ",", ";", "|", "\t"]
 
-    /// `s` as a port in 1...65535, or nil.
-    private static func validPort(_ s: String) -> Int? {
-        guard let n = Int(s), (1...65_535).contains(n) else { return nil }
-        return n
+    /// `text` as a port in 1...65535, or nil.
+    private static func validPort(_ text: String) -> Int? {
+        guard let value = Int(text), (1...65_535).contains(value) else { return nil }
+        return value
     }
 
-    /// Whether `s` ends in a valid `:port` (handles a trailing `]:port` for a bracketed IPv6 host).
-    private static func endsInValidPort(_ s: String) -> Bool {
-        if let close = s.lastIndex(of: "]") {
-            let after = s[s.index(after: close)...]
+    /// Whether `text` ends in a valid `:port` (handles a trailing `]:port` for a bracketed IPv6 host).
+    private static func endsInValidPort(_ text: String) -> Bool {
+        if let close = text.lastIndex(of: "]") {
+            let after = text[text.index(after: close)...]
             return after.hasPrefix(":") && validPort(String(after.dropFirst())) != nil
         }
-        guard let colon = s.lastIndex(of: ":") else { return false }
-        return validPort(String(s[s.index(after: colon)...])) != nil
+        guard let colon = text.lastIndex(of: ":") else { return false }
+        return validPort(String(text[text.index(after: colon)...])) != nil
     }
 
     /// Split a `host:port` / `[ipv6]:port` authority; nil if it lacks a valid trailing port.
-    private static func splitHostPort(_ s: String) -> (String, Int)? {
-        if s.hasPrefix("["), let close = s.firstIndex(of: "]") {
-            let host = String(s[s.index(after: s.startIndex)..<close])
-            let after = s[s.index(after: close)...]
+    private static func splitHostPort(_ text: String) -> (String, Int)? {
+        if text.hasPrefix("["), let close = text.firstIndex(of: "]") {
+            let host = String(text[text.index(after: text.startIndex)..<close])
+            let after = text[text.index(after: close)...]
             guard !host.isEmpty, after.hasPrefix(":"), let port = validPort(String(after.dropFirst())) else {
                 return nil
             }
             return (host, port)
         }
-        guard let colon = s.lastIndex(of: ":") else { return nil }
-        let host = String(s[s.startIndex..<colon])
-        guard !host.isEmpty, let port = validPort(String(s[s.index(after: colon)...])) else { return nil }
+        guard let colon = text.lastIndex(of: ":") else { return nil }
+        let host = String(text[text.startIndex..<colon])
+        guard !host.isEmpty, let port = validPort(String(text[text.index(after: colon)...])) else { return nil }
         return (host, port)
     }
 
     /// Split `user:pass` credentials on the FIRST colon (so a `:`-bearing password survives).
-    private static func splitCreds(_ s: String) -> (String, String) {
-        guard let colon = s.firstIndex(of: ":") else { return (s, "") }
-        return (String(s[s.startIndex..<colon]), String(s[s.index(after: colon)...]))
+    private static func splitCreds(_ text: String) -> (String, String) {
+        guard let colon = text.firstIndex(of: ":") else { return (text, "") }
+        return (String(text[text.startIndex..<colon]), String(text[text.index(after: colon)...]))
     }
 }
