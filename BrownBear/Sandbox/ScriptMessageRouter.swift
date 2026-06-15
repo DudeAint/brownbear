@@ -302,10 +302,12 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
             let active = (payload["active"] as? Bool) ?? true
             let openId = payload["openId"] as? String
             // Capture the OPENER's frame so the tab's eventual close fires onclose back into the right
-            // script context. The closer (returned by the host) backs the handle's close().
+            // script context. The closer (returned by the host) backs the handle's close(). A page-world
+            // opener gets the close streamed into .page via the vault's minted-id channel (__bbPageXHR);
+            // an isolated opener via __brownbear.dispatchTabClosed in the isolated content world.
             let openerWebView = session.webView
             let openerFrame = session.frameInfo
-            let world = contentWorld
+            let world = fromPageWorld ? WKContentWorld.page : contentWorld
             // Capture the opener web view WEAKLY: the opened tab can outlive the opener, and a strong
             // capture would pin the opener's WKWebView (and its web-content process) alive for the
             // opened tab's whole lifetime. dispatchTabClosed already no-ops if the opener is gone.
@@ -313,7 +315,8 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
                                                onClose: { [weak self, weak openerWebView] in
                 guard let self, let openId else { return }
                 self.openTabClosers.removeValue(forKey: openId)
-                self.dispatchTabClosed(openId: openId, webView: openerWebView, frame: openerFrame, world: world)
+                self.dispatchTabClosed(openId: openId, webView: openerWebView, frame: openerFrame,
+                                       world: world, isPageWorld: fromPageWorld)
             })
             if let openId, let closer { openTabClosers[openId] = closer }
             return NSNull()
