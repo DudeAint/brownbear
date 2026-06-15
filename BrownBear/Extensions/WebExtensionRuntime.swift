@@ -201,7 +201,9 @@ class WebExtensionRuntime {
 
     /// Whether `.debug`-level extension diagnostics reach the Logs tab. Default OFF so the dashboard shows
     /// real signal; the "Verbose extension logs" Developer toggle turns the full port/relay trace back on.
-    static var verboseExtLogs: Bool { UserDefaults.standard.bool(forKey: "bbVerboseExtLogs") }
+    /// `nonisolated` so the background context's `@Sendable` logSink closure can read it off the main actor —
+    /// it only reads thread-safe `UserDefaults`, holding no main-actor state.
+    nonisolated static var verboseExtLogs: Bool { UserDefaults.standard.bool(forKey: "bbVerboseExtLogs") }
 
     /// Give an extension's background worker the chance to serve an unpackaged extension-scheme request
     /// from its `fetch` event handler (e.g. Stylus's `chrome-extension://<id>/data?…`). Called by the
