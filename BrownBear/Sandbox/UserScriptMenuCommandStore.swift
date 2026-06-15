@@ -50,6 +50,10 @@ struct UserScriptMenuCommand {
     weak var webView: WKWebView?
     /// The exact frame (iframe-aware) the injection runs in; nil = main frame.
     let frameInfo: WKFrameInfo?
+    /// True when the registering script runs in the PAGE world (granted, VM-parity). A tap then fires back
+    /// via window.__bbPageXHR(commandID, "menu") into WKContentWorld.page — routed to the vault-registered
+    /// handler for that minted command id — rather than __brownbear.fireMenuCommand into the isolated world.
+    var isPageWorld: Bool = false
 }
 
 /// App-lifetime, main-actor store for userscript menu commands and per-tab GM tab objects. Owned by

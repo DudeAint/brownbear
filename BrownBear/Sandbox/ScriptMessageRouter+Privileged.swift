@@ -31,14 +31,16 @@ extension ScriptMessageRouter {
 
     /// The exhaustive allowlist a page-world caller may invoke: a script's OWN-DATA writes, `log`, the
     /// network `GM_xmlhttpRequest`/`GM_abortRequest` and `GM_download`/`GM_downloadAbort` (lifecycle streamed
-    /// native→page via window.__bbPageXHR; both @connect-gated per the token), and the request→reply APIs
-    /// `GM_cookie`/`GM_getTab`/`GM_saveTab`/`GM_listTabs` (their result is RETURNED through the
-    /// WKScriptMessageHandlerWithReply reply promise — never on the DOM). Anything not here (getScripts,
-    /// injectPageWorld, notifications, menus, openInTab, and reads — served page-local) is rejected for
-    /// page-world callers.
+    /// native→page via window.__bbPageXHR; both @connect-gated per the token), the menu APIs
+    /// `GM_registerMenuCommand`/`GM_unregisterMenuCommand` (a tap streams native→page via the same channel),
+    /// and the request→reply APIs `GM_cookie`/`GM_getTab`/`GM_saveTab`/`GM_listTabs` (their result is
+    /// RETURNED through the WKScriptMessageHandlerWithReply reply promise — never on the DOM). Anything not
+    /// here (getScripts, injectPageWorld, notifications, openInTab, and reads — served page-local) is
+    /// rejected for page-world callers.
     static let pageWorldWriteAPIs: Set<String> = [
         "GM_setValue", "GM_deleteValue", "GM_setValues", "GM_deleteValues", "GM_setClipboard", "GM_log", "log",
         "GM_xmlhttpRequest", "GM_abortRequest", "GM_download", "GM_downloadAbort",
+        "GM_registerMenuCommand", "GM_unregisterMenuCommand",
         "GM_cookie", "GM_getTab", "GM_saveTab", "GM_listTabs"
     ]
 
@@ -294,4 +296,36 @@ extension ScriptMessageRouter {
         config.timeoutIntervalForRequest = 60
         return URLSession(configuration: config)
     }()
+
+    // MARK: - GM_registerMenuCommand fire / list
+    //
+    // Live next to the menu handlers (and out of ScriptMessageRouter.swift, which is at its file_length
+    // budget). `privilegedContentWorld` is this router's isolated content world (the same `contentWorld`).
+
+    /// Fire a registered menu command's callback back into the EXACT frame/world the registering script
+    /// runs in. Called by the browser when the user taps the command in the menu. No-op if the command was
+    /// unregistered or its web view died (fail closed). Returns true if a live command was fired.
+    @discardableResult
+    func fireMenuCommand(token: String, commandID: String) -> Bool {
+        guard let command = menuStore.command(token: token, commandID: commandID),
+              let webView = command.webView else { return false }
+        let idLiteral = Self.escapeForJSStringLiteral(commandID)
+        if command.isPageWorld {
+            // Page-world command: stream the tap back via the vault's minted-id channel into .page, routed
+            // to the handler registered under this command id — never the isolated __brownbear dispatcher.
+            let js = "window.__bbPageXHR&&window.__bbPageXHR('\(idLiteral)','menu',{});"
+            BBEvaluateJavaScriptInFrame(webView, js, command.frameInfo, WKContentWorld.page)
+            return true
+        }
+        let tokenLiteral = Self.escapeForJSStringLiteral(token)
+        let js = "window.__brownbear&&window.__brownbear.fireMenuCommand('\(tokenLiteral)','\(idLiteral)');"
+        BBEvaluateJavaScriptInFrame(webView, js, command.frameInfo, privilegedContentWorld)
+        return true
+    }
+
+    /// The active tab's live menu commands (registration order), for the browser to build the menu's
+    /// "Script commands" section. Resolved off the calling web view so iframe registrations show too.
+    func menuCommands(in webView: WKWebView) -> [UserScriptMenuCommand] {
+        menuStore.commands(in: webView)
+    }
 }

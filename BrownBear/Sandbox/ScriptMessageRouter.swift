@@ -282,7 +282,8 @@ final class ScriptMessageRouter: NSObject, WKScriptMessageHandlerWithReply {
         // The menu/tab and value-store APIs are each dispatched here, before the main switch, so route()
         // stays within its cyclomatic-complexity budget as the GM surface grows (each shares one sub-dispatch).
         if Self.menuTabAPIs.contains(api) {
-            return try routeMenuOrTab(api: api, payload: payload, token: token, session: session, webView: webView)
+            return try routeMenuOrTab(api: api, payload: payload, token: token, session: session,
+                                      webView: webView, fromPageWorld: fromPageWorld)
         }
         if Self.valueAPIs.contains(api) {
             return try await routeValueAPIs(api: api, payload: payload, token: token, session: session)
@@ -883,10 +884,12 @@ extension ScriptMessageRouter {
     /// function's cyclomatic complexity within the SwiftLint budget. All five have already passed
     /// resolveSession + ensureGranted in route().
     fileprivate func routeMenuOrTab(api: String, payload: [String: Any], token: String?,
-                                    session: ScriptSession, webView: WKWebView?) throws -> Any? {
+                                    session: ScriptSession, webView: WKWebView?,
+                                    fromPageWorld: Bool = false) throws -> Any? {
         switch api {
         case "GM_registerMenuCommand":
-            return try handleRegisterMenuCommand(payload: payload, token: token, session: session, webView: webView)
+            return try handleRegisterMenuCommand(payload: payload, token: token, session: session,
+                                                 webView: webView, fromPageWorld: fromPageWorld)
         case "GM_unregisterMenuCommand":
             return handleUnregisterMenuCommand(payload: payload, token: token, session: session, webView: webView)
         case "GM_getTab":
@@ -903,7 +906,8 @@ extension ScriptMessageRouter {
     fileprivate func handleRegisterMenuCommand(payload: [String: Any],
                                                token: String?,
                                                session: ScriptSession,
-                                               webView: WKWebView?) throws -> Any? {
+                                               webView: WKWebView?,
+                                               fromPageWorld: Bool = false) throws -> Any? {
         guard let token, let webView else {
             throw BrownBearError.bridgeRejected("menu command needs a live injection")
         }
@@ -924,7 +928,8 @@ extension ScriptMessageRouter {
                                                         accessKey: accessKey,
                                                         autoClose: autoClose,
                                                         webView: webView,
-                                                        frameInfo: session.frameInfo))
+                                                        frameInfo: session.frameInfo,
+                                                        isPageWorld: fromPageWorld))
         host?.bridgeMenuCommandsDidChange(in: webView)
         // GM_registerMenuCommand returns the (possibly script-supplied) id, so the script can later
         // GM_unregisterMenuCommand it (Tampermonkey parity).
@@ -977,23 +982,6 @@ extension ScriptMessageRouter {
         menuStore.forgetTab(tabID: tabID)
     }
 
-    /// Fire a registered menu command's callback back into the EXACT frame/world the registering script
-    /// runs in. Called by the browser when the user taps the command in the menu. No-op if the command
-    /// was unregistered or its web view died (fail closed). Returns true if a live command was fired.
-    @discardableResult
-    func fireMenuCommand(token: String, commandID: String) -> Bool {
-        guard let command = menuStore.command(token: token, commandID: commandID),
-              let webView = command.webView else { return false }
-        let tokenLiteral = Self.escapeForJSStringLiteral(token)
-        let idLiteral = Self.escapeForJSStringLiteral(commandID)
-        let js = "window.__brownbear&&window.__brownbear.fireMenuCommand('\(tokenLiteral)','\(idLiteral)');"
-        BBEvaluateJavaScriptInFrame(webView, js, command.frameInfo, contentWorld)
-        return true
-    }
-
-    /// The active tab's live menu commands (registration order), for the browser to build the menu's
-    /// "Script commands" section. Resolved off the calling web view so iframe registrations show too.
-    func menuCommands(in webView: WKWebView) -> [UserScriptMenuCommand] {
-        menuStore.commands(in: webView)
-    }
+    // fireMenuCommand / menuCommands(in:) live in ScriptMessageRouter+Privileged.swift (next to the menu
+    // handlers) so this file stays under the SwiftLint file_length limit.
 }
