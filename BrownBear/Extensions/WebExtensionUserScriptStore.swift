@@ -9,13 +9,9 @@
 //  use. So this store keeps the registered set per extension (persisted) and the content-script
 //  resolver folds it in alongside the manifest scripts.
 //
-//  iOS limits: WKWebView can't apply a custom per-world CSP. We can't honor configureWorld({csp}) by
-//  setting that CSP on a world — BUT a manager configures a userScript-world CSP (with 'unsafe-eval') so
-//  its userscripts can decode + eval obfuscated code regardless of the PAGE's CSP, and our ISOLATED
-//  content world is already CSP-immune. So we DO honor the intent: a manager that declared an eval-CSP has
-//  its non-broker MAIN userscripts routed to the isolated world (see AppSettings.effectiveWorld +
-//  WebExtensionMessageRouter.getContentScripts), where their runtime eval works. The csp/world fields are
-//  recorded so getScripts/configureWorld round-trip faithfully.
+//  iOS limits: WKWebView gives us one isolated world for all BrownBear injection, so a script
+//  registered into the "MAIN" world via configureWorld still runs in our isolated world. We record
+//  the requested world (so getScripts/configureWorld round-trip faithfully) but document the gap.
 //
 //  An actor: the chrome.* bridge (content/popup/background) and the content-script resolver read it.
 //
