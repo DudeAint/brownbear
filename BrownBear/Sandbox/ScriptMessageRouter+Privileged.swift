@@ -42,7 +42,7 @@ extension ScriptMessageRouter {
         "GM_setValue", "GM_deleteValue", "GM_setValues", "GM_deleteValues", "GM_setClipboard", "GM_log", "log",
         "GM_xmlhttpRequest", "GM_abortRequest", "GM_download", "GM_downloadAbort",
         "GM_registerMenuCommand", "GM_unregisterMenuCommand", "GM_openInTab", "GM_closeTab",
-        "GM_notification", "GM_notificationClear",
+        "GM_notification", "GM_notificationClear", "GM_subscribeValueChanges",
         "GM_cookie", "GM_getTab", "GM_saveTab", "GM_listTabs"
     ]
 
@@ -341,5 +341,46 @@ extension ScriptMessageRouter {
     /// "Script commands" section. Resolved off the calling web view so iframe registrations show too.
     func menuCommands(in webView: WKWebView) -> [UserScriptMenuCommand] {
         menuStore.commands(in: webView)
+    }
+
+    // MARK: - Remote value-change delivery (JS builders for broadcastValueChanges)
+
+    /// JS to deliver a remote value change to a PAGE-WORLD script: streamed into .page via the vault's
+    /// minted-id channel, routed to the client's value-change handler. `old`/`new` are JSON-encoded value
+    /// strings (nil = deleted). NaN/Inf-safe via JSONSanitize.
+    static func pageWorldValueChangeJS(streamID: String, change: (key: String, old: String?, new: String?)) -> String {
+        let payload: [String: Any] = ["key": change.key, "oldJSON": change.old ?? NSNull(),
+                                      "newJSON": change.new ?? NSNull()]
+        let args: [Any] = [streamID, "valueChange", payload]
+        return "window.__bbPageXHR&&window.__bbPageXHR.apply(null,\(JSONSanitize.string(args)));"
+    }
+
+    /// JS to deliver a remote value change to an ISOLATED injection via __brownbear.applyValueChange.
+    static func isolatedValueChangeJS(token: String, change: (key: String, old: String?, new: String?)) -> String {
+        var payload: [String: Any] = ["token": token, "key": change.key]
+        payload["old"] = change.old ?? NSNull()
+        payload["new"] = change.new ?? NSNull()
+        return "window.__brownbear&&window.__brownbear.applyValueChange('"
+            + "\(escapeForJSStringLiteral(JSONSanitize.string(payload)))');"
+    }
+
+    /// Escape a string for embedding inside a single-quoted JS string literal. JSON uses double quotes, but
+    /// a value may contain `'`, `\`, or the U+2028/U+2029 line terminators that are legal in JSON yet break
+    /// a JS literal. (Lives here so ScriptMessageRouter.swift stays under the file_length limit.)
+    static func escapeForJSStringLiteral(_ string: String) -> String {
+        var out = ""
+        out.reserveCapacity(string.count + 8)
+        for scalar in string.unicodeScalars {
+            switch scalar {
+            case "\\": out += "\\\\"
+            case "'": out += "\\'"
+            case "\n": out += "\\n"
+            case "\r": out += "\\r"
+            case "\u{2028}": out += "\\u2028"
+            case "\u{2029}": out += "\\u2029"
+            default: out.unicodeScalars.append(scalar)
+            }
+        }
+        return out
     }
 }
