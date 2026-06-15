@@ -98,9 +98,13 @@ actor GMAssetCache {
         }
         guard total > maxBytes else { return }
         items.sort { $0.mtime < $1.mtime }   // least-recently-used first
+        var remaining = items.count
         for item in items {
-            if total <= evictTargetBytes { break }
-            if (try? fileManager.removeItem(at: item.url)) != nil { total -= item.size }
+            // Stop at the target — but NEVER evict the final survivor. A single @require larger than the
+            // target (a big jQuery/three.js/pdf.js bundle) must stay cached, not be wiped by the very
+            // store() that wrote it; the kept entry is the most-recently-used (last in ascending order).
+            if total <= evictTargetBytes || remaining <= 1 { break }
+            if (try? fileManager.removeItem(at: item.url)) != nil { total -= item.size; remaining -= 1 }
         }
     }
 
