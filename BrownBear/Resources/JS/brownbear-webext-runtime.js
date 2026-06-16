@@ -1104,9 +1104,8 @@
   // the page MAIN world via the native CSP-immune eval — the same path world:"MAIN" scripts already use. The
   // element is still inserted (inert, src removed) so the page DOM is unchanged. Installed once per page.
   (function installWarScriptBridge() {
-    var NodeCtor = W.Node, ElementCtor = W.Element, _fetch = W.fetch, EventCtor = W.Event,
-        AbortCtor = W.AbortController, _setTimeout = W.setTimeout || setTimeout, _clearTimeout = W.clearTimeout || clearTimeout;
-    if (!NodeCtor || !NodeCtor.prototype || typeof _fetch !== "function" || typeof EventCtor !== "function") {
+    var NodeCtor = W.Node, ElementCtor = W.Element, EventCtor = W.Event;
+    if (!NodeCtor || !NodeCtor.prototype || typeof EventCtor !== "function") {
       return;   // headless / no real DOM → nothing to bridge
     }
     function extSrcOf(node) {
@@ -1116,36 +1115,24 @@
         return (abs && /^(?:chrome|moz)-extension:\/\//i.test(abs)) ? abs : null;
       } catch (e) { return null; }
     }
-    function extIdOf(absSrc) {
-      try { var m = /^(?:chrome|moz)-extension:\/\/([^/]+)/i.exec(absSrc); return m ? m[1] : null; }
-      catch (e) { return null; }
-    }
-    // BOUNDED fetch: a hung WAR resource must never wedge the (page-global) injection chain, which is shared
-    // across every co-enabled extension. 10s ceiling, aborted if AbortController exists.
-    function fetchText(absSrc) {
-      var ctrl = AbortCtor ? new AbortCtor() : null;
-      var timer = _setTimeout(function () { try { if (ctrl) { ctrl.abort(); } } catch (e) {} }, 10000);
-      return _fetch(absSrc, ctrl ? { signal: ctrl.signal } : undefined).then(
-        function (r) { _clearTimeout(timer); return r.text(); },
-        function (e) { _clearTimeout(timer); throw e; });
-    }
-    var chain = _Promise.resolve();   // serialize only the INJECT step so helpers run in insertion order
+    var chain = _Promise.resolve();   // serialize the inject step so helpers run in insertion order
     function divert(node, absSrc) {
       if (node.__bbWarHandled) { return; }
       node.__bbWarHandled = true;
       try { node.removeAttribute("src"); } catch (e) {}   // no src → the page makes no CSP-gated subresource load
-      var textP = fetchText(absSrc);   // start the fetch NOW (concurrent — a slow one can't block other fetches)
       chain = chain.then(function () {
-        return textP.then(function (text) {
-          // injectIntoPage resolves AFTER the MAIN-world eval completes (native awaits it), so the synthetic
-          // load event below fires only once the helper has actually run — matching a real external script.
-          return _Promise.resolve(injectIntoPage(text, extIdOf(absSrc))).then(function () {
-            try { node.dispatchEvent(new EventCtor("load")); } catch (e) {}
-          });
+        // Read AND run the resource NATIVELY — both steps CSP-immune. A content-world fetch of the
+        // chrome-extension:// URL is gated by the page's connect-src CSP on hardened sites (YouTube →
+        // "Load failed"), so native reads the web-accessible resource (manifest-gated) and evaluates it in
+        // the page MAIN world, resolving only AFTER the eval completes (so the load event matches a real
+        // external script). {found:false} → the URL wasn't a declared web_accessible_resource → error event.
+        return bridge("injectWarScript", { url: absSrc }, null).then(function (res) {
+          var ok = !!(res && res.found);
+          try { node.dispatchEvent(new EventCtor(ok ? "load" : "error")); } catch (e) {}
+        }, function (e) {
+          try { node.dispatchEvent(new EventCtor("error")); } catch (e2) {}
+          reportContentError(e, null);
         });
-      }).catch(function (e) {
-        try { node.dispatchEvent(new EventCtor("error")); } catch (e2) {}
-        reportContentError(e, null);
       });
     }
     function maybeDivert(parent, node) {
