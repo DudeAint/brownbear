@@ -369,7 +369,7 @@ final class BrowserMenuViewController: UIViewController {
 
         let toggle = UISwitch()
         toggle.isOn = script.enabled
-        toggle.onTintColor = BrownBearTheme.Palette.accent
+        toggle.onTintColor = BrownBearTheme.Palette.toggleOn
         toggle.setContentHuggingPriority(.required, for: .horizontal)
         let id = script.id
         toggle.addAction(UIAction { [weak self, weak toggle] _ in
@@ -725,7 +725,7 @@ private extension BrowserMenuViewController {
 
         let toggle = UISwitch()
         toggle.isOn = state.proxyEnabled
-        toggle.onTintColor = BrownBearTheme.Palette.accent
+        toggle.onTintColor = BrownBearTheme.Palette.toggleOn
         toggle.isEnabled = state.proxySupported && state.proxyHasActive
         toggle.setContentHuggingPriority(.required, for: .horizontal)
         toggle.setContentCompressionResistancePriority(.required, for: .horizontal)
