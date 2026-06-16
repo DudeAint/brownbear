@@ -19,14 +19,16 @@
 //  `import.meta.url`). Swift calls `__bbRunModuleWorker(entryPath)` once, after the chrome.* runtime
 //  is installed.
 //
-//  Import cycles are supported with ESM-faithful semantics (they broke uBO Lite's admin ⇄
+//  Import bindings are LIVE: a reference to a named/default import is rewritten to read through the
+//  exporting module's namespace (`tmp.foo`) every time, so a value the exporter assigns AFTER the
+//  import line is seen at its current value — ESM-faithful, and the fix for esbuild's lazy `__esm`
+//  init pattern (Phantom's `import{j as E}…; …E.FORCE_PRODUCTION_API`, where the env object is filled
+//  in by an init function the importer calls after the import). Only references provably unshadowed
+//  by an inner scope are rewritten; the eager `var local=…` snapshot + `__fixup` re-snapshot remain as
+//  a safety net for any reference the rewrite conservatively skips (so it can never become a
+//  ReferenceError). Import cycles keep ESM-faithful semantics (they broke uBO Lite's admin ⇄
 //  ruleset-manager boot before): export getters are HOISTED to the top of each module body, so a
-//  cycle partner re-entering mid-evaluation resolves hoisted function declarations immediately; and
-//  every named/default import binding is re-snapshotted (`__fixup`) once the outermost evaluation
-//  settles, so value bindings that were still uninitialised mid-cycle land before any code outside
-//  the cycle runs. Remaining divergence from real ESM (acceptable, documented): a SYNCHRONOUS
-//  mid-cycle read of a local imported binding (not the namespace) sees the eager snapshot
-//  (undefined) until the graph settles — real ESM would forward the live value.
+//  cycle partner re-entering mid-evaluation resolves hoisted function declarations immediately.
 //  Top-level `await` is unsupported (synchronous registry); a module that uses it fails closed with
 //  a clear error rather than silently mis-running.
 //
@@ -130,17 +132,35 @@
     // A literal for use as a JS string in generated code. JSON.stringify is exact for this.
     function lit(str) { return JSON.stringify(String(str)); }
 
+    // True for a name usable as a bare identifier after a `.` (reserved words are legal there).
+    function validIdent(name) { return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name); }
+
+    // The live member-access expression for an imported binding: `tmp.foo` or `tmp["weird-name"]`.
+    // Reading THROUGH the require-result every time is what makes the binding live (ESM-faithful),
+    // so a value the exporter assigns after the import line (esbuild's lazy `__esm` init pattern —
+    // Phantom's `import{j as E}…; E.FORCE_PRODUCTION_API`) is seen at its settled value, not the
+    // `undefined` an eager snapshot captured at import time.
+    function memberFor(tmp, prop) {
+        return validIdent(prop) ? tmp + '.' + prop : tmp + '[' + lit(prop) + ']';
+    }
+
     // ---- rewrite ---------------------------------------------------------------------------------
 
-    /** Build the require/binding code for a single `import` declaration. `tmp` is a unique temp name.
+    /** Build the require/binding code for a single `import` declaration. `tmp` is a unique temp name;
+     *  `live` is a map (localName → member-access string) the caller uses to rewrite each binding's
+     *  *references* into a live read-through (see rewriteLiveRefs).
      *
-     *  Cycle-correct binding: each named/default binding is snapshotted eagerly (guarded — a mid-cycle
-     *  read of a not-yet-initialised let/const export getter throws TDZ, which must not abort the
-     *  importer the way real ESM linking wouldn't) AND re-snapshotted via `__fixup` once the whole graph
-     *  has finished evaluating — so a binding that was still `undefined` mid-cycle (uBO Lite's
-     *  admin ⇄ ruleset-manager cycle) lands on its real value before any code outside the cycle runs.
-     *  Namespace imports bind the live exports object itself and need no fixup. */
-    function rewriteImport(node, tmp) {
+     *  Live bindings: a named/default import reference is rewritten to `tmp.foo` so every read forwards
+     *  to the exporter's current value — ESM-faithful, and the fix for esbuild's lazy `__esm` pattern
+     *  (Phantom's `import{j as E}…; …E.FORCE_PRODUCTION_API`, where the exporter assigns the value via
+     *  an init function called AFTER the import line). The eager `var local=…` snapshot + `__fixup`
+     *  re-snapshot are KEPT as a safety net: any reference the rewrite conservatively skips (e.g. a
+     *  binding it can't prove is unshadowed) still resolves to the snapshot, i.e. today's behaviour —
+     *  never a ReferenceError. The snapshot read is guarded (a mid-cycle read of a not-yet-initialised
+     *  let/const export getter throws TDZ, which must not abort the importer the way real ESM linking
+     *  wouldn't). Namespace imports bind the live exports object itself and need neither snapshot fixup
+     *  nor reference rewriting. */
+    function rewriteImport(node, tmp, live) {
         var spec = node.source.value;
         if (node.specifiers.length === 0) return '__require(' + lit(spec) + ');';
         var code = 'var ' + tmp + '=__require(' + lit(spec) + ');';
@@ -150,11 +170,14 @@
             if (s.type === 'ImportDefaultSpecifier') {
                 code += 'var ' + s.local.name + ';';
                 binds += 'try{' + s.local.name + '=' + tmp + '.default;}catch(__bbE){}';
+                live[s.local.name] = tmp + '.default';
             } else if (s.type === 'ImportNamespaceSpecifier') {
                 code += 'var ' + s.local.name + '=' + tmp + ';';
             } else { // ImportSpecifier
                 code += 'var ' + s.local.name + ';';
-                binds += 'try{' + s.local.name + '=' + tmp + '[' + lit(nameOf(s.imported)) + '];}catch(__bbE){}';
+                var nm = nameOf(s.imported);
+                binds += 'try{' + s.local.name + '=' + memberFor(tmp, nm) + ';}catch(__bbE){}';
+                live[s.local.name] = memberFor(tmp, nm);
             }
         }
         if (binds) {
@@ -187,6 +210,7 @@
         // The getters close over module-scope names: functions are hoisted (defined), `var`s read
         // undefined until assigned, let/const throw TDZ until initialised — all faithful to ESM.
         var prelude = [];
+        var live = Object.create(null);   // import local name → live member-access (e.g. "__bb_m0.foo")
 
         // Top-level import/export declarations (only valid at Program.body level).
         var body = ast.body;
@@ -195,11 +219,11 @@
             switch (node.type) {
                 case 'ImportDeclaration':
                     if (node.source) { deps.push(node.source.value); }
-                    edits.push({ start: node.start, end: node.end, text: rewriteImport(node, tmp()) });
+                    edits.push({ start: node.start, end: node.end, text: rewriteImport(node, tmp(), live) });
                     break;
                 case 'ExportNamedDeclaration':
                     if (node.source) { deps.push(node.source.value); }
-                    rewriteExportNamed(node, edits, prelude);
+                    rewriteExportNamed(node, edits, prelude, live);
                     break;
                 case 'ExportDefaultDeclaration':
                     rewriteExportDefault(node, src, edits, prelude);
@@ -210,6 +234,12 @@
                     break;
             }
         }
+
+        // Rewrite each *reference* to a named/default import into a live read-through (`tmp.foo`), so a
+        // value assigned by the exporter after the import line (esbuild lazy `__esm` init) is seen live.
+        // Conservative: only references provably unshadowed by an inner scope are rewritten; the rest
+        // fall back to the eager snapshot rewriteImport emitted (today's behaviour, never a crash).
+        rewriteLiveRefs(ast, live, edits);
 
         // Dynamic import() and import.meta, anywhere in the tree. These compose with the boundary
         // edits above (an `export const x = import('y')` keeps the inner import() edit inside the
@@ -262,7 +292,7 @@
         return fn;
     }
 
-    function rewriteExportNamed(node, edits, prelude) {
+    function rewriteExportNamed(node, edits, prelude, live) {
         if (node.source) {
             // Re-export: export { a, b as c } from './x'  /  export {} from './x'
             // Getters go to the PRELUDE so a mid-cycle importer already sees the names; each getter
@@ -296,9 +326,12 @@
             return;
         }
         // export { a, b as c };  (local bindings, no `from`) — registrations hoist; the statement goes.
+        // If the local name is itself an imported binding, the getter reads it LIVE (`tmp.foo`) so a
+        // re-export forwards the exporter's current value (the bare-name read would see the snapshot).
         for (var k = 0; k < node.specifiers.length; k++) {
             var sp = node.specifiers[k];
-            prelude.push('__export(' + lit(nameOf(sp.exported)) + ',function(){return ' + sp.local.name + ';});');
+            var read = (live && live[sp.local.name]) ? live[sp.local.name] : sp.local.name;
+            prelude.push('__export(' + lit(nameOf(sp.exported)) + ',function(){return ' + read + ';});');
         }
         edits.push({ start: node.start, end: node.end, text: '' });
     }
@@ -338,6 +371,144 @@
             + 'for(var __k in ' + t + '){if(__k!=="default"){(function(k){__export(k,function(){return '
             + t + '[k];});})(__k);}}';
         edits.push({ start: node.start, end: node.end, text: code });
+    }
+
+    // ---- live import-binding references ----------------------------------------------------------
+
+    /** Record into `out` (a plain-object set) the live-binding names that function `fn` SHADOWS for the
+     *  whole of its body: its own name (named expressions / declarations), its parameters, and every
+     *  binding declared anywhere in its body that is not inside a further nested function. Deliberately
+     *  OVER-approximate — extra shadowing only makes a reference fall back to the eager snapshot
+     *  (today's behaviour), never produces a wrong value; UNDER-approximating would risk rewriting a
+     *  shadowed reference, which must never happen. */
+    function collectFunctionShadows(fn, live, out) {
+        if (fn.id && live[fn.id.name]) out[fn.id.name] = true;
+        var pnames = [];
+        for (var i = 0; i < fn.params.length; i++) boundNames(fn.params[i], pnames);
+        for (var p = 0; p < pnames.length; p++) if (live[pnames[p]]) out[pnames[p]] = true;
+        if (fn.body && fn.body.type === 'BlockStatement') collectBodyBindings(fn.body, live, out);
+    }
+
+    /** Collect binding names declared within a function/block body WITHOUT descending into nested
+     *  function bodies (those bindings belong to their own scope), but DO record a nested
+     *  FunctionDeclaration's name (it binds in this scope). */
+    function collectBodyBindings(node, live, out) {
+        if (!node || typeof node !== 'object') return;
+        var t = node.type;
+        if (t === 'FunctionDeclaration') { if (node.id && live[node.id.name]) out[node.id.name] = true; return; }
+        if (t === 'FunctionExpression' || t === 'ArrowFunctionExpression') return;
+        if (t === 'VariableDeclaration') {
+            for (var d = 0; d < node.declarations.length; d++) {
+                var ns = []; boundNames(node.declarations[d].id, ns);
+                for (var k = 0; k < ns.length; k++) if (live[ns[k]]) out[ns[k]] = true;
+            }
+        } else if (t === 'ClassDeclaration') {
+            if (node.id && live[node.id.name]) out[node.id.name] = true;
+        } else if (t === 'CatchClause' && node.param) {
+            var cn = []; boundNames(node.param, cn);
+            for (var c = 0; c < cn.length; c++) if (live[cn[c]]) out[cn[c]] = true;
+        }
+        for (var key in node) {
+            if (key === 'type' || key === 'start' || key === 'end') continue;
+            var child = node[key];
+            if (!child || typeof child !== 'object') continue;
+            if (Array.isArray(child)) { for (var a = 0; a < child.length; a++) collectBodyBindings(child[a], live, out); }
+            else if (typeof child.type === 'string') collectBodyBindings(child, live, out);
+        }
+    }
+
+    /** Rewrite every *reference* to a named/default import local into its live member read (`tmp.foo`).
+     *  Descends with a `shadowed` set (prototype-chained = union of enclosing function scopes); a name
+     *  is rewritten only when it is live AND unshadowed. Binding positions (declarator ids, params,
+     *  catch params, class/function names), non-computed property keys, labels, and import/export
+     *  specifier names are never treated as references — and anything this misses simply keeps the eager
+     *  snapshot, so a conservative skip is always safe. */
+    function rewriteLiveRefs(ast, live, edits) {
+        var hasLive = false; for (var _n in live) { hasLive = true; break; }
+        if (!hasLive) return;
+
+        function visit(node, shadowed) {
+            if (!node || typeof node.type !== 'string') return;
+            switch (node.type) {
+                case 'Identifier':
+                    if (live[node.name] && !shadowed[node.name]) {
+                        edits.push({ start: node.start, end: node.end, text: live[node.name] });
+                    }
+                    return;
+                case 'FunctionDeclaration':
+                case 'FunctionExpression':
+                case 'ArrowFunctionExpression': {
+                    var inner = Object.create(shadowed);   // params/ids are bindings → never visited as refs
+                    collectFunctionShadows(node, live, inner);
+                    if (node.body) visit(node.body, inner);
+                    return;
+                }
+                case 'MemberExpression':
+                    visit(node.object, shadowed);
+                    if (node.computed) visit(node.property, shadowed);   // non-computed key is not a ref
+                    return;
+                case 'Property':
+                    if (node.computed) visit(node.key, shadowed);
+                    if (node.shorthand) {
+                        var v = node.value;                              // {E} → {E: tmp.foo}
+                        if (v && v.type === 'Identifier' && live[v.name] && !shadowed[v.name]) {
+                            edits.push({ start: node.start, end: node.end, text: v.name + ':' + live[v.name] });
+                        }
+                        return;
+                    }
+                    visit(node.value, shadowed);
+                    return;
+                case 'MethodDefinition':
+                case 'PropertyDefinition':
+                    if (node.computed) visit(node.key, shadowed);
+                    if (node.value) visit(node.value, shadowed);
+                    return;
+                case 'VariableDeclarator':
+                    if (node.init) visit(node.init, shadowed);           // id is a binding target
+                    return;
+                case 'ClassDeclaration':
+                case 'ClassExpression':
+                    if (node.superClass) visit(node.superClass, shadowed);
+                    if (node.body) visit(node.body, shadowed);           // id is a binding
+                    return;
+                case 'CatchClause':
+                    if (node.body) visit(node.body, shadowed);           // param is a binding
+                    return;
+                case 'AssignmentExpression':
+                    if (node.left && node.left.type === 'MemberExpression') visit(node.left, shadowed);
+                    if (node.right) visit(node.right, shadowed);         // a bare-Identifier/pattern target is a write
+                    return;
+                case 'UpdateExpression':
+                    if (node.argument && node.argument.type === 'MemberExpression') visit(node.argument, shadowed);
+                    return;
+                case 'LabeledStatement':
+                    if (node.body) visit(node.body, shadowed);           // label is not a ref
+                    return;
+                case 'BreakStatement':
+                case 'ContinueStatement':
+                case 'ImportDeclaration':                                // handled by rewriteImport
+                case 'ExportAllDeclaration':
+                case 'MetaProperty':
+                    return;
+                case 'ExportNamedDeclaration':
+                    if (node.declaration) visit(node.declaration, shadowed);   // specifiers → getters
+                    return;
+                case 'ExportDefaultDeclaration':
+                    if (node.declaration) visit(node.declaration, shadowed);
+                    return;
+                default:
+                    for (var key in node) {
+                        if (key === 'type' || key === 'start' || key === 'end') continue;
+                        var child = node[key];
+                        if (!child || typeof child !== 'object') continue;
+                        if (Array.isArray(child)) { for (var i = 0; i < child.length; i++) visit(child[i], shadowed); }
+                        else if (typeof child.type === 'string') visit(child, shadowed);
+                    }
+                    return;
+            }
+        }
+
+        visit(ast, Object.create(null));
     }
 
     /** Apply non-overlapping edits to source. Edits are sorted descending by start so each splice
