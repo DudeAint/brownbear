@@ -130,6 +130,28 @@ const bad = (n, e) => { console.log("  FAIL " + n + "\n       " + (e && e.messag
         ok("sidebarAction / menus.overrideContext / search.search / proxy.onRequest / commands.update / tabs.* inert-safe");
     } catch (e) { bad("remaining firefox stubs", e); }
 
+    // Sweep gap-fill: load-blocking + common Firefox/Chrome APIs across Tree Style Tab, uBlock Origin,
+    // Stylus, Violentmonkey, Simple Tab Groups, etc. — present so an unguarded init call doesn't throw.
+    try {
+        const info = await browser.runtime.getBrowserInfo();
+        assert.ok(info && typeof info.version === "string" && info.name, "runtime.getBrowserInfo → {name,version,...}");
+        assert.strictEqual(await browser.runtime.getBackgroundPage(), null, "runtime.getBackgroundPage → null (MV3)");
+        assert.strictEqual(browser.runtime.reload(), undefined, "runtime.reload is a no-op");
+        assert.ok(Array.isArray(await browser.runtime.getContexts({})), "runtime.getContexts → []");
+        assert.strictEqual(browser.runtime.OnInstalledReason.INSTALL, "install", "runtime.OnInstalledReason enum");
+        assert.strictEqual(typeof browser.menus.onShown.addListener, "function", "menus.onShown (TST bg unblock)");
+        assert.strictEqual(typeof browser.menus.onHidden.addListener, "function", "menus.onHidden");
+        assert.strictEqual(typeof browser.webNavigation.onCreatedNavigationTarget.addListener, "function", "webNavigation.onCreatedNavigationTarget (uBO bg unblock)");
+        const us = await browser.action.getUserSettings();
+        assert.strictEqual(typeof us.isOnToolbar, "boolean", "action.getUserSettings → {isOnToolbar}");
+        const port = browser.tabs.connect(1, {});
+        assert.strictEqual(typeof port.postMessage, "function", "tabs.connect → a Port object");
+        assert.ok(Array.isArray(await browser.fontSettings.getFontList()), "fontSettings.getFontList → []");
+        await browser.browsingData.removeCookies({});               // must not throw
+        assert.strictEqual(browser.extensionTypes.ImageFormat.PNG, "png", "extensionTypes.ImageFormat enum");
+        ok("sweep gap-fill: getBrowserInfo/getBackgroundPage/reload/getContexts/menus events/webNav/getUserSettings/tabs.connect/fontSettings/browsingData present");
+    } catch (e) { bad("sweep gap-fill", e); }
+
     console.log(`\n${passed} passed, ${failed} failed`);
     process.exit(failed === 0 ? 0 : 1);
 })();
