@@ -239,7 +239,11 @@
         // value assigned by the exporter after the import line (esbuild lazy `__esm` init) is seen live.
         // Conservative: only references provably unshadowed by an inner scope are rewritten; the rest
         // fall back to the eager snapshot rewriteImport emitted (today's behaviour, never a crash).
-        rewriteLiveRefs(ast, live, edits);
+        // Collected SEPARATELY so that, if the rewrite ever yields source that won't compile (an
+        // unforeseen construct), the whole module can fall back to the boundary-edits-only output
+        // below — making live bindings strictly non-regressive (worst case = pre-live-bindings behaviour).
+        var liveEdits = [];
+        rewriteLiveRefs(ast, live, liveEdits);
 
         // Dynamic import() and import.meta, anywhere in the tree. These compose with the boundary
         // edits above (an `export const x = import('y')` keeps the inner import() edit inside the
@@ -260,30 +264,54 @@
             }
         });
 
-        var rewritten = applyEdits(src, edits, path);
-        var fnSource = '"use strict";' + prelude.join('') + rewritten + '\n//# sourceURL=' + sourceURL;
-        var fn, isAsync = false;
-        try {
-            // eslint-disable-next-line no-new-func
-            fn = new Function('__exports', '__require', '__import', '__meta', '__export', '__fixup', fnSource);
-        } catch (e) {
-            var msg = e && e.message ? e.message : String(e);
-            if (/await/i.test(msg) && allowAsync) {
-                // Page module scripts legally use top-level await; compile the body as an AsyncFunction
-                // so it validates, and flag it so the bundler emits an async wrapper + awaits it.
-                try {
+        // Compile the module body for a given edit set. Page module scripts legally use top-level await,
+        // so on the "await" SyntaxError (and only when allowed) recompile as an AsyncFunction and flag it
+        // for the bundler. A real syntax error rethrows to the caller, which decides whether to fall back.
+        function compile(editList) {
+            var rewritten = applyEdits(src, editList, path);
+            var fnSource = '"use strict";' + prelude.join('') + rewritten + '\n//# sourceURL=' + sourceURL;
+            var isAsync = false, fn;
+            try {
+                // eslint-disable-next-line no-new-func
+                fn = new Function('__exports', '__require', '__import', '__meta', '__export', '__fixup', fnSource);
+            } catch (e) {
+                var msg = e && e.message ? e.message : String(e);
+                if (/await/i.test(msg) && allowAsync) {
                     var AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
                     fn = new AsyncFunction('__exports', '__require', '__import', '__meta', '__export', '__fixup', fnSource);
                     isAsync = true;
+                } else if (/await/i.test(msg)) {
+                    throw new Error('top-level await is not supported in module service workers (' + path + ')');
+                } else {
+                    throw e;   // genuine syntax error — caller decides
+                }
+            }
+            return { fn: fn, isAsync: isAsync, fnSource: fnSource };
+        }
+
+        var result;
+        try {
+            result = compile(edits.concat(liveEdits));
+        } catch (e) {
+            var em = e && e.message ? e.message : String(e);
+            // A live-binding reference rewrite that produced uncompilable source must never make a module
+            // fail to pre-link: recompile with the boundary edits ONLY (the pre-live-bindings output —
+            // eager snapshot, no read-through). Surface the module so the rewrite gap can be fixed.
+            if (liveEdits.length && !/top-level await/.test(em)) {
+                if (global.console && global.console.warn) {
+                    global.console.warn('brownbear-esm-linker: live-binding rewrite fell back to snapshot for '
+                        + path + ' (' + em + ')');
+                }
+                try {
+                    result = compile(edits);
                 } catch (e2) {
                     throw new Error('codegen error in ' + path + ': ' + (e2 && e2.message ? e2.message : e2));
                 }
-            } else if (/await/i.test(msg)) {
-                throw new Error('top-level await is not supported in module service workers (' + path + ')');
             } else {
-                throw new Error('codegen error in ' + path + ': ' + msg);
+                throw new Error('codegen error in ' + path + ': ' + em);
             }
         }
+        var fn = result.fn, isAsync = result.isAsync, fnSource = result.fnSource;
         // Stash the rewritten body + static deps so the page bundler (which can't execute modules —
         // they need the page's DOM/window) can emit a self-contained classic bundle. Inert for the SW.
         fn.__bbSource = fnSource;
