@@ -126,8 +126,14 @@
     out.push("function __drainFix(){var q=__fixq;__fixq=[];for(var i=0;i<q.length;i++){try{q[i]();}catch(e){}}}");
 
     if (!anyAsync) {
+      // A failed module stays FAILED (ESM semantics): the cache records its error and re-import replays
+      // it, never handing back the half-built exports object the body populated before it threw. Without
+      // this, a module cached BEFORE its body runs left a partial exports object in __cache on throw; a
+      // later import() (Momentum re-imports through Vite's Promise.allSettled, which swallows the first
+      // rejection) got that partial object — e.g. Handlebars.template called on an object missing `.main`
+      // → "Unknown template object". The error replay turns one swallowed failure back into a real one.
       out.push(
-        "function __eval(path){var rec=__cache[path];if(rec)return rec.exports;" +
+        "function __eval(path){var rec=__cache[path];if(rec){if(rec.error)throw rec.error;return rec.exports;}" +
         "rec={exports:{}};__cache[path]=rec;var fn=__reg[path];" +
         'if(!fn)throw new Error("module not found: "+path);var here=path;' +
         "var require=function(s){return __eval(resolve(s,here));};" +
@@ -136,6 +142,7 @@
         "var exp=function(n,g){Object.defineProperty(rec.exports,n,{get:g,enumerable:true,configurable:true});};" +
         "__fdepth++;" +
         "try{fn(rec.exports,require,dyn,meta,exp,__fix);}" +
+        "catch(__bbErr){rec.error=__bbErr;throw __bbErr;}" +
         "finally{__fdepth--;if(__fdepth===0){__drainFix();}}" +
         "return rec.exports;}"
       );
@@ -144,7 +151,8 @@
       out.push(
         "function __eval(path){" +                                 // async; returns Promise<exports>
         "var rec=__cache[path];" +
-        "if(rec){return rec.done?Promise.resolve(rec.exports):(rec.promise||Promise.resolve(rec.exports));}" +
+        // A failed module stays failed: replay its rejection on re-import (see the sync runtime above).
+        "if(rec){if(rec.error)return Promise.reject(rec.error);return rec.done?Promise.resolve(rec.exports):(rec.promise||Promise.resolve(rec.exports));}" +
         "rec={exports:{},done:false,promise:null};__cache[path]=rec;" +
         "var fn=__reg[path];" +
         'if(!fn){return Promise.reject(new Error("module not found: "+path));}' +
@@ -160,7 +168,7 @@
         // with live getters), so awaiting it would deadlock; a done dep is ready. Only fresh deps are awaited.
         "if(__cache[dp])return;return __eval(dp);});})(deps[i]);}" +
         "rec.promise=p.then(function(){return fn(rec.exports,require,dyn,meta,exp,__fix);})" +
-        ".then(function(){rec.done=true;return rec.exports;});return rec.promise;}"
+        ".then(function(){rec.done=true;return rec.exports;},function(__bbErr){rec.error=__bbErr;throw __bbErr;});return rec.promise;}"
       );
       // Per-module resolved static deps, so the runtime can pre-evaluate them before each body runs.
       for (var d in modules) {
