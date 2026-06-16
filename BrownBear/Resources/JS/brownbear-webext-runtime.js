@@ -820,6 +820,17 @@
       onPortDisconnect: function (portId) {
         var p = ports[portId];
         if (p) { delete ports[portId]; p._fireDisconnect(); }
+      },
+      // Run code injected via chrome.scripting/tabs.executeScript WITH this extension's chrome (and browser)
+      // in scope — exactly as a manifest content script gets it. Without this, native eval'd the injected
+      // file RAW at the content world's global scope, where `chrome` is undefined (it's a closure var here,
+      // never a real global), so a re-injected content.js threw "Can't find variable: chrome" at its first
+      // chrome.* line. Direct eval keeps the executeScript({func}) return value AND lets the closure expose
+      // chrome/browser to the code and the listeners/callbacks it registers.
+      runInjected: function (code) {
+        var browser = chrome;   // some bundles read `browser` instead of `chrome`
+        try { return eval(code); }   // eslint-disable-line no-eval -- isolated content world, CSP-immune
+        catch (e) { reportContentError(e, token); return undefined; }
       }
     };
     return chrome;

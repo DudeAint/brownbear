@@ -519,32 +519,49 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
     func evaluateInContentFrames(extensionID: String, webView: WKWebView, world: WKContentWorld,
                                  code: String, frameIds: [Int]?, allFrames: Bool) async -> [[String: Any]] {
         let wanted: Set<Int>? = frameIds.map(Set.init)
+        // Run injected code WITH the extension's chrome (its content session's runInjected) ONLY in our
+        // isolated content world — never in the page MAIN world, where Chrome exposes no chrome and our
+        // __bbExtContent doesn't exist. Without this, executeScript'd a file raw at global scope and
+        // `chrome` was undefined (e.g. a popup re-injecting content.js → "Can't find variable: chrome").
+        let useChrome = (world == contentWorld)
         var results: [[String: Any]] = []
         // Main frame: when allFrames, when explicitly listed, or when no target was given (Chrome default).
         if allFrames || (wanted?.contains(0) ?? true) {
+            let token = useChrome ? contentSessionToken(extensionID: extensionID, webView: webView, frameId: 0) : nil
             let value: Any? = await withCheckedContinuation { continuation in
-                BBEvaluateJavaScriptForResult(webView, code, world) { result, _ in
+                BBEvaluateJavaScriptForResult(webView, injectionCode(code, token: token), world) { result, _ in
                     continuation.resume(returning: result)
                 }
             }
             results.append(["result": value ?? NSNull(), "frameId": 0])
         }
-        // Subframes: only reachable where this extension registered a content session.
-        let subframes = sessions.values.filter {
-            $0.isContent && $0.extensionID == extensionID && $0.webView === webView && $0.frameId != 0
+        // Subframes: only reachable where this extension registered a content session (so a token always exists).
+        let subframes = sessions.filter {
+            $0.value.isContent && $0.value.extensionID == extensionID && $0.value.webView === webView && $0.value.frameId != 0
         }
-        for session in subframes {
+        for (token, session) in subframes {
             if !allFrames {
                 guard let wanted, wanted.contains(session.frameId) else { continue }
             }
             let value: Any? = await withCheckedContinuation { continuation in
-                BBEvaluateJavaScriptInFrameForResult(webView, code, session.frameInfo, world) { result, _ in
+                let injected = injectionCode(code, token: useChrome ? token : nil)
+                BBEvaluateJavaScriptInFrameForResult(webView, injected, session.frameInfo, world) { result, _ in
                     continuation.resume(returning: result)
                 }
             }
             results.append(["result": value ?? NSNull(), "frameId": session.frameId])
         }
         return results
+    }
+
+    /// The token of `extensionID`'s content-script session in (`webView`, `frameId`), or nil if none — so
+    /// executeScript-injected code can run with that session's chrome via its runInjected. (Reads the private
+    /// `sessions`/`Session`, so it lives here rather than the +Inject companion.)
+    func contentSessionToken(extensionID: String, webView: WKWebView, frameId: Int) -> String? {
+        sessions.first {
+            $0.value.isContent && $0.value.extensionID == extensionID
+                && $0.value.webView === webView && $0.value.frameId == frameId
+        }?.key
     }
 
     func sendMessageToTab(extensionID: String, webView: WKWebView, message: Any, frameId: Int?) async -> Any? {

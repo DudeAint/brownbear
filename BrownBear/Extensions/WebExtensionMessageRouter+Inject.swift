@@ -49,6 +49,14 @@ extension WebExtensionMessageRouter {
         }
     }
 
+    /// Wrap injected code to run with the extension's chrome (its content session's runInjected), or return
+    /// it unchanged when there's no content session in the frame (raw eval, no chrome — as before). Native
+    /// routes content-world executeScript code through this so a re-injected content.js sees `chrome`.
+    func injectionCode(_ code: String, token: String?) -> String {
+        guard let token else { return code }
+        return "window.__bbExtContent['\(token)'].runInjected(\(Self.encodeJSONForJS(code)))"
+    }
+
     /// Read + run a content script's web-accessible `<script src>` resource in the page MAIN world. Gated
     /// exactly like the WAR scheme handler: an ENABLED extension's DECLARED `web_accessible_resources`
     /// entry, traversal-free, whose `matches` allow the requesting page. Returns `{found:true}` once the
