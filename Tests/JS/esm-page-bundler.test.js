@@ -108,19 +108,18 @@ function tick() { return new Promise((r) => setTimeout(r, 0)); }
         assert.deepStrictEqual(s.out, ["before=0", "after=2"]);
     });
 
-    await test("characterization: a reassigned exported PRIMITIVE is a one-time snapshot (named-import)", () => {
-        // KNOWN LIMITATION (tracked in PROGRESS.md as the next linker slice): the linker rewrites a named
-        // import to `var n = tmp.n` — a value captured once — so a later reassignment of the exporter's
-        // primitive `let` is NOT reflected in the importer. Namespace imports/re-exports stay live (see
-        // other tests). Acyclic const/object/function imports are unaffected. Full live primitive bindings
-        // need scope-aware identifier rewriting; this test pins the current boundary so a future fix is a
-        // deliberate, visible change rather than an accident.
+    await test("a reassigned exported PRIMITIVE is LIVE in a named import (scope-aware rewrite)", () => {
+        // FIXED (was a documented snapshot gap): the linker now rewrites a named import REFERENCE to read
+        // through the exporter's namespace (`tmp.n`) every time, so a later reassignment of the exporter's
+        // primitive `let` IS reflected in the importer — full ESM live bindings. This is the same fix that
+        // unbroke esbuild's lazy `__esm` init (Phantom's FORCE_PRODUCTION_API); see
+        // Tests/JS/esm-linker-live-bindings.test.js for the shape + the shadowing safety contract.
         const s = runGraph({
             "t2b/counter.js": "export let n = 0; export function inc(){ n++; }",
             "t2b/main.js": "import { n, inc } from './counter.js';" +
                            "out.push('before='+n); inc(); inc(); out.push('after='+n);"
         }, ["main.js"], "t2b/index.html");
-        assert.deepStrictEqual(s.out, ["before=0", "after=0"]); // snapshot, not live (documented gap)
+        assert.deepStrictEqual(s.out, ["before=0", "after=2"]); // live, not a one-time snapshot
     });
 
     await test("re-export (export { x as y } from) and export *", () => {
