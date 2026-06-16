@@ -191,56 +191,14 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
         if api == "getContentScripts" {
             return try await handleGetContentScripts(payload: payload, webView: webView, frameInfo: frameInfo)
         }
-        // MV3 world:"MAIN" injection (ScriptCat's inject.js + the cross-world bridge shim) evaluated in the
-        // page's REAL main world via native evaluateJavaScript — which, unlike an inline <script> element,
-        // is NOT subject to the page's CSP, so managers run on hardened sites too. No grant needed: this
-        // handler is registered ONLY in our isolated content world, so a page script can't reach it; the
-        // sending web view/frame is the trust anchor. Targets the requesting frame's page world.
-        if api == "page.injectMainWorld" {
-            if let webView, let code = payload["code"] as? String, !code.isEmpty {
-                // Reply only AFTER the MAIN-world eval completes, so the JS-side promise resolves
-                // post-execution. The WAR-script bridge sequences a diverted script's synthetic
-                // `script.onload` on this reply — it must not fire before the helper has actually run (a
-                // common onload→use-the-just-injected-helper handshake would otherwise call into nothing).
-                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                    let done: (Any?, Error?) -> Void = { _, _ in continuation.resume() }
-                    if let frameInfo {
-                        BBEvaluateJavaScriptInFrameForResult(webView, code, frameInfo, .page, done)
-                    } else {
-                        BBEvaluateJavaScriptForResult(webView, code, .page, done)
-                    }
-                }
-            }
-            return NSNull()
-        }
-        // A content script ran `<script src=chrome.runtime.getURL('x.js')>` to load a page-world helper; the
-        // page's CSP refuses both the script subresource (script-src) AND a content-world fetch of it
-        // (connect-src → "Load failed" on YouTube/GitHub). Chrome exempts web_accessible_resources from page
-        // CSP; we replicate it NATIVELY: read the declared WAR file (same manifest gating as the WAR scheme
-        // handler) and evaluate it in the page MAIN world via native eval (not CSP-gated). Tokenless — only our
-        // isolated content world can reach this handler. Returns {found:true} once the eval completes.
-        if api == "injectWarScript" {
-            guard let webView, let urlString = payload["url"] as? String, let url = URL(string: urlString),
-                  let host = url.host, ChromeWebStore.isExtensionID(host) else { return ["found": false] }
-            var path = url.path
-            while path.hasPrefix("/") { path.removeFirst() }
-            let pageURL = webView.url?.absoluteString
-            guard WebExtensionWARSchemeHandler.isTraversalFree(path),
-                  let ext = await store.ext(for: host), ext.enabled, let manifest = ext.manifest,
-                  WebExtensionWARSchemeHandler.isWebAccessible(path: path, pageURL: pageURL, manifest: manifest),
-                  let data = store.fileSync(extensionID: host, path: path),
-                  let code = String(data: data, encoding: .utf8), !code.isEmpty else {
-                return ["found": false]
-            }
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                let done: (Any?, Error?) -> Void = { _, _ in continuation.resume() }
-                if let frameInfo {
-                    BBEvaluateJavaScriptInFrameForResult(webView, code, frameInfo, .page, done)
-                } else {
-                    BBEvaluateJavaScriptForResult(webView, code, .page, done)
-                }
-            }
-            return ["found": true]
+        // Tokenless MAIN-world injection — world:"MAIN" managers (page.injectMainWorld) and the content
+        // script web-accessible <script> bridge (injectWarScript). Native evaluateJavaScript into the page
+        // world isn't subject to the page's CSP, so managers/helpers run on hardened sites too. Registered
+        // ONLY in our isolated content world (a page script can't reach it). Handled in +Inject.swift to keep
+        // this dispatcher under the body/complexity limits.
+        if let result = await handleMainWorldInjection(api: api, payload: payload,
+                                                       webView: webView, frameInfo: frameInfo) {
+            return result
         }
         // Tokenless: a back-forward-cache-restored document re-registering its purged session tokens
         // (document-start scripts don't re-run on a bfcache restore, so getContentScripts can't). Routed
