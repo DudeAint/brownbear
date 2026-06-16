@@ -330,7 +330,8 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
             return await routeHostFetch(payload: payload, extensionID: extensionID)
 
         default:
-            guard let result = await routeTabsAndScripting(api: api, payload: payload, extensionID: extensionID) else {
+            guard let result = await routeTabsAndScripting(api: api, payload: payload,
+                                                           extensionID: extensionID, webView: webView) else {
                 throw BrownBearError.bridgeRejected("unsupported extension api '\(api)'")
             }
             return result
@@ -340,15 +341,20 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
     /// chrome.tabs + chrome.scripting routing — driven through the browser's TabManager via the bridge
     /// host. A thin dispatcher over `routeTabs`/`routeScripting` so each switch stays well under the
     /// complexity limit. Returns nil for an api neither handles (route() then rejects it). A valid
-    /// extension token is already resolved by route().
-    private func routeTabsAndScripting(api: String, payload: [String: Any], extensionID: String) async -> Any? {
-        if let result = await routeTabs(api: api, payload: payload, extensionID: extensionID) { return result }
+    /// extension token is already resolved by route(). `webView` is the calling page's web view — used by
+    /// tabs.getCurrent to resolve the tab a full-page extension page (OneTab, a newtab override) lives in.
+    private func routeTabsAndScripting(api: String, payload: [String: Any], extensionID: String,
+                                       webView: WKWebView?) async -> Any? {
+        if let result = await routeTabs(api: api, payload: payload, extensionID: extensionID, webView: webView) {
+            return result
+        }
         return await routeScripting(api: api, payload: payload, extensionID: extensionID)
     }
 
     /// chrome.tabs.* (excluding the MV2 executeScript/insertCSS, which routeScripting owns). Returns nil
     /// for an api it doesn't handle. Handled cases always return a non-nil value (NSNull() for void).
-    private func routeTabs(api: String, payload: [String: Any], extensionID: String) async -> Any? {
+    private func routeTabs(api: String, payload: [String: Any], extensionID: String,
+                           webView: WKWebView?) async -> Any? {
         switch api {
         case "tabs.query":
             guard let host else { return [] }
@@ -359,7 +365,12 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
             return host.webExtTab(extTabId: payload["tabId"] as? Int) ?? NSNull()
 
         case "tabs.getCurrent":
-            return NSNull()   // meaningful only for an extension's own full-page tab (none on iOS)
+            // chrome.tabs.getCurrent returns the tab the calling page lives in — a real browser tab for a
+            // full-page extension page (OneTab's onetab.html, a newtab/options override), or undefined for
+            // a popup/offscreen document (no owning tab). Resolve the calling web view to its tab record;
+            // webExtTabRecord(forWebView:) returns nil for a popup/offscreen view, matching Chrome.
+            guard let host, let webView else { return NSNull() }
+            return host.webExtTabRecord(forWebView: webView) ?? NSNull()
 
         case "tabs.create":
             guard let host else { return NSNull() }
