@@ -248,7 +248,7 @@ final class SiteShieldsViewController: UIViewController {
 
         let toggleSwitch = UISwitch()
         toggleSwitch.isOn = isOn
-        toggleSwitch.onTintColor = BrownBearTheme.Palette.accent
+        toggleSwitch.onTintColor = BrownBearTheme.Palette.toggleOn
         toggleSwitch.setContentHuggingPriority(.required, for: .horizontal)
         toggleSwitch.setContentCompressionResistancePriority(.required, for: .horizontal)
         toggleSwitch.addAction(UIAction { [weak self, weak toggleSwitch, weak glyph] _ in
