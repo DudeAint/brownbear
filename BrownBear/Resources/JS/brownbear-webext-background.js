@@ -2532,6 +2532,10 @@
     onBrowserUpdateAvailable: makeEvent([]),
     onRestartRequired: makeEvent([]),
     onSuspend: makeEvent([]),
+    // Chrome fires this when a pending suspend is cancelled (an event-page/SW lifecycle pair with onSuspend).
+    // Our worker isn't suspended the same way, so it's an inert event — but extensions register it (Dashlane),
+    // and its absence threw "Cannot read properties of undefined (reading 'addListener')".
+    onSuspendCanceled: makeEvent([]),
     sendMessage: function () {
       // Accept (extensionId?, message, options?, callback?) — Chrome's overloaded shape. Returns a
       // Promise when no callback is given (MV3), which is how a worker awaits its offscreen document's
@@ -3710,6 +3714,14 @@
     });
   }
   var management = {
+    // Chrome's management enums (constants, not methods) — extensions read e.g. ExtensionInstallType.NORMAL
+    // to classify an install (Avira); values match Chrome's so a comparison behaves identically.
+    ExtensionInstallType: { ADMIN: 'admin', DEVELOPMENT: 'development', NORMAL: 'normal', SIDELOAD: 'sideload', OTHER: 'other' },
+    ExtensionDisabledReason: { UNKNOWN: 'unknown', PERMISSIONS_INCREASE: 'permissions_increase' },
+    ExtensionType: { EXTENSION: 'extension', HOSTED_APP: 'hosted_app', PACKAGED_APP: 'packaged_app',
+                     LEGACY_PACKAGED_APP: 'legacy_packaged_app', THEME: 'theme', LOGIN_SCREEN_EXTENSION: 'login_screen_extension' },
+    LaunchType: { OPEN_AS_REGULAR_TAB: 'OPEN_AS_REGULAR_TAB', OPEN_AS_PINNED_TAB: 'OPEN_AS_PINNED_TAB',
+                  OPEN_AS_WINDOW: 'OPEN_AS_WINDOW', OPEN_FULL_SCREEN: 'OPEN_FULL_SCREEN' },
     getSelf: function (cb) { return settleBg(managementCall('getSelf', {}), cb); },
     get: function (id, cb) { return settleBg(managementCall('get', { id: id }), cb); },
     getAll: function (cb) { return settleBg(managementCall('getAll', {}), cb); },
