@@ -1438,7 +1438,7 @@
   W.browser = chrome;
 
   // Native push surface: storage.onChanged is delivered by the host evaluating into this page.
-  W.__brownbearExtPage = {
+  var __bbExtPageBridge = {
     dispatchStorageChanged: function (areaName, changesJSON) {
       var raw;
       try { raw = _JSON.parse(changesJSON); } catch (e) { raw = {}; }
@@ -1533,5 +1533,26 @@
       if (p) { delete ports[portId]; p._fireDisconnect(); }
     }
   };
-  W.__brownbearExtPageReady = true;
+
+  // Lock the native→page bridge as a NON-configurable, NON-writable own property so a hardened bundle
+  // that scuttles globalThis can't replace it with a throwing getter. LavaMoat's scuttleGlobalThis
+  // (MetaMask) walks every own window property and, for any not in its allowlist, installs a throwing
+  // accessor IF the prop is configurable, a throwing Proxy IF non-configurable-but-writable, and SKIPS
+  // it only when it is BOTH non-configurable AND non-writable (`if (desc.writable !== true) return`) —
+  // which is exactly why `chrome`/`browser` survive. A plain `W.__brownbearExtPage = {…}` is
+  // configurable, so it was scuttled into a getter that throws "property … is inaccessible under
+  // scuttling mode" the instant native evaluated `window.__brownbearExtPage.dispatchX(...)`, killing
+  // every push (messages, ports, storage/cookie/notification events) into the wallet UI. Locking it
+  // here makes scuttle skip it. The bridge object is fully assembled above and only ever READ by native
+  // afterward (its members stay mutable; only the binding is frozen), so immutability is safe. Use the
+  // captured `_Object` so a page that tampered with Object.defineProperty can't subvert the lock; the
+  // try/catch degrades to today's plain assignment (never worse) if defineProperty is unavailable.
+  try {
+    _Object.defineProperty(W, "__brownbearExtPage",
+      { value: __bbExtPageBridge, writable: false, configurable: false, enumerable: false });
+  } catch (e) { W.__brownbearExtPage = __bbExtPageBridge; }
+  try {
+    _Object.defineProperty(W, "__brownbearExtPageReady",
+      { value: true, writable: false, configurable: false, enumerable: false });
+  } catch (e) { W.__brownbearExtPageReady = true; }
 })();
