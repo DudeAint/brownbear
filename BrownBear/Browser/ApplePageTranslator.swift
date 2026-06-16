@@ -72,9 +72,12 @@ final class ApplePageTranslator {
     /// Whether the device can translate `source`→`target` at all (installed or downloadable), so the caller
     /// can fail fast with a clear message instead of starting a run that the framework will reject.
     static func canTranslate(from source: String?, to target: String) async -> Bool {
+        // status(from:) needs a known source language; with an unknown source, don't pre-gate — let the
+        // session attempt it (translate() surfaces any failure) rather than blocking on an availability check.
+        guard let source, !source.isEmpty else { return true }
         let availability = LanguageAvailability()
-        let src = source.flatMap { $0.isEmpty ? nil : Locale.Language(identifier: $0) }
-        let status = await availability.status(from: src, to: Locale.Language(identifier: target))
+        let status = await availability.status(from: Locale.Language(identifier: source),
+                                               to: Locale.Language(identifier: target))
         switch status {
         case .installed, .supported: return true
         case .unsupported: return false
