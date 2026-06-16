@@ -239,6 +239,56 @@ function tick() { return new Promise((r) => setTimeout(r, 0)); }
         assert.strictEqual(rep.errors.length, 0, "no errors on a clean run");
     });
 
+    // A failed module stays FAILED (ESM semantics): re-importing it must replay the original error, never
+    // hand back the half-built exports object the body populated before it threw. The old runtime cached
+    // the record BEFORE running the body and never evicted it on throw, so a re-import returned partial
+    // exports — Momentum re-imports through Vite's Promise.allSettled (swallows the first rejection) and a
+    // consumer then called Handlebars.template on an object missing `.main` → "Unknown template object".
+    await test("sync runtime: a module that threw is re-thrown on re-import, never partial exports", async () => {
+        const s = runGraph({
+            "pcs/bad.js": "globalThis.__pcs=(globalThis.__pcs||0)+1; export const ready = true; throw new Error('boom-sync');",
+            "pcs/main.js":
+                "globalThis.__pcs = 0;" +
+                "import('./bad.js').catch(function(e){ out.push('first:'+e.message);" +
+                "  return import('./bad.js').then(" +
+                "    function(m){ out.push('second-partial:'+(m&&m.ready)); }," +
+                "    function(e2){ out.push('second:'+e2.message); }); })" +
+                ".then(function(){ out.push('runs:'+globalThis.__pcs); });"
+        }, ["main.js"], "pcs/index.html", { quietConsole: true });
+        await tick(); await tick(); await tick(); await tick();
+        assert.ok(s.out.indexOf("first:boom-sync") !== -1, "first import rejects: " + JSON.stringify(s.out));
+        assert.ok(s.out.indexOf("second:boom-sync") !== -1, "re-import RE-THROWS (not partial exports): " + JSON.stringify(s.out));
+        assert.ok(s.out.indexOf("second-partial:true") === -1, "must NOT hand back the half-built exports");
+        assert.ok(s.out.indexOf("runs:1") !== -1, "the body runs exactly once");
+    });
+
+    await test("async runtime: a failed module is re-rejected on re-import (TLA bundle)", async () => {
+        // tla.js flips the bundle to the async runtime; e1 pre-evaluates bad.js (it throws, caching the
+        // failure); e2 then re-imports bad.js and must get the SAME rejection, not the half-built exports.
+        const s = runGraph({
+            "pca/bad.js": "globalThis.__pca=(globalThis.__pca||0)+1; export const ready = true; throw new Error('boom-async');",
+            "pca/tla.js": "await Promise.resolve(); out.push('tla');",
+            "pca/e1.js": "import './bad.js'; out.push('e1-ran');",
+            "pca/e2.js":
+                "try{ const m = await import('./bad.js'); out.push('e2-partial:'+(m&&m.ready)); }" +
+                "catch(e){ out.push('e2-reimport:'+e.message); } out.push('runs:'+globalThis.__pca);"
+        }, ["tla.js", "e1.js", "e2.js"], "pca/index.html", { quietConsole: true });
+        await tick(); await tick(); await tick(); await tick(); await tick();
+        assert.ok(s.out.indexOf("e2-reimport:boom-async") !== -1, "re-import RE-REJECTS (not partial exports): " + JSON.stringify(s.out));
+        assert.ok(s.out.indexOf("e2-partial:true") === -1, "must NOT resolve with the half-built exports");
+        assert.ok(s.out.indexOf("runs:1") !== -1, "the body runs exactly once");
+    });
+
+    // Regression guard for the (refuted) "fresh strings per call" hypothesis: a tagged-template literal in a
+    // bundled module must return the SAME strings object on every call (engine per-call-site caching intact).
+    await test("tagged-template strings identity is stable across calls in a bundle", () => {
+        const s = runGraph({
+            "tt/lib.js": "function tag(strings){ return strings; } export function make(){ return tag`a${1}b`; }",
+            "tt/main.js": "import { make } from './lib.js'; out.push('same='+(make() === make()));"
+        }, ["main.js"], "tt/index.html");
+        assert.deepStrictEqual(s.out, ["same=true"]);
+    });
+
     console.log("\n" + passed + " passed, " + failed + " failed");
     if (failed > 0) { process.exit(1); }
 })();
