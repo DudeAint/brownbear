@@ -262,6 +262,32 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
             await storage.clear(extensionID: extensionID, area: area)
             return NSNull()
 
+        // Firefox browser.sessions.{get,set,remove}{Window,Tab}Value — a per-extension session value
+        // store kept separate from the storage.* areas (so it never pollutes storage.local). The JS shim
+        // collapses every window id to one bucket (single-window iOS); a value is the JSON string it sent.
+        case "sessions.getValue":
+            guard let key = payload["key"] as? String else {
+                throw BrownBearError.bridgeRejected("sessions.getValue missing key")
+            }
+            return await storage.sessionGetValue(extensionID: extensionID,
+                                                  bucket: sessionBucket(payload), key: key) ?? NSNull()
+
+        case "sessions.setValue":
+            guard let key = payload["key"] as? String, let value = payload["value"] as? String else {
+                throw BrownBearError.bridgeRejected("sessions.setValue missing key/value")
+            }
+            await storage.sessionSetValue(extensionID: extensionID, bucket: sessionBucket(payload),
+                                          key: key, json: value)
+            return NSNull()
+
+        case "sessions.removeValue":
+            guard let key = payload["key"] as? String else {
+                throw BrownBearError.bridgeRejected("sessions.removeValue missing key")
+            }
+            await storage.sessionRemoveValue(extensionID: extensionID,
+                                              bucket: sessionBucket(payload), key: key)
+            return NSNull()
+
         case "runtime.sendMessage":
             // Content script / page → its extension's other contexts (background worker + open pages).
             // `message` is any JSON. `token` (the sender) is passed so a page never gets its own message.
@@ -668,6 +694,15 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
     }
 
     // MARK: - JS shim helpers
+
+    /// Collapse a sessions value lookup to a single bucket id: "window:<id>" or "tab:<id>". The JS shim
+    /// already normalizes every window id to "w" (iOS is single-window), so getWindowValue(M) and
+    /// getWindowValue(WINDOW_ID_CURRENT) land in the SAME bucket; a tab value is keyed by its tab id.
+    private func sessionBucket(_ payload: [String: Any]) -> String {
+        let scope = (payload["scope"] as? String) == "tab" ? "tab" : "window"
+        let id = (payload["id"] as? String) ?? "w"
+        return "\(scope):\(id)"
+    }
 
     private func resolveInjectedCode(payload: [String: Any], extensionID: String, separator: String) async -> String {
         if let code = payload["code"] as? String, !code.isEmpty { return code }

@@ -578,12 +578,67 @@
     deleteAll: function (cb) { return pres(undefined, cb); },
     onVisited: makeEvent([]), onVisitRemoved: makeEvent([])
   };
+  // Native returns the stored JSON string, or null when the key was never set. Firefox resolves an unset
+  // key to undefined (NOT null) — Sidebery branches on `=== undefined`, so the distinction matters.
+  function decodeSessionValue(raw) {
+    if (raw === null || raw === undefined) { return undefined; }
+    try { return _JSON.parse(raw); } catch (e) { return raw; }
+  }
   var sessionsApi = {
     getRecentlyClosed: function (filter, cb) { return pres([], (typeof filter === "function") ? filter : cb); },
     getDevices: function (filter, cb) { return pres([], (typeof filter === "function") ? filter : cb); },
     restore: function (sessionId, cb) { return pres({}, (typeof sessionId === "function") ? sessionId : cb); },
+    // Firefox per-window / per-tab session values. Sidebery (MV2 bg PAGE + sidebar_action) calls
+    // getWindowValue with BOTH a resolved window id and windows.WINDOW_ID_CURRENT (-2); iOS is single-
+    // window, so every window id collapses to ONE native bucket ("w"). Values are JSON; an unset key
+    // resolves to undefined. Routed natively so the bg page and sidebar share one live, persisted store.
+    getWindowValue: function (windowId, key, cb) {
+      return settle(bridge("sessions.getValue", { scope: "window", id: "w", key: String(key) })
+        .then(decodeSessionValue), cb);
+    },
+    setWindowValue: function (windowId, key, value, cb) {
+      return settle(bridge("sessions.setValue", { scope: "window", id: "w", key: String(key),
+        value: _JSON.stringify(value === undefined ? null : value) }).then(function () { return undefined; }), cb);
+    },
+    removeWindowValue: function (windowId, key, cb) {
+      return settle(bridge("sessions.removeValue", { scope: "window", id: "w", key: String(key) })
+        .then(function () { return undefined; }), cb);
+    },
+    getTabValue: function (tabId, key, cb) {
+      return settle(bridge("sessions.getValue", { scope: "tab", id: String(tabId), key: String(key) })
+        .then(decodeSessionValue), cb);
+    },
+    setTabValue: function (tabId, key, value, cb) {
+      return settle(bridge("sessions.setValue", { scope: "tab", id: String(tabId), key: String(key),
+        value: _JSON.stringify(value === undefined ? null : value) }).then(function () { return undefined; }), cb);
+    },
+    removeTabValue: function (tabId, key, cb) {
+      return settle(bridge("sessions.removeValue", { scope: "tab", id: String(tabId), key: String(key) })
+        .then(function () { return undefined; }), cb);
+    },
     MAX_SESSION_RESULTS: 25,
     onChanged: makeEvent([])
+  };
+  // Firefox browser.theme — iOS WKWebView has no Firefox theme, but getCurrent must return a valid (empty)
+  // theme object rather than be undefined, or a consumer (Sidebery, in Firefox mode) crashes reading it.
+  var themeApi = {
+    getCurrent: function (windowId, cb) {
+      var c = (typeof windowId === "function") ? windowId : cb;
+      return pres({ colors: null, images: null, properties: null }, c);
+    },
+    update: function () { var c = arguments[arguments.length - 1]; return pres(undefined, (typeof c === "function") ? c : undefined); },
+    reset: function () { var c = arguments[arguments.length - 1]; return pres(undefined, (typeof c === "function") ? c : undefined); },
+    onUpdated: makeEvent([])
+  };
+  // Firefox browser.contextualIdentities (containers) — iOS has none; present an inert namespace so the
+  // sidebar shows "no containers" instead of throwing. query MUST resolve [] (not reject), the rest reject.
+  var contextualIdentitiesApi = {
+    query: function (details, cb) { return settle(_Promise.resolve([]), (typeof details === "function") ? details : cb); },
+    get: function (id, cb) { return settle(_Promise.reject(new Error("No contextual identity: " + id)), cb); },
+    create: function (details, cb) { return settle(_Promise.reject(new Error("contextualIdentities unsupported")), cb); },
+    update: function (id, details, cb) { return settle(_Promise.reject(new Error("contextualIdentities unsupported")), cb); },
+    remove: function (id, cb) { return settle(_Promise.reject(new Error("contextualIdentities unsupported")), cb); },
+    onCreated: makeEvent([]), onUpdated: makeEvent([]), onRemoved: makeEvent([])
   };
   var searchApi = { query: function (info, cb) { return pres(undefined, cb); } };
   var pageActionApi = {
@@ -1279,6 +1334,8 @@
     bookmarks: bookmarksApi,
     history: historyApi,
     sessions: sessionsApi,
+    theme: themeApi,
+    contextualIdentities: contextualIdentitiesApi,
     search: searchApi,
     pageAction: pageActionApi,
     sidePanel: sidePanelApi,
