@@ -50,7 +50,7 @@ final class WebExtensionModuleWorkerTests: XCTestCase {
                      manifestJSON: #"{"manifest_version":3,"name":"ModuleTest","version":"1.0","background":{"service_worker":"sw.js","type":"module"}}"#,
                      baseURL: "chrome-extension://\(extensionID)/",
                      messages: [:],
-                     moduleEntry: entry,
+                     moduleEntries: [entry],
                      esmRuntimeJS: try esmRuntimeSource(),
                      moduleSource: source)
         return context
