@@ -95,6 +95,10 @@ extension BrownBearBrowserViewController {
         let engine = AppSettings.searchEngine
         let engineHost = URL(string: engine.formAction)?.host ?? "www.google.com"
 
+        // Sections the user dismissed via the New Tab page's long-press "Hide". Each hideable section is
+        // omitted server-side (so it never flashes) when its id is in this set.
+        let hidden = AppSettings.newTabHiddenSections
+
         var sections = ""
         var delayStep = 0.10
         if !visitedWeb.isEmpty {
@@ -108,13 +112,15 @@ extension BrownBearBrowserViewController {
             delayStep += 0.06
         }
         if visitedWeb.isEmpty && web.isEmpty {
-            sections = newTabGuideHTML
-        } else {
+            sections = newTabGuideHTML(hidden: hidden)
+        } else if !hidden.contains("github") {
             sections += newTabFooterHTML
         }
-        // Then always pin the "report a broken extension" CTA below it — BrownBear's whole pitch is
-        // running every extension, so the fastest way we hear about (and fix) a broken one is one tap away.
-        sections += newTabIssueCTA
+        // Then pin the "report a broken extension" CTA below it — BrownBear's whole pitch is running every
+        // extension, so the fastest way we hear about (and fix) a broken one is one tap away (unless hidden).
+        if !hidden.contains("report") {
+            sections += newTabIssueCTA
+        }
 
         // The search box's history popover data (recent sites), embedded safely for the inline script.
         let histItems = visitedWeb.prefix(8).map { ["t": $0.title, "u": $0.url.absoluteString, "h": $0.url.host ?? ""] }
@@ -243,6 +249,19 @@ extension BrownBearBrowserViewController {
       transition:transform .16s cubic-bezier(.34,1.56,.64,1);}
     .cta a:active{transform:scale(.94);}
     .cta a svg{width:15px;height:15px;flex:none;}
+    /* Long-press-hideable promo sections: suppress the iOS callout/selection so the hold gesture is ours,
+       and the small glass "Hide this" menu the hold pops up. */
+    .hideable{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;}
+    .bbhmenu{position:fixed;z-index:50;opacity:0;transform:translateY(4px) scale(.96);
+      transition:opacity .14s ease,transform .14s cubic-bezier(.34,1.4,.64,1);
+      background:var(--glass2);backdrop-filter:blur(20px) saturate(1.4);-webkit-backdrop-filter:blur(20px) saturate(1.4);
+      border:1px solid var(--hair);border-radius:12px;box-shadow:0 10px 28px rgba(0,0,0,.22);padding:4px;}
+    .bbhmenu.on{opacity:1;transform:translateY(0) scale(1);}
+    .bbhmenu button{appearance:none;-webkit-appearance:none;border:0;background:transparent;color:var(--text);
+      font:600 14px/1 -apple-system,system-ui,sans-serif;padding:10px 16px;border-radius:9px;white-space:nowrap;
+      display:flex;align-items:center;gap:8px;}
+    .bbhmenu button:active{background:var(--s2);}
+    .bbhmenu button svg{width:15px;height:15px;flex:none;stroke:var(--sub);}
     @media (max-width:380px){.grid{grid-template-columns:repeat(3,1fr);}}
     """
 
@@ -267,6 +286,44 @@ extension BrownBearBrowserViewController {
           inp.addEventListener("input",function(){render(inp.value)?sg.classList.add("on"):sg.classList.remove("on");});
           inp.addEventListener("blur",function(){setTimeout(function(){sg.classList.remove("on");},160);});
         }
+        // Long-press a promo section (.hideable: the GitHub rows, the Report-it pill, the intro card) to
+        // pop a small "Hide this" menu; tapping it removes the section and tells native to keep it hidden
+        // (bbnewtab://hide/<id>, intercepted + cancelled by the nav delegate). The hold also cancels the
+        // link tap that would otherwise follow.
+        (function(){
+          var menu=null,pressTimer=null,suppress=false,pressedEl=null;
+          function closeMenu(){if(menu){menu.remove();menu=null;}}
+          function showMenu(el,x,y){
+            closeMenu();
+            var id=el.getAttribute("data-bbhide");if(!id)return;
+            menu=document.createElement("div");menu.className="bbhmenu";
+            var b=document.createElement("button");b.type="button";
+            b.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M10.7 5.1A10 10 0 0112 5c5 0 9 4.5 10 7a17 17 0 01-3.3 4.3M6.6 6.6C4.2 8 2.7 10 2 12c1 2.5 5 7 10 7 1.6 0 3-.4 4.3-1"/></svg><span>Hide this</span>';
+            b.addEventListener("click",function(ev){ev.preventDefault();ev.stopPropagation();
+              el.style.transition="opacity .15s ease,transform .15s ease";el.style.opacity="0";el.style.transform="scale(.96)";
+              setTimeout(function(){if(el&&el.parentNode)el.parentNode.removeChild(el);},160);
+              closeMenu();
+              try{location.href="bbnewtab://hide/"+encodeURIComponent(id);}catch(e){}
+            });
+            menu.appendChild(b);document.body.appendChild(menu);
+            var w=menu.offsetWidth,mh=menu.offsetHeight;
+            menu.style.left=Math.max(8,Math.min(x-w/2,window.innerWidth-w-8))+"px";
+            menu.style.top=Math.max(8,y-mh-12)+"px";
+            requestAnimationFrame(function(){menu.classList.add("on");});
+          }
+          document.addEventListener("touchstart",function(e){
+            var el=e.target.closest?e.target.closest(".hideable"):null;if(!el)return;
+            pressedEl=el;suppress=false;var t=e.touches[0],sx=t.clientX,sy=t.clientY;
+            pressTimer=setTimeout(function(){pressTimer=null;suppress=true;showMenu(el,sx,sy);},450);
+          },{passive:true});
+          function cancelPress(){if(pressTimer){clearTimeout(pressTimer);pressTimer=null;}}
+          document.addEventListener("touchend",cancelPress,{passive:true});
+          document.addEventListener("touchmove",cancelPress,{passive:true});
+          document.addEventListener("click",function(e){
+            if(suppress&&pressedEl&&pressedEl.contains(e.target)){e.preventDefault();e.stopPropagation();suppress=false;return;}
+            if(menu&&!menu.contains(e.target))closeMenu();
+          },true);
+        })();
         """
     }
 
@@ -309,49 +366,59 @@ extension BrownBearBrowserViewController {
     // swiftlint:enable line_length
 
     /// The onboarding guide shown on a fresh New Tab page (no bookmarks/history yet). Static, first-party.
-    private static var newTabGuideHTML: String { """
-    <div class="hello fade" style="animation-delay:.06s">
-      <p class="t">Make the web yours</p>
-      <p class="d">A power browser that runs userscripts and real extensions, right on iOS.</p>
-    </div>
-    <div class="guide">
-      <a class="row fade" style="animation-delay:.14s" href="https://greasyfork.org/">
-        <span class="g">\(glyphScript)</span>
-        <span class="body">
-          <p class="t">Userscripts</p>
-          <p class="d">Install a script to change how any site looks or works. Browse thousands on GreasyFork.</p>
-        </span>
-        <span class="chev"></span>
-      </a>
-      <a class="row fade" style="animation-delay:.2s" href="https://chromewebstore.google.com/">
-        <span class="g">\(glyphPuzzle)</span>
-        <span class="body">
-          <p class="t">Extensions</p>
-          <p class="d">Add Chrome and Firefox extensions: ad blockers, userscript managers, and more.</p>
-        </span>
-        <span class="chev"></span>
-      </a>
-      <div class="row fade" style="animation-delay:.26s">
-        <span class="g">\(glyphTheme)</span>
-        <span class="body">
-          <p class="t">Make it yours</p>
-          <p class="d">Light, Dark, or the classic OG BrownBear theme, in Settings &rsaquo; Appearance.</p>
-        </span>
-      </div>
-      <a class="row fade" style="animation-delay:.32s" href="https://github.com/DudeAint/brownbear">
-        <span class="g">\(glyphGithub)</span>
-        <span class="body">
-          <p class="t">Open on GitHub</p>
-          <p class="d">BrownBear is built in the open. Follow along, file issues, or star the project.</p>
-        </span>
-        <span class="chev"></span>
-      </a>
-    </div>
-    """ }
+    /// The intro card ("intro") and the GitHub row ("github") are long-press-hideable; `hidden` omits any
+    /// section the user dismissed so it doesn't render at all.
+    private static func newTabGuideHTML(hidden: Set<String>) -> String {
+        let intro = hidden.contains("intro") ? "" : """
+        <div class="hello fade hideable" data-bbhide="intro" style="animation-delay:.06s">
+          <p class="t">Make the web yours</p>
+          <p class="d">A power browser that runs userscripts and real extensions, right on iOS.</p>
+        </div>
+        """
+        let github = hidden.contains("github") ? "" : """
+        <a class="row fade hideable" data-bbhide="github" style="animation-delay:.32s" href="https://github.com/DudeAint/brownbear">
+          <span class="g">\(glyphGithub)</span>
+          <span class="body">
+            <p class="t">Open on GitHub</p>
+            <p class="d">BrownBear is built in the open. Follow along, file issues, or star the project.</p>
+          </span>
+          <span class="chev"></span>
+        </a>
+        """
+        return """
+        \(intro)
+        <div class="guide">
+          <a class="row fade" style="animation-delay:.14s" href="https://greasyfork.org/">
+            <span class="g">\(glyphScript)</span>
+            <span class="body">
+              <p class="t">Userscripts</p>
+              <p class="d">Install a script to change how any site looks or works. Browse thousands on GreasyFork.</p>
+            </span>
+            <span class="chev"></span>
+          </a>
+          <a class="row fade" style="animation-delay:.2s" href="https://chromewebstore.google.com/">
+            <span class="g">\(glyphPuzzle)</span>
+            <span class="body">
+              <p class="t">Extensions</p>
+              <p class="d">Add Chrome and Firefox extensions: ad blockers, userscript managers, and more.</p>
+            </span>
+            <span class="chev"></span>
+          </a>
+          <div class="row fade" style="animation-delay:.26s">
+            <span class="g">\(glyphTheme)</span>
+            <span class="body">
+              <p class="t">Make it yours</p>
+              <p class="d">Light, Dark, or the classic OG BrownBear theme, in Settings &rsaquo; Appearance.</p>
+            </span>
+          </div>
+        \(github)
+        </div>
+        """
+    }
 
-    /// A slim footer (returning users) keeping GitHub one tap away below their tiles.
+    /// A slim footer (returning users) keeping GitHub one tap away below their tiles. Long-press-hideable.
     private static let newTabFooterHTML = """
-    <a class="row fade" style="animation-delay:.3s" href="https://github.com/DudeAint/brownbear">
+    <a class="row fade hideable" data-bbhide="github" style="animation-delay:.3s" href="https://github.com/DudeAint/brownbear">
       <span class="g">\(glyphGithub)</span>
       <span class="body">
         <p class="t">Open on GitHub</p>
@@ -393,7 +460,7 @@ extension BrownBearBrowserViewController {
         let href = htmlEscape(components?.url?.absoluteString
             ?? "https://github.com/DudeAint/brownbear/issues/new")
         return """
-        <p class="cta fade" style="animation-delay:.36s"><a href="\(href)">\(glyphGithub)Extension not working? Report it</a></p>
+        <p class="cta fade hideable" data-bbhide="report" style="animation-delay:.36s"><a href="\(href)">\(glyphGithub)Extension not working? Report it</a></p>
         """
     }
 
