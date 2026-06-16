@@ -22,7 +22,7 @@ extension WebExtensionBackgroundContext {
     /// file returns JS `null` so the linker fails closed with "module not found" rather than crashing.
     func runModuleWorker(in context: JSContext,
                          esmRuntimeJS: String,
-                         entryPath: String,
+                         entryPaths: [String],
                          moduleSource: @escaping @Sendable (String) -> Data?) {
         // Returns the module's source, or nil → JS null/undefined so the linker fails closed with
         // "module not found" (matches the importScript bridge pattern in HeadlessScriptRunner).
@@ -43,6 +43,17 @@ extension WebExtensionBackgroundContext {
         // The linker reports parse/resolution failures by throwing; the context's exceptionHandler
         // (installed in boot) logs them. A thrown error here leaves the worker un-booted, which is
         // the correct fail-closed outcome for an extension whose module graph can't be linked.
-        runner.call(withArguments: [entryPath])
+        //
+        // A background PAGE can carry MORE THAN ONE `<script type="module">` (Sidebery: a locale dict
+        // module BEFORE the real background.js). A browser runs each in document order, each its own
+        // graph but sharing the global + the linker's module cache. Run them in order in this one context;
+        // a throw in one entry is logged and cleared so the next still runs (independent module scripts).
+        for entryPath in entryPaths {
+            runner.call(withArguments: [entryPath])
+            if let exception = context.exception {
+                logSink(makeLog(.error, "background module \(entryPath) failed to link: \(exception)"))
+                context.exception = nil
+            }
+        }
     }
 }
