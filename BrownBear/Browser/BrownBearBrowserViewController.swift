@@ -109,6 +109,10 @@ final class BrownBearBrowserViewController: UIViewController {
     /// Internal for the +Navigation companion file (same controller-private intent).
     var viewSourceAllowOnce: Set<URL> = []
 
+    /// The in-page translation bar (Translate menu action), shown while the active page is translated.
+    /// Managed in BrownBearBrowserViewController+Translate.swift; held so it can be replaced/dismissed.
+    var translateBar: TranslateBar?
+
     /// Live address-bar autocomplete shown while editing the omnibox (history + the typed action).
     /// Not `private`: the omnibox delegate logic lives in BrownBearBrowserViewController+Omnibox.swift.
     let omniboxSuggestions = OmniboxSuggestionsView()
@@ -876,6 +880,8 @@ extension BrownBearBrowserViewController: BrowserMenuDelegate {
             presentProxy()
         case .reader:
             presentReader()
+        case .translatePage:
+            presentTranslatePage()
         case .zoom:
             presentZoomHUD()
         }
