@@ -38,7 +38,7 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
     }
 
     let store: WebExtensionStore   // internal: the +ContextMenus / +Ports extension files reach it
-    private let storage: WebExtensionStorage
+    let storage: WebExtensionStorage   // internal: the +Storage extension file reaches it
     private let runtime: WebExtensionRuntime
     /// The world content scripts (and thus their __bbExtContent push targets) live in. Pushes are
     /// evaluated into this world so they reach the content script's closure, not the page.
@@ -230,7 +230,12 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
         }
 
         let extensionID = try await resolve(token)
-        let area = WebExtensionStorage.Area(rawValue: (payload["area"] as? String) ?? "local") ?? .local
+
+        // chrome.storage.* + the Firefox sessions value store — handled in WebExtensionMessageRouter+Storage
+        // (split out to keep route() and this class within the SwiftLint size/complexity limits).
+        if api.hasPrefix("storage.") || api.hasPrefix("sessions.") {
+            return try await routeStorageAndSessions(api: api, payload: payload, extensionID: extensionID)
+        }
 
         // A popup/options page forwarding its own console / uncaught errors. No grant needed — it only
         // writes a log line scoped to this extension, so its blank-page failures are diagnosable.
@@ -242,52 +247,6 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
         }
 
         switch api {
-        case "storage.get":
-            let keys = payload["keys"] as? [String]   // nil = all
-            return await storage.get(extensionID: extensionID, area: area, keys: keys)
-
-        case "storage.set":
-            guard let items = payload["items"] as? [String: String] else {
-                throw BrownBearError.bridgeRejected("storage.set missing items")
-            }
-            await storage.set(extensionID: extensionID, area: area, items: items)
-            return NSNull()
-
-        case "storage.remove":
-            let keys = payload["keys"] as? [String] ?? []
-            await storage.remove(extensionID: extensionID, area: area, keys: keys)
-            return NSNull()
-
-        case "storage.clear":
-            await storage.clear(extensionID: extensionID, area: area)
-            return NSNull()
-
-        // Firefox browser.sessions.{get,set,remove}{Window,Tab}Value — a per-extension session value
-        // store kept separate from the storage.* areas (so it never pollutes storage.local). The JS shim
-        // collapses every window id to one bucket (single-window iOS); a value is the JSON string it sent.
-        case "sessions.getValue":
-            guard let key = payload["key"] as? String else {
-                throw BrownBearError.bridgeRejected("sessions.getValue missing key")
-            }
-            return await storage.sessionGetValue(extensionID: extensionID,
-                                                  bucket: sessionBucket(payload), key: key) ?? NSNull()
-
-        case "sessions.setValue":
-            guard let key = payload["key"] as? String, let value = payload["value"] as? String else {
-                throw BrownBearError.bridgeRejected("sessions.setValue missing key/value")
-            }
-            await storage.sessionSetValue(extensionID: extensionID, bucket: sessionBucket(payload),
-                                          key: key, json: value)
-            return NSNull()
-
-        case "sessions.removeValue":
-            guard let key = payload["key"] as? String else {
-                throw BrownBearError.bridgeRejected("sessions.removeValue missing key")
-            }
-            await storage.sessionRemoveValue(extensionID: extensionID,
-                                              bucket: sessionBucket(payload), key: key)
-            return NSNull()
-
         case "runtime.sendMessage":
             // Content script / page → its extension's other contexts (background worker + open pages).
             // `message` is any JSON. `token` (the sender) is passed so a page never gets its own message.
@@ -694,15 +653,6 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
     }
 
     // MARK: - JS shim helpers
-
-    /// Collapse a sessions value lookup to a single bucket id: "window:<id>" or "tab:<id>". The JS shim
-    /// already normalizes every window id to "w" (iOS is single-window), so getWindowValue(M) and
-    /// getWindowValue(WINDOW_ID_CURRENT) land in the SAME bucket; a tab value is keyed by its tab id.
-    private func sessionBucket(_ payload: [String: Any]) -> String {
-        let scope = (payload["scope"] as? String) == "tab" ? "tab" : "window"
-        let id = (payload["id"] as? String) ?? "w"
-        return "\(scope):\(id)"
-    }
 
     private func resolveInjectedCode(payload: [String: Any], extensionID: String, separator: String) async -> String {
         if let code = payload["code"] as? String, !code.isEmpty { return code }
