@@ -29,8 +29,7 @@ const BASE = `chrome-extension://${EXT_ID}/`;
 const WAR_URL = BASE + "inpage.js";
 const WAR_BODY = "window.__OLDYTP_RAN = true; /* the page-world helper */";
 
-const fetchCalls = [];
-const injectedMainWorld = [];   // code handed to page.injectMainWorld (the CSP-immune MAIN-world eval)
+const warScriptCalls = [];   // urls handed to the native injectWarScript bridge (read + MAIN-world eval)
 
 function bootContentWorld() {
     const sb = {};
@@ -78,17 +77,13 @@ function bootContentWorld() {
         createElement: (t) => makeElement(t), querySelector: () => null
     };
 
-    // Content-world fetch (CSP-immune on device): serves the WAR resource. Records calls.
-    sb.fetch = (url) => {
-        fetchCalls.push(String(url));
-        return Promise.resolve({ ok: true, text: () => Promise.resolve(url === WAR_URL ? WAR_BODY : "") });
-    };
-
-    // Native bridge: capture page.injectMainWorld (the CSP-immune MAIN-world eval); inert otherwise.
+    // Native bridge: capture injectWarScript (native reads the WAR file + evals it MAIN-world, both
+    // CSP-immune) and report it found, as on device; inert otherwise. There is deliberately NO page fetch —
+    // a content-world fetch of chrome-extension:// is CSP-gated on device ("Load failed" on YouTube).
     sb.webkit = { messageHandlers: { brownbearWebext: { postMessage: (msg) => {
         const api = msg.api, p = msg.payload || {};
         if (api === "getContentScripts") { return Promise.resolve([]); }   // no auto content scripts here
-        if (api === "page.injectMainWorld") { injectedMainWorld.push(p.code); return Promise.resolve(undefined); }
+        if (api === "injectWarScript") { warScriptCalls.push(p.url); return Promise.resolve({ found: true }); }
         return Promise.resolve(null);
     } } } };
 
@@ -106,31 +101,29 @@ const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
     const world = bootContentWorld();
 
-    // 1) An extension-origin <script src> is diverted: fetched + run MAIN-world, src neutered, still inserted.
+    // 1) An extension-origin <script src> is diverted: native reads + runs it MAIN-world, src neutered, inserted.
     try {
         vm.runInContext(
             "var s = document.createElement('script'); s.src = '" + WAR_URL + "';" +
             "document.documentElement.appendChild(s); window.__s = s;", world, { filename: "content-script" });
-        await delay(20);   // let the fetch + injection promise chain settle
-        assert.ok(fetchCalls.includes(WAR_URL), "the WAR resource is fetched over the content-world fetch");
-        assert.ok(injectedMainWorld.some((c) => c.indexOf(WAR_BODY) !== -1),
-            "the fetched WAR body is injected into the page MAIN world (CSP-immune), not loaded as a page subresource");
+        await delay(20);   // let the bridge promise chain settle
+        assert.ok(warScriptCalls.includes(WAR_URL),
+            "the WAR resource is read + run NATIVELY (injectWarScript) — not fetched in the CSP-gated page");
         assert.strictEqual(world.__s.src, "", "the script's src is neutered so the page makes no CSP-blocked load");
         assert.ok((world.document.documentElement.__children || []).includes(world.__s),
             "the (now inert) script element is still inserted so the page DOM is unchanged");
         assert.ok(world.__s.__events.includes("load"), "a load event fires so code awaiting script.onload proceeds");
-        ok("extension-origin <script src> is diverted to a CSP-immune MAIN-world injection");
+        ok("extension-origin <script src> is diverted to a native CSP-immune MAIN-world injection");
     } catch (e) { bad("divert ext script", e); }
 
-    // 2) A NORMAL (non-extension) <script src> passes straight through — never fetched, src untouched, inserted.
+    // 2) A NORMAL (non-extension) <script src> passes straight through — never bridged, src untouched, inserted.
     try {
-        const fetchesBefore = fetchCalls.length, injectsBefore = injectedMainWorld.length;
+        const warsBefore = warScriptCalls.length;
         vm.runInContext(
             "var n = document.createElement('script'); n.src = 'https://www.youtube.com/normal.js';" +
             "document.documentElement.appendChild(n); window.__n = n;", world, { filename: "content-script" });
         await delay(10);
-        assert.strictEqual(fetchCalls.length, fetchesBefore, "a normal page script is NOT fetched by the bridge");
-        assert.strictEqual(injectedMainWorld.length, injectsBefore, "a normal page script is NOT MAIN-world injected");
+        assert.strictEqual(warScriptCalls.length, warsBefore, "a normal page script is NOT bridged");
         assert.strictEqual(world.__n.src, "https://www.youtube.com/normal.js", "a normal script's src is left untouched");
         assert.ok((world.document.documentElement.__children || []).includes(world.__n), "a normal script is inserted normally");
         ok("a normal (non-extension) <script src> passes through untouched");
@@ -138,39 +131,39 @@ const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
     // 3) A non-script element passes straight through (appendChild not diverted).
     try {
-        const fetchesBefore = fetchCalls.length;
+        const warsBefore = warScriptCalls.length;
         vm.runInContext(
             "var d = document.createElement('div'); document.documentElement.appendChild(d); window.__d = d;",
             world, { filename: "content-script" });
         await delay(5);
-        assert.strictEqual(fetchCalls.length, fetchesBefore, "appending a non-script element triggers no fetch");
+        assert.strictEqual(warScriptCalls.length, warsBefore, "appending a non-script element triggers no bridge call");
         assert.ok((world.document.documentElement.__children || []).includes(world.__d), "the element is inserted normally");
         ok("a non-script element passes through appendChild untouched");
     } catch (e) { bad("passthrough non-script", e); }
 
     // 4) An ext-script staged on a DISCONNECTED parent is NOT diverted (a real browser runs it on
-    //    connection, not at stage time) — no premature fetch/execution.
+    //    connection, not at stage time) — no premature read/execution.
     try {
-        const fetchesBefore = fetchCalls.length;
+        const warsBefore = warScriptCalls.length;
         world.__detached = world.document.createElement("div");
         Object.defineProperty(world.__detached, "isConnected", { value: false, configurable: true });
         vm.runInContext(
             "var sd = document.createElement('script'); sd.src = '" + WAR_URL + "';" +
             "window.__detached.appendChild(sd); window.__sd = sd;", world, { filename: "content-script" });
         await delay(10);
-        assert.strictEqual(fetchCalls.length, fetchesBefore, "an ext-script on a disconnected parent is NOT fetched");
+        assert.strictEqual(warScriptCalls.length, warsBefore, "an ext-script on a disconnected parent is NOT bridged");
         assert.strictEqual(world.__sd.src, WAR_URL, "its src is left intact (not yet diverted)");
         ok("an ext-script staged on a disconnected node is not diverted (no premature execution)");
     } catch (e) { bad("disconnected parent gate", e); }
 
     // 5) The modern variadic insert verb Element.prototype.append is also bridged.
     try {
-        const injectsBefore = injectedMainWorld.length;
+        const warsBefore = warScriptCalls.length;
         vm.runInContext(
             "var sa = document.createElement('script'); sa.src = '" + WAR_URL + "';" +
             "document.documentElement.append(sa); window.__sa = sa;", world, { filename: "content-script" });
         await delay(20);
-        assert.ok(injectedMainWorld.length > injectsBefore, "append(script) also diverts to a MAIN-world injection");
+        assert.ok(warScriptCalls.length > warsBefore, "append(script) also diverts to a native MAIN-world injection");
         assert.strictEqual(world.__sa.src, "", "append(script) neuters the src too");
         ok("Element.prototype.append(<ext script>) is bridged");
     } catch (e) { bad("append coverage", e); }

@@ -213,6 +213,35 @@ final class WebExtensionMessageRouter: NSObject, WKScriptMessageHandlerWithReply
             }
             return NSNull()
         }
+        // A content script ran `<script src=chrome.runtime.getURL('x.js')>` to load a page-world helper; the
+        // page's CSP refuses both the script subresource (script-src) AND a content-world fetch of it
+        // (connect-src → "Load failed" on YouTube/GitHub). Chrome exempts web_accessible_resources from page
+        // CSP; we replicate it NATIVELY: read the declared WAR file (same manifest gating as the WAR scheme
+        // handler) and evaluate it in the page MAIN world via native eval (not CSP-gated). Tokenless — only our
+        // isolated content world can reach this handler. Returns {found:true} once the eval completes.
+        if api == "injectWarScript" {
+            guard let webView, let urlString = payload["url"] as? String, let url = URL(string: urlString),
+                  let host = url.host, ChromeWebStore.isExtensionID(host) else { return ["found": false] }
+            var path = url.path
+            while path.hasPrefix("/") { path.removeFirst() }
+            let pageURL = webView.url?.absoluteString
+            guard WebExtensionWARSchemeHandler.isTraversalFree(path),
+                  let ext = await store.ext(for: host), ext.enabled, let manifest = ext.manifest,
+                  WebExtensionWARSchemeHandler.isWebAccessible(path: path, pageURL: pageURL, manifest: manifest),
+                  let data = store.fileSync(extensionID: host, path: path),
+                  let code = String(data: data, encoding: .utf8), !code.isEmpty else {
+                return ["found": false]
+            }
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let done: (Any?, Error?) -> Void = { _, _ in continuation.resume() }
+                if let frameInfo {
+                    BBEvaluateJavaScriptInFrameForResult(webView, code, frameInfo, .page, done)
+                } else {
+                    BBEvaluateJavaScriptForResult(webView, code, .page, done)
+                }
+            }
+            return ["found": true]
+        }
         // Tokenless: a back-forward-cache-restored document re-registering its purged session tokens
         // (document-start scripts don't re-run on a bfcache restore, so getContentScripts can't). Routed
         // before resolve() — the whole point is that these tokens currently resolve to nothing.
