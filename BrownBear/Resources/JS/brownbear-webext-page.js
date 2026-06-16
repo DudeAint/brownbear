@@ -523,7 +523,9 @@
   // after privacy, manifesting as the same JSC `super()` error). The actual per-dataStore proxy control
   // runs in the service worker (chrome.proxy there routes to native iOS 17+ proxyConfigurations); the
   // page surface is the Chrome-correct ChromeSetting so the popup reads/writes without throwing.
-  var proxyApi = { settings: makePrivacySetting(), onProxyError: makeEvent([]) };
+  // proxy.onRequest is Firefox's blocking PAC-in-JS hook (Sidebery registers it); it cannot run on iOS
+  // WKWebView, so it's an inert event — present so addListener doesn't throw, but never fires.
+  var proxyApi = { settings: makePrivacySetting(), onProxyError: makeEvent([]), onRequest: makeEvent([]) };
 
   // ---- page-shim ⇄ background-shim namespace parity ----
   // A popup/options PAGE carries the SAME chrome.* surface as the background for any namespace the
@@ -640,7 +642,13 @@
     remove: function (id, cb) { return settle(_Promise.reject(new Error("contextualIdentities unsupported")), cb); },
     onCreated: makeEvent([]), onUpdated: makeEvent([]), onRemoved: makeEvent([])
   };
-  var searchApi = { query: function (info, cb) { return pres(undefined, cb); } };
+  var searchApi = {
+    query: function (info, cb) { return pres(undefined, cb); },
+    // Firefox browser.search.search({query, tabId}) runs a search in a tab; get([]) lists engines. Inert
+    // (no on-device search-engine routing yet) but present so Sidebery's search panel doesn't throw.
+    search: function (details, cb) { return pres(undefined, (typeof details === "function") ? details : cb); },
+    get: function (cb) { return pres([], cb); }
+  };
   var pageActionApi = {
     show: function (id, cb) { return pres(undefined, cb); },
     hide: function (id, cb) { return pres(undefined, cb); },
@@ -940,6 +948,16 @@
       // iOS has no tab groups — non-throwing no-ops so unguarded callers don't crash (see background).
       group: function (options, cb) { return settle(Promise.resolve(-1), cb); },
       ungroup: function (tabIds, cb) { return settle(Promise.resolve(undefined), cb); },
+      // Firefox-specific tab management — no analog in BrownBear's single-tab iOS model, but present and
+      // non-throwing so a Firefox extension (Sidebery) that calls them at init doesn't crash. Inert:
+      // hide reports nothing hidden, captureTab yields an empty image, the rest resolve void.
+      hide: function (tabIds, cb) { return settle(_Promise.resolve([]), (typeof tabIds === "function") ? tabIds : cb); },
+      show: function (tabIds, cb) { return settle(_Promise.resolve(undefined), (typeof tabIds === "function") ? tabIds : cb); },
+      discard: function (tabIds, cb) { return settle(_Promise.resolve(undefined), (typeof tabIds === "function") ? tabIds : cb); },
+      warmup: function (tabId, cb) { return settle(_Promise.resolve(undefined), (typeof tabId === "function") ? tabId : cb); },
+      highlight: function (info, cb) { return settle(_Promise.resolve({ tabs: [] }), (typeof info === "function") ? info : cb); },
+      moveInSuccession: function () { var c = arguments[arguments.length - 1]; return settle(_Promise.resolve(undefined), (typeof c === "function") ? c : undefined); },
+      captureTab: function () { var c = arguments[arguments.length - 1]; return settle(_Promise.resolve(""), (typeof c === "function") ? c : undefined); },
       onCreated: makeEvent(tabEventLists["tabs.onCreated"]),
       onUpdated: makeEvent(tabEventLists["tabs.onUpdated"]),
       onActivated: makeEvent(tabEventLists["tabs.onActivated"]),
@@ -1257,6 +1275,10 @@
         return settle(bridge("contextMenus.removeAll", {}).then(unwrapMenu).then(function () { return undefined; }), callback);
       },
       onClicked: { addListener: function () {}, removeListener: function () {}, hasListener: function () { return false; } },
+      // Firefox menus.overrideContext (Sidebery uses it to show a custom menu in its sidebar). It only
+      // affects the NEXT contextmenu event's menu set; on iOS we have no such hook, so it's an inert no-op
+      // (present so the call doesn't throw). Harmless on the Chrome `contextMenus` alias (never called there).
+      overrideContext: function () { return undefined; },
       ACTION_MENU_TOP_LEVEL_LIMIT: 6
     };
   }
@@ -1383,7 +1405,25 @@
     // commands surface on iOS yet, so getAll reports none; the events exist (inert).
     commands: {
       getAll: function (cb) { if (typeof cb === "function") { cb([]); return undefined; } return _Promise.resolve([]); },
+      // Firefox browser.commands.update/reset reassign a shortcut (Sidebery's keybinding settings). No
+      // bound-command surface on iOS, so these are inert resolves — present so the calls don't throw.
+      update: function (details, cb) { return pres(undefined, (typeof details === "function") ? details : cb); },
+      reset: function (name, cb) { return pres(undefined, (typeof name === "function") ? name : cb); },
       onCommand: makeEvent([]), onChanged: makeEvent([])
+    },
+    // Firefox browser.sidebarAction (Sidebery IS a sidebar_action extension). Its sidebar runs as this very
+    // page, so isOpen reports true and open/close/toggle are no-ops; the title/panel/icon setters are inert
+    // but present so Sidebery's calls don't throw. moz-extension-only; harmless on Chrome (never called).
+    sidebarAction: {
+      isOpen: function (details, cb) { return settle(_Promise.resolve(true), (typeof details === "function") ? details : cb); },
+      open: function (cb) { return pres(undefined, cb); },
+      close: function (cb) { return pres(undefined, cb); },
+      toggle: function (cb) { return pres(undefined, cb); },
+      setPanel: function (details, cb) { return pres(undefined, (typeof details === "function") ? details : cb); },
+      getPanel: function (details, cb) { return pres("", (typeof details === "function") ? details : cb); },
+      setTitle: function (details, cb) { return pres(undefined, (typeof details === "function") ? details : cb); },
+      getTitle: function (details, cb) { return pres("", (typeof details === "function") ? details : cb); },
+      setIcon: function (details, cb) { return pres(undefined, (typeof details === "function") ? details : cb); }
     },
     // chrome.declarativeContent — page-state action rules. iOS has no action-rule engine, so the rules are
     // inert (addRules resolves, getRules reports none); the constructors are no-op stubs. Must exist:

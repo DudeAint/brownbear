@@ -116,6 +116,20 @@ const bad = (n, e) => { console.log("  FAIL " + n + "\n       " + (e && e.messag
         ok("theme.getCurrent/onUpdated + contextualIdentities.query are present and inert-safe");
     } catch (e) { bad("theme + contextualIdentities", e); }
 
+    // The remaining Firefox-only APIs Sidebery touches: present + inert-safe (no throw).
+    try {
+        assert.strictEqual(await browser.sidebarAction.isOpen({}), true, "sidebarAction.isOpen → true (the sidebar IS this page)");
+        await browser.sidebarAction.setTitle({ title: "x" });            // must not throw
+        assert.strictEqual(browser.menus.overrideContext({}), undefined, "menus.overrideContext is a no-op");
+        await browser.search.search({ query: "q" });                     // must not throw
+        assert.strictEqual(typeof browser.proxy.onRequest.addListener, "function", "proxy.onRequest is an event");
+        await browser.commands.update({ name: "n", shortcut: "Ctrl+K" }); // must not throw
+        const hidden = await browser.tabs.hide([1, 2]);
+        assert.ok(Array.isArray(hidden), "tabs.hide resolves an array");
+        await browser.tabs.discard([1]); await browser.tabs.warmup(1); await browser.tabs.captureTab(); // no throw
+        ok("sidebarAction / menus.overrideContext / search.search / proxy.onRequest / commands.update / tabs.* inert-safe");
+    } catch (e) { bad("remaining firefox stubs", e); }
+
     console.log(`\n${passed} passed, ${failed} failed`);
     process.exit(failed === 0 ? 0 : 1);
 })();
