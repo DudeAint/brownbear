@@ -747,7 +747,22 @@
     // Native → this content script push surface, keyed by the injection token. The runtime evaluates
     // into this isolated world to deliver chrome.tabs.sendMessage payloads (onMessage) and
     // chrome.storage changes (onStorageChanged). Kept off `chrome` so the page can't see or spoof it.
-    var registry = W.__bbExtContent || (W.__bbExtContent = {});
+    //
+    // Lock the registry as a NON-configurable, NON-writable own property the first time it is created so
+    // a content script that scuttles globalThis (Phantom/MetaMask bundle LavaMoat's SNOW on EVERY web
+    // page) can't replace it with a throwing getter. All extensions' content scripts share this one
+    // isolated world, so a scuttled `__bbExtContent` would break native message/storage delivery to every
+    // extension on that page. LavaMoat skips a property only when it is BOTH non-configurable AND
+    // non-writable (the same reason `chrome` survives); the registry OBJECT stays mutable (new tokens are
+    // still added) — only the binding is frozen. The try/catch degrades to a plain assignment if needed.
+    var registry = W.__bbExtContent;
+    if (!registry) {
+      registry = {};
+      try {
+        _Object.defineProperty(W, "__bbExtContent",
+          { value: registry, writable: false, configurable: false, enumerable: false });
+      } catch (e) { W.__bbExtContent = registry; }
+    }
     registry[token] = {
       onMessage: function (message, sender, responseId) {
         var responded = false;
