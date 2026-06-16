@@ -129,6 +129,24 @@
     try { if (needsPolyfill("sessionStorage")) { _Object.defineProperty(W, "sessionStorage", { value: makeStorage(false), configurable: true }); } } catch (e) {}
   })();
 
+  // --- window.MediaSource inert constructor ---------------------------------------------------------
+  // WKWebView does NOT expose window.MediaSource on this extension-page origin (MSE is gated off by
+  // default). MetaMask's bundled LavaMoat "SNOW" realm sandbox unconditionally TAMES window.MediaSource
+  // during boot: it reads `window.MediaSource`, then `Object.setPrototypeOf(wrapper, window.MediaSource)`
+  // — with MediaSource `undefined`, JSC throws "Prototype value can only be an object or null" and the
+  // ENTIRE wallet UI aborts before render (the popup/home page never loads). Provide an inert MediaSource
+  // constructor (a real function whose `.prototype` is a real object) ONLY when the platform lacks one, so
+  // the taming step sees a valid object. This is scoped to EXTENSION PAGES (this runtime never runs on a
+  // normal web page), so no streaming site is affected; any genuine MSE use still fails honestly.
+  try {
+    if (typeof W.MediaSource === "undefined") {
+      var BBMediaSource = function MediaSource() {
+        throw new TypeError("MediaSource is not supported on this platform");
+      };
+      _Object.defineProperty(W, "MediaSource", { value: BBMediaSource, configurable: true, writable: true });
+    }
+  } catch (e) {}
+
   // navigator.serviceWorker BRIDGE. WKWebView exposes no Service Worker for the custom chrome-/moz-
   // extension:// scheme, so navigator.serviceWorker.controller is null and `.ready` never resolves.
   // Some popups talk to their MV3 worker ENTIRELY over SW client messaging — Stylus does
