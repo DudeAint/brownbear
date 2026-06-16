@@ -79,6 +79,57 @@ actor WebExtensionStorage {
             caches[cacheKey(extensionID, area)] = [:]
             defaults.removeObject(forKey: storageKey(extensionID, area))
         }
+        sessionsCaches[extensionID] = [:]
+        defaults.removeObject(forKey: sessionsStorageKey(extensionID))
+    }
+
+    // MARK: - Firefox sessions per-window/per-tab values
+
+    /// Backs browser.sessions.{get,set,remove}{Window,Tab}Value (Firefox). Kept STRICTLY separate from the
+    /// storage.* area maps so session values never appear in storage.local.get(null) / getBytesInUse /
+    /// onChanged. Keyed "<extID>" → ("<scope:id>::<key>" → JSON string). Because an extension's page
+    /// contexts (a MV2 background page + its sidebar) hold the same actor, a write in one is live-visible
+    /// in the other — the persisted, cross-context per-window store Sidebery needs for its window id.
+    private var sessionsCaches: [String: [String: String]] = [:]
+
+    /// Stored JSON for (bucket,key), or nil if unset (the JS shim maps nil → undefined, per Firefox).
+    func sessionGetValue(extensionID: String, bucket: String, key: String) -> String? {
+        return sessionsMap(extensionID)[sessionsKey(bucket, key)]
+    }
+
+    func sessionSetValue(extensionID: String, bucket: String, key: String, json: String) {
+        var map = sessionsMap(extensionID)
+        map[sessionsKey(bucket, key)] = json
+        commitSessions(map, extensionID: extensionID)
+    }
+
+    func sessionRemoveValue(extensionID: String, bucket: String, key: String) {
+        var map = sessionsMap(extensionID)
+        guard map.removeValue(forKey: sessionsKey(bucket, key)) != nil else { return }
+        commitSessions(map, extensionID: extensionID)
+    }
+
+    private func sessionsKey(_ bucket: String, _ key: String) -> String { "\(bucket)::\(key)" }
+    private func sessionsStorageKey(_ extensionID: String) -> String { "webext.\(extensionID).__sessions" }
+
+    private func sessionsMap(_ extensionID: String) -> [String: String] {
+        if let cached = sessionsCaches[extensionID] { return cached }
+        let loaded: [String: String]
+        if let data = defaults.data(forKey: sessionsStorageKey(extensionID)),
+           let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
+            loaded = decoded
+        } else {
+            loaded = [:]
+        }
+        sessionsCaches[extensionID] = loaded
+        return loaded
+    }
+
+    private func commitSessions(_ map: [String: String], extensionID: String) {
+        sessionsCaches[extensionID] = map
+        if let data = try? JSONEncoder().encode(map) {
+            defaults.set(data, forKey: sessionsStorageKey(extensionID))
+        }
     }
 
     // MARK: - Backing

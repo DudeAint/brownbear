@@ -523,7 +523,9 @@
   // after privacy, manifesting as the same JSC `super()` error). The actual per-dataStore proxy control
   // runs in the service worker (chrome.proxy there routes to native iOS 17+ proxyConfigurations); the
   // page surface is the Chrome-correct ChromeSetting so the popup reads/writes without throwing.
-  var proxyApi = { settings: makePrivacySetting(), onProxyError: makeEvent([]) };
+  // proxy.onRequest is Firefox's blocking PAC-in-JS hook (Sidebery registers it); it cannot run on iOS
+  // WKWebView, so it's an inert event — present so addListener doesn't throw, but never fires.
+  var proxyApi = { settings: makePrivacySetting(), onProxyError: makeEvent([]), onRequest: makeEvent([]) };
 
   // ---- page-shim ⇄ background-shim namespace parity ----
   // A popup/options PAGE carries the SAME chrome.* surface as the background for any namespace the
@@ -578,14 +580,93 @@
     deleteAll: function (cb) { return pres(undefined, cb); },
     onVisited: makeEvent([]), onVisitRemoved: makeEvent([])
   };
+  // Native returns the stored JSON string, or null when the key was never set. Firefox resolves an unset
+  // key to undefined (NOT null) — Sidebery branches on `=== undefined`, so the distinction matters.
+  function decodeSessionValue(raw) {
+    if (raw === null || raw === undefined) { return undefined; }
+    try { return _JSON.parse(raw); } catch (e) { return raw; }
+  }
   var sessionsApi = {
     getRecentlyClosed: function (filter, cb) { return pres([], (typeof filter === "function") ? filter : cb); },
     getDevices: function (filter, cb) { return pres([], (typeof filter === "function") ? filter : cb); },
     restore: function (sessionId, cb) { return pres({}, (typeof sessionId === "function") ? sessionId : cb); },
+    // Firefox per-window / per-tab session values. Sidebery (MV2 bg PAGE + sidebar_action) calls
+    // getWindowValue with BOTH a resolved window id and windows.WINDOW_ID_CURRENT (-2); iOS is single-
+    // window, so every window id collapses to ONE native bucket ("w"). Values are JSON; an unset key
+    // resolves to undefined. Routed natively so the bg page and sidebar share one live, persisted store.
+    getWindowValue: function (windowId, key, cb) {
+      return settle(bridge("sessions.getValue", { scope: "window", id: "w", key: String(key) })
+        .then(decodeSessionValue), cb);
+    },
+    setWindowValue: function (windowId, key, value, cb) {
+      return settle(bridge("sessions.setValue", { scope: "window", id: "w", key: String(key),
+        value: _JSON.stringify(value === undefined ? null : value) }).then(function () { return undefined; }), cb);
+    },
+    removeWindowValue: function (windowId, key, cb) {
+      return settle(bridge("sessions.removeValue", { scope: "window", id: "w", key: String(key) })
+        .then(function () { return undefined; }), cb);
+    },
+    getTabValue: function (tabId, key, cb) {
+      return settle(bridge("sessions.getValue", { scope: "tab", id: String(tabId), key: String(key) })
+        .then(decodeSessionValue), cb);
+    },
+    setTabValue: function (tabId, key, value, cb) {
+      return settle(bridge("sessions.setValue", { scope: "tab", id: String(tabId), key: String(key),
+        value: _JSON.stringify(value === undefined ? null : value) }).then(function () { return undefined; }), cb);
+    },
+    removeTabValue: function (tabId, key, cb) {
+      return settle(bridge("sessions.removeValue", { scope: "tab", id: String(tabId), key: String(key) })
+        .then(function () { return undefined; }), cb);
+    },
     MAX_SESSION_RESULTS: 25,
     onChanged: makeEvent([])
   };
-  var searchApi = { query: function (info, cb) { return pres(undefined, cb); } };
+  // Firefox browser.theme — iOS WKWebView has no Firefox theme, but getCurrent must return a valid (empty)
+  // theme object rather than be undefined, or a consumer (Sidebery, in Firefox mode) crashes reading it.
+  var themeApi = {
+    getCurrent: function (windowId, cb) {
+      var c = (typeof windowId === "function") ? windowId : cb;
+      return pres({ colors: null, images: null, properties: null }, c);
+    },
+    update: function () { var c = arguments[arguments.length - 1]; return pres(undefined, (typeof c === "function") ? c : undefined); },
+    reset: function () { var c = arguments[arguments.length - 1]; return pres(undefined, (typeof c === "function") ? c : undefined); },
+    onUpdated: makeEvent([])
+  };
+  // Firefox browser.contextualIdentities (containers) — iOS has none; present an inert namespace so the
+  // sidebar shows "no containers" instead of throwing. query MUST resolve [] (not reject), the rest reject.
+  var contextualIdentitiesApi = {
+    query: function (details, cb) { return settle(_Promise.resolve([]), (typeof details === "function") ? details : cb); },
+    get: function (id, cb) { return settle(_Promise.reject(new Error("No contextual identity: " + id)), cb); },
+    create: function (details, cb) { return settle(_Promise.reject(new Error("contextualIdentities unsupported")), cb); },
+    update: function (id, details, cb) { return settle(_Promise.reject(new Error("contextualIdentities unsupported")), cb); },
+    remove: function (id, cb) { return settle(_Promise.reject(new Error("contextualIdentities unsupported")), cb); },
+    move: function (id, position, cb) { return settle(_Promise.reject(new Error("contextualIdentities unsupported")), (typeof position === "function") ? position : cb); },
+    onCreated: makeEvent([]), onUpdated: makeEvent([]), onRemoved: makeEvent([])
+  };
+  // Firefox browser.fontSettings.getFontList → []; browser.browsingData.remove* → resolve. Both are
+  // typeof/permission-guarded by the extensions that use them (Dark Reader popup, Multi-Account Containers),
+  // so they're non-blocking, but present so the guarded branch resolves instead of hitting undefined.
+  var fontSettingsApi = {
+    getFontList: function (cb) { return pres([], cb); },
+    getFont: function (d, cb) { return pres({ fontId: "", levelOfControl: "not_controllable" }, (typeof d === "function") ? d : cb); },
+    setFont: function (d, cb) { return pres(undefined, (typeof d === "function") ? d : cb); },
+    clearFont: function (d, cb) { return pres(undefined, (typeof d === "function") ? d : cb); }
+  };
+  var browsingDataApi = {
+    settings: function (cb) { return pres({ options: {}, dataToRemove: {}, dataRemovalPermitted: {} }, cb); },
+    remove: function (opts, data, cb) { return pres(undefined, (typeof opts === "function") ? opts : ((typeof data === "function") ? data : cb)); },
+    removeCookies: function (opts, cb) { return pres(undefined, (typeof opts === "function") ? opts : cb); },
+    removeLocalStorage: function (opts, cb) { return pres(undefined, (typeof opts === "function") ? opts : cb); },
+    removeCache: function (opts, cb) { return pres(undefined, (typeof opts === "function") ? opts : cb); },
+    removeHistory: function (opts, cb) { return pres(undefined, (typeof opts === "function") ? opts : cb); }
+  };
+  var searchApi = {
+    query: function (info, cb) { return pres(undefined, cb); },
+    // Firefox browser.search.search({query, tabId}) runs a search in a tab; get([]) lists engines. Inert
+    // (no on-device search-engine routing yet) but present so Sidebery's search panel doesn't throw.
+    search: function (details, cb) { return pres(undefined, (typeof details === "function") ? details : cb); },
+    get: function (cb) { return pres([], cb); }
+  };
   var pageActionApi = {
     show: function (id, cb) { return pres(undefined, cb); },
     hide: function (id, cb) { return pres(undefined, cb); },
@@ -885,6 +966,24 @@
       // iOS has no tab groups — non-throwing no-ops so unguarded callers don't crash (see background).
       group: function (options, cb) { return settle(Promise.resolve(-1), cb); },
       ungroup: function (tabIds, cb) { return settle(Promise.resolve(undefined), cb); },
+      // Firefox-specific tab management — no analog in BrownBear's single-tab iOS model, but present and
+      // non-throwing so a Firefox extension (Sidebery) that calls them at init doesn't crash. Inert:
+      // hide reports nothing hidden, captureTab yields an empty image, the rest resolve void.
+      hide: function (tabIds, cb) { return settle(_Promise.resolve([]), (typeof tabIds === "function") ? tabIds : cb); },
+      show: function (tabIds, cb) { return settle(_Promise.resolve(undefined), (typeof tabIds === "function") ? tabIds : cb); },
+      discard: function (tabIds, cb) { return settle(_Promise.resolve(undefined), (typeof tabIds === "function") ? tabIds : cb); },
+      warmup: function (tabId, cb) { return settle(_Promise.resolve(undefined), (typeof tabId === "function") ? tabId : cb); },
+      highlight: function (info, cb) { return settle(_Promise.resolve({ tabs: [] }), (typeof info === "function") ? info : cb); },
+      moveInSuccession: function () { var c = arguments[arguments.length - 1]; return settle(_Promise.resolve(undefined), (typeof c === "function") ? c : undefined); },
+      captureTab: function () { var c = arguments[arguments.length - 1]; return settle(_Promise.resolve(""), (typeof c === "function") ? c : undefined); },
+      // tabs.connect(tabId, info) opens a Port to a tab's content script (Violentmonkey/Stylus install-
+      // from-tab). Live port-to-content-script routing isn't wired here yet, so return an inert Port that
+      // looks immediately disconnected — the caller degrades instead of crashing on undefined.
+      connect: function () {
+        return { name: "", sender: undefined, postMessage: function () {}, disconnect: function () {},
+                 onMessage: makeEvent([]), onDisconnect: makeEvent([]) };
+      },
+      toggleReaderMode: function (tabId, cb) { return settle(_Promise.resolve(undefined), (typeof tabId === "function") ? tabId : cb); },
       onCreated: makeEvent(tabEventLists["tabs.onCreated"]),
       onUpdated: makeEvent(tabEventLists["tabs.onUpdated"]),
       onActivated: makeEvent(tabEventLists["tabs.onActivated"]),
@@ -1046,6 +1145,11 @@
       getTitle: getter("action.getTitle"),
       getBadgeBackgroundColor: getter("action.getBadgeBackgroundColor"),
       getBadgeTextColor: getter("action.getBadgeTextColor"),
+      // Firefox action/browserAction.getUserSettings → { isOnToolbar }. LanguageTool/Privacy Badger read it
+      // (typeof-guarded, so non-blocking) — present so the guard resolves and the popup can branch.
+      getUserSettings: function (cb) { var s = { isOnToolbar: true }; if (typeof cb === "function") { cb(s); return undefined; } return _Promise.resolve(s); },
+      getPopup: getter("action.getPopup"),
+      openPopup: function (cb) { return pres(undefined, cb); },
       onClicked: makeEvent(actionClickedListeners)
     };
   }
@@ -1202,6 +1306,15 @@
         return settle(bridge("contextMenus.removeAll", {}).then(unwrapMenu).then(function () { return undefined; }), callback);
       },
       onClicked: { addListener: function () {}, removeListener: function () {}, hasListener: function () { return false; } },
+      // Firefox menus.overrideContext (Sidebery uses it to show a custom menu in its sidebar). It only
+      // affects the NEXT contextmenu event's menu set; on iOS we have no such hook, so it's an inert no-op
+      // (present so the call doesn't throw). Harmless on the Chrome `contextMenus` alias (never called there).
+      overrideContext: function () { return undefined; },
+      // Firefox menus.onShown/onHidden fire around the native context menu; Tree Style Tab registers them
+      // UNGUARDED at background top-level, so their absence threw on `.addListener` and killed bg init. No
+      // iOS hook → inert events. refresh() re-reads the menu during a shown event → inert resolve.
+      onShown: makeEvent([]), onHidden: makeEvent([]),
+      refresh: function (cb) { return pres(undefined, cb); },
       ACTION_MENU_TOP_LEVEL_LIMIT: 6
     };
   }
@@ -1279,6 +1392,11 @@
     bookmarks: bookmarksApi,
     history: historyApi,
     sessions: sessionsApi,
+    theme: themeApi,
+    contextualIdentities: contextualIdentitiesApi,
+    fontSettings: fontSettingsApi,
+    browsingData: browsingDataApi,
+    extensionTypes: { ImageFormat: { JPEG: "jpeg", PNG: "png" }, RunAt: { DOCUMENT_START: "document_start", DOCUMENT_END: "document_end", DOCUMENT_IDLE: "document_idle" }, CSSOrigin: { USER: "user", AUTHOR: "author" } },
     search: searchApi,
     pageAction: pageActionApi,
     sidePanel: sidePanelApi,
@@ -1326,7 +1444,25 @@
     // commands surface on iOS yet, so getAll reports none; the events exist (inert).
     commands: {
       getAll: function (cb) { if (typeof cb === "function") { cb([]); return undefined; } return _Promise.resolve([]); },
+      // Firefox browser.commands.update/reset reassign a shortcut (Sidebery's keybinding settings). No
+      // bound-command surface on iOS, so these are inert resolves — present so the calls don't throw.
+      update: function (details, cb) { return pres(undefined, (typeof details === "function") ? details : cb); },
+      reset: function (name, cb) { return pres(undefined, (typeof name === "function") ? name : cb); },
       onCommand: makeEvent([]), onChanged: makeEvent([])
+    },
+    // Firefox browser.sidebarAction (Sidebery IS a sidebar_action extension). Its sidebar runs as this very
+    // page, so isOpen reports true and open/close/toggle are no-ops; the title/panel/icon setters are inert
+    // but present so Sidebery's calls don't throw. moz-extension-only; harmless on Chrome (never called).
+    sidebarAction: {
+      isOpen: function (details, cb) { return settle(_Promise.resolve(true), (typeof details === "function") ? details : cb); },
+      open: function (cb) { return pres(undefined, cb); },
+      close: function (cb) { return pres(undefined, cb); },
+      toggle: function (cb) { return pres(undefined, cb); },
+      setPanel: function (details, cb) { return pres(undefined, (typeof details === "function") ? details : cb); },
+      getPanel: function (details, cb) { return pres("", (typeof details === "function") ? details : cb); },
+      setTitle: function (details, cb) { return pres(undefined, (typeof details === "function") ? details : cb); },
+      getTitle: function (details, cb) { return pres("", (typeof details === "function") ? details : cb); },
+      setIcon: function (details, cb) { return pres(undefined, (typeof details === "function") ? details : cb); }
     },
     // chrome.declarativeContent — page-state action rules. iOS has no action-rule engine, so the rules are
     // inert (addRules resolves, getRules reports none); the constructors are no-op stubs. Must exist:
@@ -1349,6 +1485,10 @@
       onHistoryStateUpdated: makeEvent(webNavLists["webNavigation.onHistoryStateUpdated"]),
       onReferenceFragmentUpdated: makeEvent(webNavLists["webNavigation.onReferenceFragmentUpdated"] || []),
       onErrorOccurred: makeEvent(webNavLists["webNavigation.onErrorOccurred"]),
+      // uBlock Origin's vAPI.Tabs constructor registers onCreatedNavigationTarget UNGUARDED at background
+      // top-level, so its absence threw and aborted uBO's background init. No iOS analog (it fires when a
+      // navigation opens a new tab/window) → inert event, present so .addListener doesn't throw.
+      onCreatedNavigationTarget: makeEvent([]),
       onTabReplaced: makeEvent([]),
       getFrame: function (details, cb) { if (typeof cb === "function") { cb(null); return undefined; } return _Promise.resolve(null); },
       getAllFrames: function (details, cb) { if (typeof cb === "function") { cb([]); return undefined; } return _Promise.resolve([]); }
@@ -1398,7 +1538,33 @@
         return settle(bridge("runtime.setUninstallURL", { url: url || "" }).then(function () { return undefined; }), cb);
       },
       get lastError() { return _bbLastError; },
-      getPlatformInfo: function (cb) { var info = { os: "ios", arch: "arm64", nacl_arch: "arm64" }; if (typeof cb === "function") { cb(info); return undefined; } return _Promise.resolve(info); }
+      getPlatformInfo: function (cb) { var info = { os: "ios", arch: "arm64", nacl_arch: "arm64" }; if (typeof cb === "function") { cb(info); return undefined; } return _Promise.resolve(info); },
+      // Firefox browser.runtime.getBrowserInfo — present (a non-Firefox-shaped object, so version-gated FF
+      // code paths stay off) so backgrounds/sidebars that `await getBrowserInfo()` at init (Tree Style Tab,
+      // Simple Tab Groups, Violentmonkey, image-search) don't throw "is not a function".
+      getBrowserInfo: function (cb) {
+        var info = { name: "BrownBear", vendor: "BrownBear", version: (manifest && manifest.version) || "1.0", buildID: "0" };
+        if (typeof cb === "function") { cb(info); return undefined; } return _Promise.resolve(info);
+      },
+      // runtime.reload — restart the extension. Inert page-side; routed so a future native handler can act,
+      // wrapped so a missing handler never throws (uBO/Stylus/STG "restart" buttons just no-op for now).
+      reload: function () { try { bridge("runtime.reload", {}); } catch (e) {} return undefined; },
+      // runtime.getBackgroundPage — MV3 has no persistent background window; Stylus/STG call it at init and
+      // crashed on undefined. Return null (Chrome returns the window or null) so the page proceeds.
+      getBackgroundPage: function (cb) { if (typeof cb === "function") { cb(null); return undefined; } return _Promise.resolve(null); },
+      // runtime.getContexts (MV3) — no extension-context registry on iOS; resolve [] so an awaiting caller
+      // doesn't throw (Tab Session Manager).
+      getContexts: function (filter, cb) { return pres([], (typeof filter === "function") ? filter : cb); },
+      // runtime.connectNative — no native-messaging hosts on iOS; hand back an inert Port that immediately
+      // looks disconnected so a try-wrapped caller (multi-account-containers' Firefox VPN) degrades.
+      connectNative: function () {
+        return { name: "", postMessage: function () {}, disconnect: function () {},
+                 onMessage: makeEvent([]), onDisconnect: makeEvent([]) };
+      },
+      OnInstalledReason: { INSTALL: "install", UPDATE: "update", CHROME_UPDATE: "chrome_update", BROWSER_UPDATE: "browser_update", SHARED_MODULE_UPDATE: "shared_module_update" },
+      OnRestartRequiredReason: { APP_UPDATE: "app_update", OS_UPDATE: "os_update", PERIODIC: "periodic" },
+      PlatformOs: { MAC: "mac", WIN: "win", ANDROID: "android", CROS: "cros", LINUX: "linux", OPENBSD: "openbsd", FUCHSIA: "fuchsia" },
+      PlatformArch: { ARM: "arm", ARM64: "arm64", X86_32: "x86-32", X86_64: "x86-64", MIPS: "mips", MIPS64: "mips64" }
     },
     tabs: tabsApi(),
     tabGroups: {
