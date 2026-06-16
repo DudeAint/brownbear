@@ -513,10 +513,10 @@ class WebExtensionRuntime {
         // (and the ESM linker runtime) instead of pre-reading a single classic source.
         let isModuleWorker = background.isModule && background.serviceWorker != nil
         var source = ""
-        var moduleEntry: String?
+        var moduleEntries: [String] = []
         if let serviceWorker = background.serviceWorker {
             if isModuleWorker {
-                moduleEntry = serviceWorker
+                moduleEntries = [serviceWorker]
                 // Confirm the entry exists up front so a typo'd manifest fails fast rather than at link.
                 guard await store.text(extensionID: ext.id, path: serviceWorker) != nil else {
                     logBootFailure(ext, "background module service worker not found: \(serviceWorker)")
@@ -538,8 +538,10 @@ class WebExtensionRuntime {
             let scripts = Self.scriptTags(inBackgroundPage: html, pagePath: page)
             for tag in scripts {
                 if tag.isModule {
-                    if moduleEntry == nil { moduleEntry = tag.path }
-                    else { logBootFailure(ext, "background page has multiple module scripts; only \(moduleEntry ?? "") is linked") }
+                    // Link EVERY module script in document order (Sidebery's background.html has a locale
+                    // dict module before its real background.js; only linking the first ran the dict and
+                    // left the actual background dead, so the sidebar could never connect to it).
+                    moduleEntries.append(tag.path)
                 } else if let text = await store.text(extensionID: ext.id, path: tag.path) {
                     source += text + "\n;\n"
                 } else {
@@ -553,7 +555,7 @@ class WebExtensionRuntime {
         }
         // A declared background that resolves to no source never boots — the extension's whole chrome.*
         // surface is dead. Previously a SILENT return; now logged so "extension X never started" is visible.
-        guard isModuleWorker || moduleEntry != nil || !source.isEmpty else {
+        guard isModuleWorker || !moduleEntries.isEmpty || !source.isEmpty else {
             let what = background.serviceWorker ?? background.page ?? background.scripts.joined(separator: ", ")
             logBootFailure(ext, "background source missing/empty: \(what)")
             return
@@ -590,7 +592,7 @@ class WebExtensionRuntime {
         // Synchronous, path-contained package reader for the ESM linker (the store actor's
         // `nonisolated fileSync` is safe to call off-actor on the worker's serial queue).
         let moduleSource: (@Sendable (String) -> Data?)?
-        if moduleEntry != nil {
+        if !moduleEntries.isEmpty {
             let storeRef = store
             let extID = ext.id
             moduleSource = { path in storeRef.fileSync(extensionID: extID, path: path) }
@@ -606,8 +608,8 @@ class WebExtensionRuntime {
                      placeholders: loaded.placeholders,
                      installReason: install.reason,
                      previousVersion: install.previousVersion,
-                     moduleEntry: moduleEntry,
-                     esmRuntimeJS: moduleEntry != nil ? Self.esmRuntimeJS : nil,
+                     moduleEntries: moduleEntries,
+                     esmRuntimeJS: !moduleEntries.isEmpty ? Self.esmRuntimeJS : nil,
                      moduleSource: moduleSource)
     }
 

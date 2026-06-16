@@ -97,7 +97,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
               manifestJSON: String, baseURL: String, messages: [String: String],
               placeholders: [String: [String: String]] = [:],
               installReason: String? = nil, previousVersion: String? = nil,
-              moduleEntry: String? = nil, esmRuntimeJS: String? = nil,
+              moduleEntries: [String] = [], esmRuntimeJS: String? = nil,
               moduleSource: (@Sendable (String) -> Data?)? = nil) {
         queue.async { [self] in
             guard let context = JSContext() else {
@@ -153,7 +153,7 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
             context.evaluateScript(runtimeJS, withSourceURL: URL(string: "brownbear://webext/\(extensionID)/runtime.js"))
             logSink(makeLog(.debug, "[bb-bg] runtime shim + IndexedDB ready; evaluating background source"))
             BrownBearIDBStore.shared.rehydrate(into: context, namespace: .ext(extensionID))
-            if let moduleEntry, let esmRuntimeJS, let moduleSource {
+            if !moduleEntries.isEmpty, let esmRuntimeJS, let moduleSource {
                 // An MV2 background PAGE (uBlock Origin's background.html) can carry classic <script>s
                 // BEFORE its module entry (lz4 codec, vapi.js before start.js). Evaluate them first, in
                 // document order — exactly the load order the page's HTML parser would give — then link
@@ -163,9 +163,10 @@ final class WebExtensionBackgroundContext: @unchecked Sendable {
                     context.evaluateScript(backgroundSource, withSourceURL: preludeURL)
                     context.exception = nil   // a prelude throw is logged by the handler; don't bleed into the link
                 }
-                // MV3 module service worker (or an MV2 page's module entry): link the graph in-context.
+                // MV3 module service worker (one entry) or an MV2 page's module entries (one or more,
+                // in document order): link each graph in this context, sharing the global + module cache.
                 runModuleWorker(in: context, esmRuntimeJS: esmRuntimeJS,
-                                entryPath: moduleEntry, moduleSource: moduleSource)
+                                entryPaths: moduleEntries, moduleSource: moduleSource)
             } else {
                 // Evaluate the classic SW at GLOBAL scope, exactly like Chrome: top-level `var` /
                 // `function` declarations must become GLOBALS so they're visible across importScripts()
