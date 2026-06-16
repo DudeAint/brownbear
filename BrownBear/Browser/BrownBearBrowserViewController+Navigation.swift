@@ -19,7 +19,10 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
         progressBar.show()
         progressBar.setProgress(0.05, animated: false)
         // Reveal the chrome for a new page load — you should never land on a page with the bar hidden.
-        if webView == installedWebView { showChrome(animated: true) }
+        if webView == installedWebView {
+            showChrome(animated: true)
+            dismissTranslation()   // a new document invalidates any in-page translation + its bar
+        }
         // Consume the captured navigation target (cleared once used); fall back to webView.url only if
         // none was captured (e.g. a navigation that didn't pass through decidePolicyFor).
         let captured = pendingNavTargets.removeValue(forKey: ObjectIdentifier(webView))

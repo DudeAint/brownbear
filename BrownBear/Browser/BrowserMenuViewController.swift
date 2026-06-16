@@ -30,6 +30,7 @@ enum BrowserMenuAction {
     case settings
     case proxy
     case reader
+    case translatePage
     case zoom
 }
 
@@ -229,6 +230,7 @@ final class BrowserMenuViewController: UIViewController {
             rows.append(makeRow(icon: "eyeglasses", title: "Add to Reading List", action: .addToReadingList))
             rows.append(makeRow(icon: "link", title: "Copy Link", action: .copyLink))
             rows.append(makeRow(icon: "doc.plaintext", title: "Reader", action: .reader))
+            rows.append(makeRow(icon: "character.bubble", title: "Translate Page", action: .translatePage))
             rows.append(makeRow(icon: "rectangle.dashed", title: "Full Page Screenshot",
                                 action: .fullPageScreenshot))
             rows.append(makeRow(icon: "textformat.size", title: "Zoom (\(state.zoomPercent)%)", action: .zoom))
