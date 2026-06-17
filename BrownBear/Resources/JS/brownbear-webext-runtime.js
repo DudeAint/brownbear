@@ -572,6 +572,12 @@
       };
     }
 
+    // Firefox-build extension? Native serves Firefox builds (browser_specific_settings.gecko) under the
+    // moz-extension:// scheme; Chrome builds get chrome-extension://. The scheme gates the Firefox-only
+    // runtime.getBrowserInfo so a Chrome build's content script sees it absent (exactly like real Chrome,
+    // the correct "not Firefox" feature-detect) while a Firefox build still resolves a real browser info.
+    var isFirefoxExt = String(data.baseURL || "").lastIndexOf("moz-extension:", 0) === 0;
+
     var chrome = {
       storage: {
         local: withStorageQuotas(storageArea("local"), "local"),
@@ -648,12 +654,6 @@
           }
           var e = new Error(err.message); e.__bbLastError = true;
           return _Promise.reject(e);
-        },
-        // chrome.runtime.getBrowserInfo — Firefox-origin API, probed by Vimium and others.
-        getBrowserInfo: function (cb) {
-          var info = { name: "BrownBear", vendor: "BrownBear", version: "1.0.0", buildID: "20240101" };
-          if (typeof cb === "function") { cb(info); return undefined; }
-          return _Promise.resolve(info);
         }
       },
       tabs: tabsApi(),
@@ -848,6 +848,18 @@
         catch (e) { reportContentError(e, token); return undefined; }
       }
     };
+
+    // chrome.runtime.getBrowserInfo — Firefox-ONLY; real Chrome leaves it undefined, and it is the
+    // canonical "am I Firefox?" feature-detect (probed by Vimium and others). Expose it ONLY for Firefox
+    // builds (moz-extension://) so a Chrome-build content script reports `typeof browser.runtime
+    // .getBrowserInfo === 'undefined'` exactly like real Chrome, while a Firefox build still resolves it.
+    if (isFirefoxExt) {
+      chrome.runtime.getBrowserInfo = function (cb) {
+        var info = { name: "BrownBear", vendor: "BrownBear", version: "1.0.0", buildID: "20240101" };
+        if (typeof cb === "function") { cb(info); return undefined; }
+        return _Promise.resolve(info);
+      };
+    }
     return chrome;
   }
 

@@ -19,6 +19,14 @@
 
   var extId = (typeof __bbBgExtId === 'string') ? __bbBgExtId : '';
   var baseURL = (typeof __bbBgBaseURL === 'string') ? __bbBgBaseURL : '';
+  // Is this a Firefox-build extension? Native serves Firefox builds (browser_specific_settings.gecko)
+  // under the moz-extension:// scheme; Chrome builds get chrome-extension://. The scheme is the single
+  // source of truth for which browser we EMULATE for this extension — it gates the Firefox-only surface
+  // (runtime.getBrowserInfo) so a Chrome-build extension sees exactly what real Chrome exposes (absent)
+  // and a Firefox build sees what real Firefox exposes (present). getBrowserInfo is THE discriminator
+  // extensions use to detect Firefox (FireShot's service-worker glue: `typeof browser.runtime
+  // .getBrowserInfo == "function"`), so exposing it to a Chrome build wrongly trips the Firefox path.
+  var isFirefoxExt = baseURL.lastIndexOf('moz-extension:', 0) === 0;
   var messages = {};
   try { messages = typeof __bbBgMessages === 'string' ? JSON.parse(__bbBgMessages) : {}; } catch (e) {}
   // messageKey → { placeholderName(lowercased): content } for chrome.i18n named placeholders.
@@ -2659,16 +2667,22 @@
       }, 0, false);
       return port;
     },
-    // chrome.runtime.getBrowserInfo — Firefox-originated API that some extensions probe. On Chrome it
-    // does not exist; we return a Chrome-shaped no-op so extensions that guard with
-    // `chrome.runtime.getBrowserInfo?.()` don't throw "not a function" on a direct call.
-    getBrowserInfo: function (cb) {
+    get lastError() { return _bbLastError; }
+  };
+
+  // chrome.runtime.getBrowserInfo — Firefox-ONLY runtime API; real Chrome does NOT define it, and it is
+  // the canonical feature-detect extensions use to tell Firefox from Chrome. We therefore expose it ONLY
+  // for Firefox-build extensions (moz-extension://), matching each browser exactly: a Chrome build sees
+  // `typeof browser.runtime.getBrowserInfo === 'undefined'` like real Chrome (so a Firefox detector such
+  // as FireShot's service-worker glue returns false and never runs its bare-`window` branch), while a
+  // Firefox build that awaits getBrowserInfo() at init (Tree Style Tab, Simple Tab Groups) still resolves.
+  if (isFirefoxExt) {
+    runtime.getBrowserInfo = function (cb) {
       var info = { name: 'BrownBear', vendor: 'BrownBear', version: '1.0.0', buildID: '20240101' };
       if (typeof cb === 'function') { cb(info); return undefined; }
       return Promise.resolve(info);
-    },
-    get lastError() { return _bbLastError; }
-  };
+    };
+  }
 
   // ---------------------------------------------------------------- assemble + expose
 
