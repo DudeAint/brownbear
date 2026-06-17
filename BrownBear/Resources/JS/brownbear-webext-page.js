@@ -960,6 +960,11 @@
         .then(function () { return undefined; }), cb);
     }
     return {
+      // Chrome exposes these as enumerable static numeric constants on the tabs namespace. TAB_ID_NONE marks
+      // a tab.id that doesn't reference a real tab; MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND is the per-second
+      // rate cap for captureVisibleTab. Feature-detectors (Web Developer) enumerate the namespace and read
+      // them, so they must exist with Chrome's exact values even though iOS doesn't rate-limit captures.
+      TAB_ID_NONE: -1, MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND: 2,
       query: query, get: get, getCurrent: getCurrent, create: create, update: update, remove: remove, reload: reload,
       executeScript: executeScript, insertCSS: insertCSS, removeCSS: removeCSS, sendMessage: sendMessage,
       captureVisibleTab: captureVisibleTab, move: move, duplicate: duplicate, getZoom: getZoom, setZoom: setZoom,
