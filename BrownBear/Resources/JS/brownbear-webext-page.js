@@ -965,6 +965,16 @@
       // rate cap for captureVisibleTab. Feature-detectors (Web Developer) enumerate the namespace and read
       // them, so they must exist with Chrome's exact values even though iOS doesn't rate-limit captures.
       TAB_ID_NONE: -1, MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND: 2,
+      // Chrome exposes the chrome.tabs enums as namespace constants in EVERY extension context (page/popup/
+      // options too). Extensions read them directly — `chrome.tabs.TabStatus.LOADING`, `WindowType.NORMAL`,
+      // `ZoomSettingsMode.MANUAL` — so an absent enum reads as undefined and a `.LOADING` access throws
+      // "undefined is not an object" at boot (Coupert's background.js). These must match the background shim
+      // exactly and carry Chrome's literal string values so equality checks behave identically.
+      TabStatus: { UNLOADED: 'unloaded', LOADING: 'loading', COMPLETE: 'complete' },
+      MutedInfoReason: { USER: 'user', CAPTURE: 'capture', EXTENSION: 'extension' },
+      WindowType: { NORMAL: 'normal', POPUP: 'popup', PANEL: 'panel', APP: 'app', DEVTOOLS: 'devtools' },
+      ZoomSettingsMode: { AUTOMATIC: 'automatic', MANUAL: 'manual', DISABLED: 'disabled' },
+      ZoomSettingsScope: { PER_ORIGIN: 'per-origin', PER_TAB: 'per-tab' },
       query: query, get: get, getCurrent: getCurrent, create: create, update: update, remove: remove, reload: reload,
       executeScript: executeScript, insertCSS: insertCSS, removeCSS: removeCSS, sendMessage: sendMessage,
       captureVisibleTab: captureVisibleTab, move: move, duplicate: duplicate, getZoom: getZoom, setZoom: setZoom,

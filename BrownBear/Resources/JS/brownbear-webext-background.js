@@ -3033,6 +3033,15 @@
     // ScriptCat and others compare against it directly; its absence reads as undefined and a
     // `tabId === chrome.tabs.TAB_ID_NONE` guard silently never matches.
     TAB_ID_NONE: -1,
+    // Chrome exposes the chrome.tabs enums as namespace constants in the service-worker/background world too.
+    // Coupert's background.js reads chrome.tabs.TabStatus.LOADING at boot; an absent enum reads as undefined
+    // and `.LOADING` throws "undefined is not an object". These mirror the page shim's tabsApi() return object
+    // verbatim (same keys, same Chrome-literal values) so the worker and page worlds agree on every constant.
+    TabStatus: { UNLOADED: 'unloaded', LOADING: 'loading', COMPLETE: 'complete' },
+    MutedInfoReason: { USER: 'user', CAPTURE: 'capture', EXTENSION: 'extension' },
+    WindowType: { NORMAL: 'normal', POPUP: 'popup', PANEL: 'panel', APP: 'app', DEVTOOLS: 'devtools' },
+    ZoomSettingsMode: { AUTOMATIC: 'automatic', MANUAL: 'manual', DISABLED: 'disabled' },
+    ZoomSettingsScope: { PER_ORIGIN: 'per-origin', PER_TAB: 'per-tab' },
     query: function (q, cb) { return settleBg(tabsCall('query', { query: q || {} }), cb); },
     // chrome.tabs.detectLanguage([tabId], cb) — Chrome returns the ISO code of the tab's content. iOS has
     // no native page-language detector, so grab a sample of the tab's text via scripting.executeScript and
