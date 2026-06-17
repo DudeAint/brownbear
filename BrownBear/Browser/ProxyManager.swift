@@ -132,9 +132,11 @@ final class ProxyManager: ObservableObject {
         }
     }
 
-    /// Build the iOS-17 ProxyConfiguration for a proxy, or nil if it's incomplete.
+    /// Build the iOS-17 ProxyConfiguration for a proxy, or nil if it's incomplete. `nonisolated` (it's a
+    /// pure function of `proxy`, touching no isolated state) so the off-actor free-proxy verifier can build
+    /// configs for many concurrent liveness probes without serializing on the main actor.
     @available(iOS 17.0, *)
-    static func makeConfiguration(_ proxy: BBProxy) -> ProxyConfiguration? {
+    nonisolated static func makeConfiguration(_ proxy: BBProxy) -> ProxyConfiguration? {
         guard proxy.isComplete, let port = NWEndpoint.Port(rawValue: UInt16(proxy.port)) else { return nil }
         let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(proxy.host), port: port)
         var config: ProxyConfiguration
