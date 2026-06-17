@@ -66,7 +66,30 @@
       warn: function () { __bb_log('warn', join.apply(null, arguments)); },
       error: function () { __bb_log('error', join.apply(null, arguments)); },
       debug: function () { __bb_log('debug', join.apply(null, arguments)); },
-      trace: function () { __bb_log('debug', join.apply(null, arguments)); }
+      trace: function () { __bb_log('debug', join.apply(null, arguments)); },
+      // Chrome's service-worker console exposes the full standard surface. JSC gives us none of it, and
+      // store loggers (e.g. background-service.js) capture `console.group.bind(console)` at module load
+      // with no existence guard — a missing method throws "Cannot read properties of undefined (reading
+      // 'bind')" and aborts boot. The textual methods route through the same __bb_log path; the grouping,
+      // counting, timing, and clear methods have no log surface in a headless context, so they are
+      // faithful no-ops (Chrome's grouping is purely a devtools-tree affordance).
+      group: function () { __bb_log('info', join.apply(null, arguments)); },
+      groupCollapsed: function () { __bb_log('info', join.apply(null, arguments)); },
+      groupEnd: function () {},
+      dir: function () { __bb_log('info', join.apply(null, arguments)); },
+      dirxml: function () { __bb_log('info', join.apply(null, arguments)); },
+      table: function () { __bb_log('info', join.apply(null, arguments)); },
+      assert: function (cond) {
+        if (!cond) {
+          __bb_log('error', 'Assertion failed: ' + join.apply(null, Array.prototype.slice.call(arguments, 1)));
+        }
+      },
+      count: function () {},
+      countReset: function () {},
+      clear: function () {},
+      time: function () {},
+      timeEnd: function () {},
+      timeLog: function () {}
     };
     globalThis.setTimeout = function (fn, ms) {
       if (typeof fn !== 'function') { return 0; }
