@@ -16,6 +16,11 @@
   if (!data || !data.token) { return; }
 
   var W = window;
+  // Firefox-build extension? Native serves Firefox builds (browser_specific_settings.gecko) under the
+  // moz-extension:// scheme; Chrome builds get chrome-extension://. The scheme decides which browser we
+  // emulate — it gates the Firefox-only runtime.getBrowserInfo so a Chrome build sees it absent (exactly
+  // like real Chrome, the correct "not Firefox" feature-detect signal) and a Firefox build sees it present.
+  var isFirefoxExt = String(data.baseURL || "").lastIndexOf("moz-extension:", 0) === 0;
   var _JSON = JSON;
   var _Object = Object;
   var _Array = Array;
@@ -1560,13 +1565,6 @@
       },
       get lastError() { return _bbLastError; },
       getPlatformInfo: function (cb) { var info = { os: "ios", arch: "arm64", nacl_arch: "arm64" }; if (typeof cb === "function") { cb(info); return undefined; } return _Promise.resolve(info); },
-      // Firefox browser.runtime.getBrowserInfo — present (a non-Firefox-shaped object, so version-gated FF
-      // code paths stay off) so backgrounds/sidebars that `await getBrowserInfo()` at init (Tree Style Tab,
-      // Simple Tab Groups, Violentmonkey, image-search) don't throw "is not a function".
-      getBrowserInfo: function (cb) {
-        var info = { name: "BrownBear", vendor: "BrownBear", version: (manifest && manifest.version) || "1.0", buildID: "0" };
-        if (typeof cb === "function") { cb(info); return undefined; } return _Promise.resolve(info);
-      },
       // runtime.reload — restart the extension. Inert page-side; routed so a future native handler can act,
       // wrapped so a missing handler never throws (uBO/Stylus/STG "restart" buttons just no-op for now).
       reload: function () { try { bridge("runtime.reload", {}); } catch (e) {} return undefined; },
@@ -1620,6 +1618,18 @@
       isAllowedIncognitoAccess: function (cb) { if (typeof cb === "function") { cb(false); return undefined; } return _Promise.resolve(false); }
     }
   };
+
+  // browser.runtime.getBrowserInfo — Firefox-ONLY; real Chrome leaves it undefined, and it is the
+  // canonical "am I Firefox?" feature-detect. Expose it ONLY for Firefox builds (moz-extension://) so a
+  // Chrome build's popup/options page reports `typeof browser.runtime.getBrowserInfo === 'undefined'`
+  // exactly like real Chrome, while a Firefox build's sidebar/background page that awaits getBrowserInfo()
+  // at init (Tree Style Tab, Simple Tab Groups, Sidebery) still resolves a real {name,version,...}.
+  if (isFirefoxExt) {
+    chrome.runtime.getBrowserInfo = function (cb) {
+      var info = { name: "BrownBear", vendor: "BrownBear", version: (manifest && manifest.version) || "1.0", buildID: "0" };
+      if (typeof cb === "function") { cb(info); return undefined; } return _Promise.resolve(info);
+    };
+  }
 
   W.chrome = chrome;
   W.browser = chrome;
