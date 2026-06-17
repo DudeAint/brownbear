@@ -2,9 +2,10 @@
 //  FreeProxyServiceTests.swift
 //  BrownBearTests
 //
-//  The free-proxy list parsers (ProxyScrape v4 + monosans) and the shaping helpers (validation, dedupe,
-//  cap, country grouping, filter). Pure functions over fixture JSON — no network — matching the testable
-//  shape of BBProxyTests. Fixtures mirror the real wire formats verified against the live endpoints.
+//  The free-proxy list parsers (ProxyScrape v4, monosans, proxifly, TheSpeedX plain lists) and the shaping
+//  helpers (validation, dedupe, cap, country grouping, filter). Pure functions over fixture JSON/text — no
+//  network — matching the testable shape of BBProxyTests. Fixtures mirror the real wire formats verified
+//  against the live endpoints.
 //
 
 import XCTest
@@ -63,6 +64,68 @@ final class FreeProxyServiceTests: XCTestCase {
         XCTAssertEqual(first.countryCode, "RU")
         XCTAssertEqual(first.countryName, "Russia")
         XCTAssertTrue(list.contains { $0.host == "82.97.247.37" && $0.kind == .socks5 })
+    }
+
+    // MARK: - proxifly
+
+    private let proxiflyJSON = """
+    [
+     {"proxy":"http://101.32.108.219:8080","protocol":"http","ip":"101.32.108.219","port":8080,
+      "https":false,"anonymity":"elite","geolocation":{"country":"SG","city":"Singapore"}},
+     {"proxy":"socks5://188.166.197.129:1080","protocol":"socks5",
+      "geolocation":{"country":"NL"}},
+     {"proxy":"http://bad host:80","protocol":"http","ip":"bad host","port":80},
+     {"proxy":"ftp://1.2.3.4:21","protocol":"ftp","ip":"1.2.3.4","port":21}
+    ]
+    """
+
+    func testParseProxiflyMapsAndRecoversFromProxyURL() throws {
+        let list = try FreeProxyService.parseProxifly(data(proxiflyJSON))
+        XCTAssertEqual(list.count, 2, "the invalid host and the unsupported ftp protocol are dropped")
+        let first = try XCTUnwrap(list.first)
+        XCTAssertEqual(first.host, "101.32.108.219")
+        XCTAssertEqual(first.port, 8080)
+        XCTAssertEqual(first.kind, .http)
+        XCTAssertEqual(first.countryCode, "SG")
+        // Second entry has no explicit ip/port — host:port must be recovered from the `proxy` URL.
+        let socks = try XCTUnwrap(list.first { $0.kind == .socks5 })
+        XCTAssertEqual(socks.host, "188.166.197.129")
+        XCTAssertEqual(socks.port, 1080)
+        XCTAssertEqual(socks.countryCode, "NL")
+        XCTAssertFalse(list.contains { $0.host == "bad host" }, "malformed host excluded")
+        XCTAssertFalse(list.contains { $0.host == "1.2.3.4" }, "ftp protocol excluded")
+    }
+
+    // MARK: - TheSpeedX plain ip:port lists
+
+    func testParsePlainListAssignsKindAndSkipsJunk() throws {
+        let text = """
+        102.220.223.66:8080
+        45.79.158.235:3128
+
+        not-a-proxy-line
+        10.10.10.10:notaport
+        198.51.100.7:1080
+        """
+        let http = try FreeProxyService.parsePlainList(data(text), proto: "http")
+        XCTAssertEqual(http.count, 3, "blank + junk + non-numeric-port lines are skipped")
+        XCTAssertTrue(http.allSatisfy { $0.kind == .http })
+        XCTAssertEqual(http.first?.host, "102.220.223.66")
+        XCTAssertEqual(http.first?.port, 8080)
+
+        let socks = try FreeProxyService.parsePlainList(data(text), proto: "socks5")
+        XCTAssertEqual(socks.count, 3)
+        XCTAssertTrue(socks.allSatisfy { $0.kind == .socks5 }, "the list carries no protocol; the arg wins")
+    }
+
+    func testParsePlainListUnknownProtocolIsEmpty() throws {
+        XCTAssertTrue(try FreeProxyService.parsePlainList(data("1.2.3.4:80"), proto: "ftp").isEmpty)
+    }
+
+    func testProxiflyGarbageThrowsAndPlainListGarbageIsEmpty() {
+        XCTAssertThrowsError(try FreeProxyService.parseProxifly(data("not json")))
+        // A plain list of pure noise simply yields nothing — there's no structured format to violate.
+        XCTAssertTrue((try? FreeProxyService.parsePlainList(data("¯\\_(ツ)_/¯"), proto: "http"))?.isEmpty ?? false)
     }
 
     // MARK: - Validation, dedupe, cap
