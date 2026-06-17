@@ -1155,7 +1155,13 @@
       getUserSettings: function (cb) { var s = { isOnToolbar: true }; if (typeof cb === "function") { cb(s); return undefined; } return _Promise.resolve(s); },
       getPopup: getter("action.getPopup"),
       openPopup: function (cb) { return pres(undefined, cb); },
-      onClicked: makeEvent(actionClickedListeners)
+      onClicked: makeEvent(actionClickedListeners),
+      // Chrome 130+ fires onUserSettingsChanged(UserSettingsChange{isOnToolbar}) when the user pins/unpins
+      // the toolbar button. iOS has no pin/unpin concept, so it is correctly never dispatched — present only
+      // so addListener/hasListener resolve without throwing. Pairs with getUserSettings() above. Sider's
+      // popup/SW calls chrome.action.onUserSettingsChanged.addListener at init; without this, `.addListener`
+      // on undefined threw and aborted the bundle. Inert list (never stateful), like onShowSettings above.
+      onUserSettingsChanged: makeEvent([])
     };
   }
 
