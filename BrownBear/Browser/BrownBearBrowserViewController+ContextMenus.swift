@@ -22,6 +22,14 @@ extension BrownBearBrowserViewController {
     func webView(_ webView: WKWebView,
                  contextMenuConfigurationForElement elementInfo: WKContextMenuElementInfo,
                  completionHandler: @escaping (UIContextMenuConfiguration?) -> Void) {
+        // The New Tab page is BrownBear's OWN UI: long-press there drives the page's "Hide section" menu,
+        // not WebKit's link menu (Copy Link / Open in New Tab). When a WKWebView has a UI delegate, the
+        // page's `-webkit-touch-callout:none` is ignored, so suppress the system menu here — an
+        // actionProvider that returns nil presents nothing — letting the page's JS own the long-press.
+        if tabManager.tabs.first(where: { $0.webView === webView })?.isShowingNewTabPage == true {
+            completionHandler(UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { _ in nil })
+            return
+        }
         let linkURL = elementInfo.linkURL?.absoluteString
         let pageURL = tabManager.activeTab?.state.url?.absoluteString ?? webView.url?.absoluteString ?? ""
         var available: Set<String> = ["page"]

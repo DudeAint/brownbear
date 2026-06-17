@@ -117,6 +117,15 @@ extension BrownBearBrowserViewController: WKNavigationDelegate {
                  decidePolicyFor navigationAction: WKNavigationAction,
                  preferences: WKWebpagePreferences,
                  decisionHandler: @escaping (WKNavigationActionPolicy, WKWebpagePreferences) -> Void) {
+        // New Tab page "Hide section" action: a `bbnewtab://hide/<section>` navigation the New Tab page's
+        // long-press menu triggers. Persist the dismissal (the page's JS already removed the element) and
+        // cancel — the section stays hidden on the next New Tab. Handled first so it skips all of the
+        // content-mode/UA/shields work below (none of which is meaningful for this app-internal action).
+        if let u = navigationAction.request.url, u.scheme == "bbnewtab", u.host == "hide" {
+            AppSettings.hideNewTabSection(u.lastPathComponent)
+            decisionHandler(.cancel, preferences)
+            return
+        }
         // Apply the tab's desktop/mobile choice to every navigation. preferredContentMode is the
         // reliable lever (a desktop UA alone is ignored by responsive sites), so the Desktop toggle
         // actually changes the rendered layout — and it persists across the tab's loads.

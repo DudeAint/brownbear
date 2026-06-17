@@ -29,6 +29,9 @@ struct SettingsView: View {
     @State private var isClearing = false
     @State private var didClear = false
     @State private var confirmingClear = false
+    /// How many New Tab promo sections the user long-press-hid, so the "Restore" row only shows when there
+    /// is something to restore. Read on appear (they're hidden from the New Tab page, outside this view).
+    @State private var hiddenNewTabSections = AppSettings.newTabHiddenSections.count
 
     var body: some View {
         Form {
@@ -84,7 +87,23 @@ struct SettingsView: View {
                     + "slides in over the page and lists your tabs as rows — pick which edge it opens from.")
                     .font(.caption)
                     .foregroundStyle(BBTheme.Color.textSecondary)
+
+                if hiddenNewTabSections > 0 {
+                    Button {
+                        AppSettings.newTabHiddenSections = []
+                        hiddenNewTabSections = 0
+                    } label: {
+                        Label("Restore hidden New Tab sections", systemImage: "arrow.uturn.backward")
+                    }
+                    .tint(BBTheme.Color.accent)
+                    Text("You hid \(hiddenNewTabSections) New Tab "
+                        + "\(hiddenNewTabSections == 1 ? "section" : "sections") by long-pressing "
+                        + "\(hiddenNewTabSections == 1 ? "it" : "them"). Restore brings them back.")
+                        .font(.caption)
+                        .foregroundStyle(BBTheme.Color.textSecondary)
+                }
             }
+            .onAppear { hiddenNewTabSections = AppSettings.newTabHiddenSections.count }
 
             Section("Media") {
                 Toggle("Keep videos inline", isOn: $keepVideosInline)

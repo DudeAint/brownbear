@@ -249,7 +249,27 @@ enum AppSettings {
         static let extensionsToolbarHidden = "bbExtensionsToolbarHidden"
         static let tabSwitcherStyle = "bbTabSwitcherStyle"
         static let verticalTabsSide = "bbVerticalTabsSide"
+        static let newTabHiddenSections = "bbNewTabHiddenSections"
     }
+
+    /// New Tab page sections the user dismissed via long-press (e.g. the GitHub rows, the "report a broken
+    /// extension" pill, the intro card). Stored as a list of stable section ids; the New Tab renderer omits
+    /// any id present here, so a hidden section stays hidden across new tabs and launches.
+    static var newTabHiddenSections: Set<String> {
+        get { Set(UserDefaults.standard.stringArray(forKey: Key.newTabHiddenSections) ?? []) }
+        set { UserDefaults.standard.set(Array(newValue).sorted(), forKey: Key.newTabHiddenSections) }
+    }
+
+    /// Mark a New Tab section hidden (from the page's long-press "Hide" action).
+    static func hideNewTabSection(_ id: String) {
+        let clean = id.filter { $0.isLetter || $0.isNumber || $0 == "-" }   // ids only; defend the UserDefaults write
+        guard !clean.isEmpty else { return }
+        var hidden = newTabHiddenSections
+        hidden.insert(clean)
+        newTabHiddenSections = hidden
+    }
+
+    static func isNewTabSectionHidden(_ id: String) -> Bool { newTabHiddenSections.contains(id) }
 
     /// How the tab switcher is shown. Default `.grid` (the existing snapshot grid). The Settings picker
     /// uses @AppStorage on the same key, so the next tap of the tab button reads the new choice.
