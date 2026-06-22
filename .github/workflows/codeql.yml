@@ -32,7 +32,7 @@ jobs:
       matrix:
         language: [swift, javascript-typescript]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Setup iOS build (Xcode + XcodeGen + SPM cache)
         if: matrix.language == 'swift'
         uses: ./.github/actions/setup-ios-build

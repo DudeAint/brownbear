@@ -28,7 +28,7 @@ jobs:
     name: Build nightly IPA
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Setup iOS build (Xcode + XcodeGen + SPM cache)
         uses: ./.github/actions/setup-ios-build
       # DerivedData is NOT cached/reused — reusing it shipped a STALE nightly (Xcode skipped recompiling
@@ -61,7 +61,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: actions/download-artifact@v4
